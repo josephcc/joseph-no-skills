@@ -105,4 +105,4 @@ parts of into your repo's `CLAUDE.md`.
 
 ## License
 
-[MIT](LICENSE) © 2026 Joseph Chang
+[Apache-2.0](LICENSE) © 2026 Joseph Chang
