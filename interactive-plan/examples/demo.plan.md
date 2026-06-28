@@ -7,9 +7,9 @@
 # Demo plan — exercising every interactive tag
 
 This is a throwaway fixture for testing the viewer. It has **open questions** to answer, a
-decisions stack, a findings matrix, and a Google-Docs comment thread. The core data join is the
-`finding_id` defined in <user-highlight comment="c1">`app/src/parser.ts:42`</user-highlight> — click that
-reference to open it in your editor.
+decisions stack, a findings matrix, and a <user-highlight comment="c2">Google-Docs comment thread</user-highlight>.
+The core data join is the `finding_id` defined in <user-highlight comment="c1">`app/src/parser.ts:42`</user-highlight> —
+click that reference to open it in your editor.
 
 ## 1. Open questions
 
@@ -75,6 +75,11 @@ Handled — the parser skips fenced code when scanning for tags, verified by a u
 // <decision id="NOPE" title="x" status="locked">should stay text</decision>
 const id = `${corpus}:${exp}:${obs}`;
 ```
+
+<comment id="c2" status="open" kind="clarify">
+  <note by="user" at="2026-06-28T06:00">A comment attaches to this exact highlighted span — the yellow text. Click it to jump to the thread, just like a Google Doc.</note>
+  <note by="agent" at="2026-06-28T06:01">Right — every comment is anchored to a `<user-highlight>`, so feedback always points at a specific part of the plan rather than floating loose.</note>
+</comment>
 
 <comment id="c1" status="open" kind="question">
   <note by="agent" at="2026-06-27T17:00">Seeded comment anchored to the parser reference above — reply, then resolve it to test the Google-Docs flow.</note>

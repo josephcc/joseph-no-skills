@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { marked } from 'marked';
-import { protectedRanges } from './parser';
+import { decodeEntities, protectedRanges } from './parser';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -119,6 +119,16 @@ function scrubLinks(root: HTMLElement): void {
   });
 }
 
+// In escaped user content, code spans get double-escaped: escapeHtmlText turns
+// `<` into `&lt;`, then marked re-escapes the `&` inside the code span. Decode
+// the code element's text back so `<Foo>` displays as typed. Using textContent
+// (not innerHTML) keeps this XSS-safe.
+function decodeUserCode(root: HTMLElement): void {
+  root.querySelectorAll('code').forEach((c) => {
+    c.textContent = decodeEntities(c.textContent ?? '');
+  });
+}
+
 export function Markdown({
   source,
   commentMeta = {},
@@ -136,6 +146,7 @@ export function Markdown({
     : (marked.parse(preprocessHighlights(source, commentMeta)) as string);
   useEffect(() => {
     if (!ref.current) return;
+    if (escapeHtml) decodeUserCode(ref.current);
     linkifyCodeRefs(ref.current);
     decorateCodeBlocks(ref.current);
     if (escapeHtml) scrubLinks(ref.current);
