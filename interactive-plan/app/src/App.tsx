@@ -80,9 +80,13 @@ export function App() {
     });
   }, [planPath]);
 
-  // Condense the header once the user scrolls past the top.
+  // Condense the header once the user scrolls past the top. Use hysteresis
+  // (collapse at 64px, only re-expand below 8px) so the layout shift from
+  // collapsing — the header is sticky and shrinks — can't bounce scrollY back
+  // across a single threshold and flicker the header open/closed.
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 24);
+    const onScroll = () =>
+      setScrolled((cur) => (cur ? window.scrollY > 8 : window.scrollY > 64));
     onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
