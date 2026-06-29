@@ -26,6 +26,11 @@ describe('preprocessHighlights', () => {
     expect(out).not.toContain('<mark');
   });
 
+  it('renders an empty highlight as a clickable ◆ target marker', () => {
+    const out = preprocessHighlights('decision body <user-highlight comment="c2"></user-highlight>', NO_META);
+    expect(out).toBe('decision body <mark class="ip-hl ip-hl-target" data-comment="c2">◆</mark>');
+  });
+
   it('applies kind/resolved styling from comment meta', () => {
     const out = preprocessHighlights('<user-highlight comment="c1">x</user-highlight>', {
       c1: { status: 'resolved', kind: 'error' },

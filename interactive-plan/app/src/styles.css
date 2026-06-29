@@ -248,6 +248,54 @@ body {
   background: transparent;
   border-bottom: 1px dotted var(--asta-gray-40);
 }
+/* ◆ target marker — an anchor for content a span can't reliably wrap */
+.ip-hl-target {
+  background: none;
+  border: none;
+  color: var(--asta-amber);
+  font-size: 0.78em;
+  vertical-align: super;
+  padding: 0 0.1em;
+  cursor: pointer;
+}
+.ip-hl-target.ip-hl-resolved {
+  color: var(--asta-gray-40);
+}
+/* per-element comment affordance in structured-block headers/rows */
+.ip-cmark {
+  flex: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.2rem 0.3rem;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.ip-cmark:hover {
+  background: var(--asta-green-20);
+}
+.ip-cmark-add {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.ip-drow-head:hover .ip-cmark-add,
+.ip-frow-head:hover .ip-cmark-add,
+.ip-check:hover .ip-cmark-add,
+.ip-card-head .ip-cmark-add,
+.ip-cmark-add:focus-visible {
+  opacity: 0.55;
+}
+.ip-cmark-open {
+  color: var(--asta-amber);
+}
+.ip-cmark-resolved {
+  color: var(--asta-gray-40);
+}
+.ip-cmark sup {
+  font-size: 0.7em;
+}
 .ip-hl-flash {
   animation: ip-flash 0.9s ease;
 }
@@ -387,6 +435,41 @@ body {
 .ip-option-body p {
   margin: 0.2rem 0;
 }
+/* ---- check list ---- */
+.ip-checklist {
+  margin: 0.4rem 0 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.ip-check {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+}
+.ip-check:hover {
+  background: var(--asta-green-20);
+}
+.ip-check-box {
+  margin-top: 0.2rem;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+  accent-color: var(--asta-green);
+}
+.ip-check-label {
+  flex: 1;
+}
+.ip-check-label .ip-md p {
+  margin: 0;
+}
+.ip-check-done .ip-check-label {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
 .ip-textarea {
   width: 100%;
   min-height: 64px;
@@ -499,8 +582,15 @@ body {
 .ip-drow-head {
   display: flex;
   align-items: center;
+  gap: 0.3rem;
+  padding-right: 0.6rem;
+}
+.ip-drow-toggle {
+  display: flex;
+  align-items: center;
   gap: 0.6rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 0.6rem 1rem;
   background: none;
   border: none;
@@ -508,7 +598,7 @@ body {
   text-align: left;
   font: inherit;
 }
-.ip-drow-head:hover {
+.ip-drow-toggle:hover {
   background: var(--asta-cream);
 }
 .ip-drow-title {
@@ -548,8 +638,15 @@ body {
 .ip-frow-head {
   display: flex;
   align-items: center;
+  gap: 0.3rem;
+  padding-right: 0.6rem;
+}
+.ip-frow-toggle {
+  display: flex;
+  align-items: center;
   gap: 0.6rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 0.6rem 1rem;
   background: none;
   border: none;
@@ -557,7 +654,7 @@ body {
   text-align: left;
   font: inherit;
 }
-.ip-frow-head:hover {
+.ip-frow-toggle:hover {
   background: var(--asta-cream);
 }
 .ip-frow-title {
@@ -628,6 +725,63 @@ body {
   font-size: 0.68rem;
   color: #0a6b48;
   font-weight: 600;
+}
+.ip-thread-del {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.78rem;
+  opacity: 0;
+  padding: 0.1rem 0.3rem;
+  border-radius: 5px;
+  transition: opacity 0.12s ease;
+}
+.ip-comment:hover .ip-thread-del,
+.ip-thread-del:focus-visible {
+  opacity: 0.6;
+}
+.ip-thread-del:hover {
+  opacity: 1;
+  background: #ffd9d8;
+}
+.ip-del-confirm {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--asta-error);
+  font-weight: 600;
+}
+.ip-del-confirm .ip-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+}
+.ip-btn-danger {
+  background: var(--asta-error);
+  color: #fff;
+}
+.ip-btn-danger:hover {
+  filter: brightness(0.92);
+}
+.ip-note-edit {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.66rem;
+  color: var(--asta-teal);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.ip-note:hover .ip-note-edit,
+.ip-note-edit:focus-visible {
+  opacity: 0.8;
+}
+.ip-note-edit:hover {
+  opacity: 1;
+  text-decoration: underline;
 }
 .ip-note {
   border-top: 1px solid var(--border);

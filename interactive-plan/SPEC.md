@@ -63,7 +63,7 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 
 ---
 
-## The five tags
+## The six tags
 
 | Tag | Purpose | Interactive surface |
 |---|---|---|
@@ -72,6 +72,7 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 | `<comment>` | A threaded margin comment (Google-Docs) | reply, resolve/reopen by either party |
 | `<user-highlight>` | Inline anchor binding a span to a comment | the highlighted span; click ↔ its comment card |
 | `<finding>` | An audit/review finding (severity matrix item) | filter by severity; toggle status |
+| `<check>` | A checkable task item (tutorial / QA checklist) | tick the checkbox; flips `status`, saved to file |
 
 ID rule: every tag with an `id` uses a short, stable, human-readable id (`Q-A`, `D3`, `c7`,
 `F-B1`). IDs never change once assigned — answers, decisions, and highlights reference them.
@@ -187,6 +188,13 @@ the durable unit is a <user-highlight comment="c7">full materialized graph-versi
   renderer and the agent, and it survives the agent rewriting surrounding prose.
 - **v1 constraint:** a highlight stays within a single block (one paragraph, list item, table cell,
   or one code line). Cross-block selections snap to block boundaries.
+- **Empty = a target anchor.** A self-paired `<user-highlight comment="c7"></user-highlight>` with
+  no inner text renders as a small clickable **◆ marker** instead of a span. This is the anchor for
+  things a span can't reliably wrap: a structured element (decision / finding / check / question),
+  or a phrase the viewer can't pin to one occurrence. The viewer appends one to the relevant field
+  (a decision's body, a check's label, …) when you comment on that element via its ◆ affordance, and
+  falls back to it for prose when a span anchor would be ambiguous. Author one yourself to attach a
+  comment to a whole element.
 
 #### `<comment>`
 ```xml
@@ -204,11 +212,17 @@ the durable unit is a <user-highlight comment="c7">full materialized graph-versi
 - Children: ordered `<note by="user|agent" at="ISO-8601">…markdown…</note>` — the thread. Either
   party appends notes; either party can resolve or reopen.
 
-**Rendering** — highlighted spans in the body; comment cards docked in the right margin. Resolved
-threads collapse out of the margin behind a **"Show N resolved"** toggle (kept in the file, never
-deleted). Click a highlight → opens its card; click a card → flashes the span. Selecting text in
-the viewer shows a floating **💬 Comment** button that creates a new `<user-highlight>` +
-`<comment>` pair.
+**Rendering** — highlighted spans (or ◆ targets) in the body; comment cards docked in the right
+margin. Resolved threads collapse out of the margin behind a **"Show N resolved"** toggle. Click a
+highlight/◆ → opens its card; click a card → flashes the anchor. Two ways to create a thread:
+selecting prose shows a floating **💬 Comment** button (anchors the exact selected occurrence as a
+span, or a ◆ target if that's ambiguous); every structured element shows a **💬 / ◆** affordance
+that anchors a ◆ target to it.
+
+**Editing & deleting** — the user can **edit** their own notes (`by="user"`) in place; agent notes
+are read-only in the viewer. **Delete thread** (🗑 on the card) is distinct from *resolve*: it
+removes the `<comment>` block *and* strips its `<user-highlight>` anchor(s) from the prose — use it
+to discard a thread entirely, vs. resolve which keeps it behind the "Show N resolved" toggle.
 
 **Symmetric authoring** — the agent may proactively add a `<user-highlight>` + `<comment>` to flag
 something *for* the user (e.g. "I assumed X here — confirm?"); it appears as an open thread the
@@ -250,11 +264,42 @@ in the same setter that writes `filters`.
 
 ---
 
+### 6. `<check>`
+
+A checkable task item — the persisted, id-addressed form of a checklist line. Use it for tutorials,
+manual-test / QA scripts, and acceptance checklists: anything the reader ticks off as they go.
+(Plain GFM `- [ ]` still renders, but as a **read-only** checkbox — use `<check>` whenever ticks
+must persist.)
+
+**Attributes**
+- `id` (required) — short stable label (`k1`, `qa-3`, …).
+- `status` — `todo` (default) | `done`.
+
+**Children** — inline label markdown (`code`, **bold**, `file.ts:line` refs). Keep it to one line.
+
+**Rendering** — a run of consecutive `<check>` tags renders as one tight checklist of interactive
+checkbox rows; `done` rows are struck through and dimmed. Each row is preceded/followed by normal
+prose, so headers like `**✅ Expect**` group the lists naturally.
+
+**Viewer actions** — tick/untick the checkbox; this flips `status` (`todo`↔`done`) and writes it
+back to the file through the same block-edit round-trip as a decision's status (no positional
+matching — the toggle is addressed by `id`). The agent authors the checks; the user ticks them.
+
+**Example**
+```xml
+**✅ Expect**
+<check id="k1" status="todo">A welcome modal opens with the **graph name** as its heading.</check>
+<check id="k2" status="done">The `Start Exploring` button dismisses it.</check>
+```
+
+---
+
 ## Round-trip: who writes what
 
 | Action | Written by | What changes in the file |
 |---|---|---|
 | Answer a question | **Viewer** | adds `<answer>`; sets question `status="answered"` |
+| Tick / untick a check | **Viewer** | sets `<check status>` (`todo`↔`done`) |
 | Comment / reply | **Viewer** or **Agent** | adds `<user-highlight>` + `<comment>` / appends `<note>` |
 | Resolve / reopen a comment | **Viewer** or **Agent** | sets `<comment status>` + `resolved-by`/`resolved-at` |
 | Lock / reopen / supersede a decision | **Viewer** or **Agent** | sets `<decision status>`/`date` |

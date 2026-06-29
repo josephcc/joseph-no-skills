@@ -1,21 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadPlan, openInEditor, planPathFromUrl, savePlan, watchPlan } from './api';
-import { encodeEntities, parsePlan, replaceBlock, serializeBlock } from './parser';
-import { DecisionStack, FindingMatrix, QuestionCard } from './blocks';
+import {
+  appendTarget,
+  encodeEntities,
+  parsePlan,
+  removeHighlight,
+  replaceBlock,
+  serializeBlock,
+  wrapNthOccurrence,
+} from './parser';
+import { CheckList, DecisionStack, FindingMatrix, QuestionCard } from './blocks';
 import { CommentRail } from './comments';
 import { Markdown } from './markdown';
-import type { Block, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
+import type { Block, CheckBlock, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 const nowStamp = () => new Date().toISOString().slice(0, 16);
 const today = () => new Date().toISOString().slice(0, 10);
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // User text is stored RAW (so reopening an answer doesn't double-escape). It is
 // rendered through the escaping path in <Markdown escapeHtml> and is harmless to
 // the doc parse because note/answer bodies live inside a comment/question block.
 
+// Count whitespace-tolerant occurrences of `needle` in `hay` (same normalization
+// wrapNthOccurrence uses on the source), so the rendered-text count lines up with
+// the source-text count when picking which occurrence to wrap.
+function countOccurrences(hay: string, needle: string): number {
+  const norm = needle.trim();
+  if (!norm) return 0;
+  const re = new RegExp(norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'g');
+  let n = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(hay))) {
+    n++;
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  return n;
+}
+
 interface SelInfo {
   text: string;
   blockIndex: number;
+  occ: number; // which occurrence of `text` within the block (0-based)
   x: number;
   y: number;
 }
@@ -31,6 +55,7 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [composer, setComposer] = useState<{ sel: SelInfo; text: string } | null>(null);
+  const [elComposer, setElComposer] = useState<{ block: Block; text: string; x: number; y: number } | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const hashRef = useRef(hash);
   hashRef.current = hash;
@@ -48,6 +73,7 @@ export function App() {
       setContent(c);
       setHash(h);
       setComposer(null); // a stale selection/composer would anchor wrongly after reload
+      setElComposer(null);
       setSel(null);
       setToast('Plan updated by the agent — reloaded.');
       setTimeout(() => setToast(null), 2500);
@@ -74,6 +100,7 @@ export function App() {
       if (e.key === 'Escape') {
         setSel(null);
         setComposer(null);
+        setElComposer(null);
       }
     };
     document.addEventListener('selectionchange', onSelChange);
@@ -136,7 +163,12 @@ export function App() {
 
   const onReopen = (c: CommentBlock) => editBlock(c, { ...c, status: 'open', resolvedBy: null, resolvedAt: null });
 
-  // ---- new comment from a text selection ----
+  // Toggle a <check> block's status (todo↔done) — id-addressed, via the same
+  // block-edit round-trip as decisions/comments.
+  const onCheckToggle = (c: CheckBlock) =>
+    editBlock(c, { ...c, status: c.status === 'done' ? 'todo' : 'done' });
+
+  // ---- new comment from a text selection (prose blocks only) ----
   function captureSelection() {
     const s = window.getSelection();
     if (!s || s.isCollapsed || !s.toString().trim()) {
@@ -144,44 +176,90 @@ export function App() {
       return;
     }
     const text = s.toString().trim();
-    const anchorEl = (s.anchorNode?.parentElement ?? null)?.closest('[data-block-index]') as HTMLElement | null;
+    const range = s.getRangeAt(0);
+    const anchorEl = (range.startContainer.parentElement ?? null)?.closest('[data-block-index]') as HTMLElement | null;
     if (!anchorEl) {
       setSel(null);
       return;
     }
-    const rect = s.getRangeAt(0).getBoundingClientRect();
-    setSel({ text, blockIndex: Number(anchorEl.dataset.blockIndex), x: rect.left, y: rect.top - 8 });
+    const blockIndex = Number(anchorEl.dataset.blockIndex);
+    // Free-text span selection only anchors in prose. Structured blocks
+    // (questions, decisions, findings, checks) are commented via their ◆ marker.
+    if (plan?.blocks[blockIndex]?.type !== 'markdown') {
+      setSel(null);
+      return;
+    }
+    // Which occurrence of `text` is selected: count copies that fully precede the
+    // selection start within this block's rendered text. That index is handed to
+    // wrapNthOccurrence so the *selected* phrase is highlighted, not the first.
+    const before = range.cloneRange();
+    before.selectNodeContents(anchorEl);
+    before.setEnd(range.startContainer, range.startOffset);
+    const occ = countOccurrences(before.toString(), text);
+    const rect = range.getBoundingClientRect();
+    setSel({ text, blockIndex, occ, x: rect.left, y: rect.top - 8 });
   }
 
+  const nextCommentId = () => {
+    const ids = (plan?.blocks ?? [])
+      .filter((b) => b.type === 'comment')
+      .map((b) => Number(/(\d+)/.exec(b.id)?.[1] ?? 0));
+    return `c${Math.max(0, ...ids) + 1}`;
+  };
+  const commentSource = (id: string, text: string) =>
+    `\n\n<comment id="${id}" status="open" kind="clarify">\n  <note by="user" at="${nowStamp()}">${encodeEntities(text)}</note>\n</comment>`;
+
+  // Comment on a prose selection: wrap the exact selected occurrence as a span;
+  // if that phrase can't be wrapped cleanly (repeats beyond the source, lands in
+  // code), fall back to an appended ◆ target so the anchor is never wrong.
   function createComment(info: SelInfo, commentText: string) {
     if (content == null || !plan) return;
     const block = plan.blocks[info.blockIndex];
-    if (!block) return;
-    const ids = plan.blocks.filter((b) => b.type === 'comment').map((b) => Number(/(\d+)/.exec(b.id)?.[1] ?? 0));
-    const id = `c${Math.max(0, ...ids) + 1}`;
+    if (!block || block.type !== 'markdown') return;
+    const id = nextCommentId();
     const slice = content.slice(block.range.start, block.range.end);
-    // whitespace-tolerant search for the selected text within the block source
-    const re = new RegExp(escapeRe(info.text).replace(/\s+/g, '\\s+'));
-    const m = re.exec(slice);
-    if (!m) {
-      setToast('Could not anchor the highlight to that selection — try selecting plain prose.');
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    const wrapped =
-      slice.slice(0, m.index) +
-      `<user-highlight comment="${id}">` +
-      slice.slice(m.index, m.index + m[0].length) +
-      `</user-highlight>` +
-      slice.slice(m.index + m[0].length);
-    const commentBlock = `\n\n<comment id="${id}" status="open" kind="clarify">\n  <note by="user" at="${nowStamp()}">${encodeEntities(commentText)}</note>\n</comment>`;
+    const wrapped = wrapNthOccurrence(slice, info.text, info.occ, id) ?? appendTarget(slice, id);
     const newContent =
-      content.slice(0, block.range.start) + wrapped + commentBlock + content.slice(block.range.end);
+      content.slice(0, block.range.start) + wrapped + commentSource(id, commentText) + content.slice(block.range.end);
     commit(newContent);
     setActiveComment(id);
     setComposer(null);
     setSel(null);
   }
+
+  // Comment on a structured block (decision, finding, check, question) — anchor a
+  // ◆ target to its primary field, so the comment can never drift to a duplicate
+  // phrase. The element's ◆ marker then activates this thread.
+  function addElementComment(block: Block, commentText: string) {
+    if (content == null || !plan) return;
+    const id = nextCommentId();
+    let next: Block;
+    if (block.type === 'check') next = { ...block, label: appendTarget(block.label, id) };
+    else if (block.type === 'decision' || block.type === 'finding' || block.type === 'question')
+      next = { ...block, body: appendTarget(block.body, id) };
+    else return;
+    const newContent =
+      replaceBlock(content, block.range, serializeBlock(next)) + commentSource(id, commentText);
+    commit(newContent);
+    setActiveComment(id);
+    setElComposer(null);
+  }
+
+  // ---- edit / delete comments ----
+  // Edit one note's text (UI only exposes this for the user's own notes).
+  const onEditNote = (c: CommentBlock, noteIndex: number, body: string) =>
+    editBlock(c, { ...c, notes: c.notes.map((n, i) => (i === noteIndex ? { ...n, body } : n)) });
+
+  // Delete a whole thread: strip its highlight/target anchor(s), then drop the
+  // <comment> block and collapse the blank lines it leaves behind.
+  const onDeleteThread = (c: CommentBlock) => {
+    if (content == null) return;
+    let next = removeHighlight(content, c.id);
+    const cb = parsePlan(next).blocks.find((b) => b.type === 'comment' && b.id === c.id);
+    if (cb) next = replaceBlock(next, cb.range, '').replace(/\n{3,}/g, '\n\n');
+    if (activeComment === c.id) setActiveComment(null);
+    commit(next);
+  };
 
   // ---- click delegation: code refs + highlight activation ----
   function onMainClick(e: React.MouseEvent) {
@@ -218,6 +296,16 @@ export function App() {
 
   const comments = plan.blocks.filter((b): b is CommentBlock => b.type === 'comment');
 
+  const commenting = {
+    commentMeta,
+    onAddComment: (block: Block, e: React.MouseEvent) => {
+      setComposer(null); // close any open prose-selection composer
+      setSel(null);
+      setElComposer({ block, text: '', x: e.clientX, y: e.clientY });
+    },
+    onActivateComment: activateComment,
+  };
+
   // group consecutive decisions / findings; render the rest inline
   const rendered: JSX.Element[] = [];
   for (let i = 0; i < plan.blocks.length; i++) {
@@ -227,16 +315,22 @@ export function App() {
       const run: DecisionBlock[] = [];
       while (i < plan.blocks.length && plan.blocks[i].type === 'decision') run.push(plan.blocks[i++] as DecisionBlock);
       i--;
-      rendered.push(<DecisionStack key={`d-${i}`} decisions={run} onStatus={onDecisionStatus} />);
+      rendered.push(<DecisionStack key={`d-${i}`} decisions={run} commenting={commenting} onStatus={onDecisionStatus} />);
     } else if (b.type === 'finding') {
       const run: FindingBlock[] = [];
       while (i < plan.blocks.length && plan.blocks[i].type === 'finding') run.push(plan.blocks[i++] as FindingBlock);
       i--;
-      rendered.push(<FindingMatrix key={`f-${i}`} findings={run} onStatus={onFindingStatus} />);
+      rendered.push(<FindingMatrix key={`f-${i}`} findings={run} commenting={commenting} onStatus={onFindingStatus} />);
+    } else if (b.type === 'check') {
+      const start = i;
+      const run: CheckBlock[] = [];
+      while (i < plan.blocks.length && plan.blocks[i].type === 'check') run.push(plan.blocks[i++] as CheckBlock);
+      i--;
+      rendered.push(<CheckList key={`c-${start}`} checks={run} commenting={commenting} onToggle={onCheckToggle} />);
     } else if (b.type === 'question') {
       rendered.push(
-        <div key={`q-${i}`} data-block-index={i}>
-          <QuestionCard q={b} onAnswer={onAnswer} />
+        <div key={`q-${i}`}>
+          <QuestionCard q={b} commenting={commenting} onAnswer={onAnswer} />
         </div>,
       );
     } else {
@@ -311,6 +405,8 @@ export function App() {
           onResolve={onResolve}
           onReopen={onReopen}
           onActivate={activateComment}
+          onEditNote={onEditNote}
+          onDeleteThread={onDeleteThread}
         />
       </div>
 
@@ -320,6 +416,7 @@ export function App() {
           style={{ left: sel.x, top: sel.y }}
           onMouseDown={(e) => {
             e.preventDefault();
+            setElComposer(null); // close any open element composer
             setComposer({ sel, text: '' });
           }}
         >
@@ -345,6 +442,33 @@ export function App() {
               Add comment
             </button>
             <button className="ip-btn ip-btn-ghost" onClick={() => setComposer(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {elComposer && (
+        <div className="ip-composer" style={{ left: elComposer.x, top: elComposer.y + 16 }}>
+          <div className="ip-composer-quote">
+            Comment on {elComposer.block.type}
+            {'id' in elComposer.block ? ` ${(elComposer.block as { id: string }).id}` : ''}
+          </div>
+          <textarea
+            className="ip-textarea"
+            autoFocus
+            placeholder="Comment…"
+            value={elComposer.text}
+            onChange={(e) => setElComposer({ ...elComposer, text: e.target.value })}
+          />
+          <div className="ip-actions">
+            <button
+              className="ip-btn ip-btn-primary"
+              disabled={!elComposer.text.trim()}
+              onClick={() => addElementComment(elComposer.block, elComposer.text.trim())}
+            >
+              Add comment
+            </button>
+            <button className="ip-btn ip-btn-ghost" onClick={() => setElComposer(null)}>
               Cancel
             </button>
           </div>

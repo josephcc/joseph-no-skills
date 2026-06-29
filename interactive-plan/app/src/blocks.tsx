@@ -1,14 +1,113 @@
 import { useState } from 'react';
 import { Markdown } from './markdown';
-import type { DecisionBlock, FindingBlock, QuestionBlock } from './types';
+import { anchoredCommentIds } from './parser';
+import type { Block, CheckBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
+
+type CommentMeta = Record<string, { status: string; kind: string | null }>;
+
+// Shared per-element comment affordance. With no thread it's a faint 💬 that opens
+// the composer (anchoring a ◆ target to this element); with one or more it's a
+// solid ◆ that activates the first thread (dimmed if all are resolved).
+function CommentMarker({
+  ids,
+  commentMeta,
+  onAdd,
+  onActivate,
+}: {
+  ids: string[];
+  commentMeta: CommentMeta;
+  onAdd: (e: React.MouseEvent) => void;
+  onActivate: (id: string) => void;
+}) {
+  if (ids.length === 0)
+    return (
+      <button
+        type="button"
+        className="ip-cmark ip-cmark-add"
+        title="Comment"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAdd(e);
+        }}
+      >
+        💬
+      </button>
+    );
+  const anyOpen = ids.some((id) => commentMeta[id]?.status !== 'resolved');
+  return (
+    <button
+      type="button"
+      className={`ip-cmark ${anyOpen ? 'ip-cmark-open' : 'ip-cmark-resolved'}`}
+      title="View comment"
+      onClick={(e) => {
+        e.stopPropagation();
+        onActivate(ids[0]);
+      }}
+    >
+      ◆{ids.length > 1 ? <sup>{ids.length}</sup> : null}
+    </button>
+  );
+}
+
+// Props every structured block takes so its rows can host a CommentMarker.
+interface Commenting {
+  commentMeta: CommentMeta;
+  onAddComment: (block: Block, e: React.MouseEvent) => void;
+  onActivateComment: (id: string) => void;
+}
+
+// ---------------- Check list ----------------
+
+// A run of consecutive <check> tags, rendered as interactive checkbox rows.
+// Toggling flips the block's `status` (todo↔done) through the normal block-edit
+// path — id-addressed, no positional matching. Clicking the box toggles; the
+// label stays plain text (not a <label>) so code-ref links remain clickable and
+// selecting it doesn't toggle the box. Each row carries a CommentMarker that
+// anchors a ◆ target to its label, so a check is commentable like any block.
+export function CheckList({
+  checks,
+  commenting,
+  onToggle,
+}: {
+  checks: CheckBlock[];
+  commenting: Commenting;
+  onToggle: (c: CheckBlock) => void;
+}) {
+  return (
+    <div className="ip-checklist">
+      {checks.map((c) => (
+        <div key={c.id} className={`ip-check ip-check-${c.status}`} id={`block-${c.id}`}>
+          <input
+            type="checkbox"
+            className="ip-check-box"
+            checked={c.status === 'done'}
+            onChange={() => onToggle(c)}
+            aria-label={`Toggle: ${c.label.replace(/<[^>]+>/g, '').replace(/[#*`]/g, '').slice(0, 80)}`}
+          />
+          <div className="ip-check-label">
+            <Markdown source={c.label} commentMeta={commenting.commentMeta} />
+          </div>
+          <CommentMarker
+            ids={anchoredCommentIds(c.label)}
+            commentMeta={commenting.commentMeta}
+            onAdd={(e) => commenting.onAddComment(c, e)}
+            onActivate={commenting.onActivateComment}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ---------------- Question ----------------
 
 export function QuestionCard({
   q,
+  commenting,
   onAnswer,
 }: {
   q: QuestionBlock;
+  commenting: Commenting;
   onAnswer: (q: QuestionBlock, chose: string[], text: string) => void;
 }) {
   const [editing, setEditing] = useState(q.status !== 'answered');
@@ -38,9 +137,15 @@ export function QuestionCard({
         <span className="ip-id">{q.id}</span>
         <h3>{q.title}</h3>
         <span className={`ip-badge ip-pill-${q.status}`}>{q.status}</span>
+        <CommentMarker
+          ids={anchoredCommentIds(q.body)}
+          commentMeta={commenting.commentMeta}
+          onAdd={(e) => commenting.onAddComment(q, e)}
+          onActivate={commenting.onActivateComment}
+        />
       </header>
       <div className="ip-card-body">
-        <Markdown source={q.body} />
+        <Markdown source={q.body} commentMeta={commenting.commentMeta} />
 
         {q.status === 'answered' && !editing ? (
           <div className="ip-answer-view">
@@ -116,24 +221,34 @@ const DECISION_NEXT: Record<string, { label: string; status: DecisionBlock['stat
 
 function DecisionRow({
   d,
+  commenting,
   onStatus,
 }: {
   d: DecisionBlock;
+  commenting: Commenting;
   onStatus: (d: DecisionBlock, status: DecisionBlock['status']) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`ip-drow ip-status-${d.status}`} id={`block-${d.id}`}>
-      <button className="ip-drow-head" onClick={() => setOpen((o) => !o)}>
-        <span className="ip-id">{d.id}</span>
-        <span className={`ip-badge ip-pill-${d.status}`}>{d.status}</span>
-        <span className="ip-drow-title">{d.title}</span>
-        {d.from ? <span className="ip-from">from {d.from}</span> : null}
-        <span className="ip-caret">{open ? '▾' : '▸'}</span>
-      </button>
+      <div className="ip-drow-head">
+        <button className="ip-drow-toggle" onClick={() => setOpen((o) => !o)}>
+          <span className="ip-id">{d.id}</span>
+          <span className={`ip-badge ip-pill-${d.status}`}>{d.status}</span>
+          <span className="ip-drow-title">{d.title}</span>
+          {d.from ? <span className="ip-from">from {d.from}</span> : null}
+          <span className="ip-caret">{open ? '▾' : '▸'}</span>
+        </button>
+        <CommentMarker
+          ids={anchoredCommentIds(d.body)}
+          commentMeta={commenting.commentMeta}
+          onAdd={(e) => commenting.onAddComment(d, e)}
+          onActivate={commenting.onActivateComment}
+        />
+      </div>
       {open && (
         <div className="ip-drow-body">
-          <Markdown source={d.body} />
+          <Markdown source={d.body} commentMeta={commenting.commentMeta} />
           {d.rationale && (
             <details className="ip-rationale">
               <summary>Rationale</summary>
@@ -155,9 +270,11 @@ function DecisionRow({
 
 export function DecisionStack({
   decisions,
+  commenting,
   onStatus,
 }: {
   decisions: DecisionBlock[];
+  commenting: Commenting;
   onStatus: (d: DecisionBlock, status: DecisionBlock['status']) => void;
 }) {
   return (
@@ -168,7 +285,7 @@ export function DecisionStack({
       </header>
       <div className="ip-dstack">
         {decisions.map((d) => (
-          <DecisionRow key={d.id} d={d} onStatus={onStatus} />
+          <DecisionRow key={d.id} d={d} commenting={commenting} onStatus={onStatus} />
         ))}
       </div>
     </section>
@@ -181,9 +298,11 @@ const SEV_ORDER = { p0: 0, p1: 1, p2: 2, p3: 3 };
 
 export function FindingMatrix({
   findings,
+  commenting,
   onStatus,
 }: {
   findings: FindingBlock[];
+  commenting: Commenting;
   onStatus: (f: FindingBlock, status: FindingBlock['status']) => void;
 }) {
   const [sevFilter, setSevFilter] = useState<string>('all');
@@ -209,15 +328,23 @@ export function FindingMatrix({
       <div className="ip-fmatrix">
         {rows.map((f) => (
           <div className={`ip-frow ip-sev-${f.severity} ip-fstatus-${f.status}`} key={f.id} id={`block-${f.id}`}>
-            <button className="ip-frow-head" onClick={() => setOpen((o) => (o === f.id ? null : f.id))}>
-              <span className={`ip-sev ip-sev-${f.severity}`}>{f.severity.toUpperCase()}</span>
-              <span className="ip-id">{f.id}</span>
-              <span className="ip-frow-title">{f.title}</span>
-              <span className={`ip-badge ip-pill-${f.status}`}>{f.status}</span>
-            </button>
+            <div className="ip-frow-head">
+              <button className="ip-frow-toggle" onClick={() => setOpen((o) => (o === f.id ? null : f.id))}>
+                <span className={`ip-sev ip-sev-${f.severity}`}>{f.severity.toUpperCase()}</span>
+                <span className="ip-id">{f.id}</span>
+                <span className="ip-frow-title">{f.title}</span>
+                <span className={`ip-badge ip-pill-${f.status}`}>{f.status}</span>
+              </button>
+              <CommentMarker
+                ids={anchoredCommentIds(f.body)}
+                commentMeta={commenting.commentMeta}
+                onAdd={(e) => commenting.onAddComment(f, e)}
+                onActivate={commenting.onActivateComment}
+              />
+            </div>
             {open === f.id && (
               <div className="ip-frow-body">
-                <Markdown source={f.body} />
+                <Markdown source={f.body} commentMeta={commenting.commentMeta} />
                 <div className="ip-actions">
                   <label className="ip-inline-label">status</label>
                   <select

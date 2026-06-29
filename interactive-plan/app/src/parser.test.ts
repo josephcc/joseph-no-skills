@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { lintPlan, parsePlan, replaceBlock, serializeBlock, serializeComment } from './parser';
+import {
+  anchoredCommentIds,
+  appendTarget,
+  lintPlan,
+  parsePlan,
+  removeHighlight,
+  replaceBlock,
+  serializeBlock,
+  serializeComment,
+  wrapNthOccurrence,
+} from './parser';
 import type { CommentBlock, QuestionBlock } from './types';
 
 describe('parsePlan', () => {
@@ -134,6 +144,48 @@ describe('lint raw attributes', () => {
   it('flags a misspelled child enum value (options select)', () => {
     const raw = `<open-question id="Q" title="t" status="open">\nq\n<options select="mulit">\n  <option id="a">A</option>\n</options>\n</open-question>`;
     expect(lintPlan(raw).some((d) => /select="mulit" is not one of/.test(d.message))).toBe(true);
+  });
+});
+
+describe('highlight anchoring', () => {
+  it('wraps the requested occurrence, not the first (the "optionally" bug)', () => {
+    const field = 'you may optionally do X, or optionally do Y';
+    const out = wrapNthOccurrence(field, 'optionally', 1, 'c1')!;
+    // the SECOND "optionally" is wrapped; the first is untouched
+    expect(out).toBe('you may optionally do X, or <user-highlight comment="c1">optionally</user-highlight> do Y');
+  });
+
+  it('matches whitespace-tolerantly and skips matches inside inline code', () => {
+    const field = 'set `optionally` then optionally run';
+    // occ 0 should skip the code-span copy and wrap the prose one
+    const out = wrapNthOccurrence(field, 'optionally', 0, 'c1')!;
+    expect(out).toBe('set `optionally` then <user-highlight comment="c1">optionally</user-highlight> run');
+  });
+
+  it('returns null when the occurrence index is out of range (caller falls back to a target)', () => {
+    expect(wrapNthOccurrence('only one here', 'one', 1, 'c1')).toBeNull();
+  });
+
+  it('appendTarget adds an empty highlight before trailing whitespace', () => {
+    expect(appendTarget('a decision body\n', 'c2')).toBe('a decision body <user-highlight comment="c2"></user-highlight>\n');
+  });
+
+  it('anchoredCommentIds finds span + target ids, de-duplicated', () => {
+    const field =
+      'x <user-highlight comment="c1">a</user-highlight> y <user-highlight comment="c1"></user-highlight> <user-highlight comment="c2"></user-highlight>';
+    expect(anchoredCommentIds(field)).toEqual(['c1', 'c2']);
+  });
+
+  it('removeHighlight strips a span (keeping text) and a target (removing it), only for the id', () => {
+    const raw =
+      'see <user-highlight comment="c1">this span</user-highlight> and end <user-highlight comment="c2"></user-highlight>';
+    expect(removeHighlight(raw, 'c1')).toBe('see this span and end <user-highlight comment="c2"></user-highlight>');
+    expect(removeHighlight(raw, 'c2')).toBe('see <user-highlight comment="c1">this span</user-highlight> and end ');
+  });
+
+  it('removeHighlight keeps inner text of a nested highlight when removing the outer', () => {
+    const raw = 'a <user-highlight comment="x">foo <user-highlight comment="y">bar</user-highlight></user-highlight> z';
+    expect(removeHighlight(raw, 'x')).toBe('a foo <user-highlight comment="y">bar</user-highlight> z');
   });
 });
 

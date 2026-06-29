@@ -15,7 +15,8 @@ export type Block =
   | QuestionBlock
   | DecisionBlock
   | FindingBlock
-  | CommentBlock;
+  | CommentBlock
+  | CheckBlock;
 
 export interface MarkdownBlock {
   type: 'markdown';
@@ -85,6 +86,17 @@ export interface CommentBlock {
   resolvedBy: string | null;
   resolvedAt: string | null;
   notes: Note[];
+  range: SourceRange;
+}
+
+// A checkable task item — a first-class, id-addressed checkbox (toggled by
+// flipping `status`, like a decision's status). Renders as an interactive
+// checkbox + markdown label; persists via the normal block-edit round-trip.
+export interface CheckBlock {
+  type: 'check';
+  id: string;
+  status: 'todo' | 'done';
+  label: string; // markdown (the checkbox's text)
   range: SourceRange;
 }
 

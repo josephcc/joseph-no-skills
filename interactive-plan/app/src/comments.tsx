@@ -1,6 +1,64 @@
 import { useState } from 'react';
 import { Markdown } from './markdown';
-import type { CommentBlock } from './types';
+import type { CommentBlock, Note } from './types';
+
+function NoteView({
+  note,
+  index,
+  canEdit,
+  onEdit,
+}: {
+  note: Note;
+  index: number;
+  canEdit: boolean;
+  onEdit: (index: number, body: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note.body);
+  return (
+    <div className={`ip-note ip-by-${note.by}`}>
+      <div className="ip-note-meta">
+        <span className="ip-note-by">{note.by}</span>
+        {note.at && <span className="ip-note-at">{note.at}</span>}
+        {canEdit && !editing && (
+          <button
+            className="ip-note-edit"
+            title="Edit"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDraft(note.body);
+              setEditing(true);
+            }}
+          >
+            ✎ Edit
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div onClick={(e) => e.stopPropagation()}>
+          <textarea className="ip-textarea" value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} />
+          <div className="ip-actions">
+            <button
+              className="ip-btn ip-btn-primary"
+              disabled={!draft.trim() || draft === note.body}
+              onClick={() => {
+                onEdit(index, draft.trim());
+                setEditing(false);
+              }}
+            >
+              Save
+            </button>
+            <button className="ip-btn ip-btn-ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <Markdown source={note.body} escapeHtml />
+      )}
+    </div>
+  );
+}
 
 function CommentCard({
   c,
@@ -9,6 +67,8 @@ function CommentCard({
   onResolve,
   onReopen,
   onActivate,
+  onEditNote,
+  onDeleteThread,
 }: {
   c: CommentBlock;
   active: boolean;
@@ -16,8 +76,11 @@ function CommentCard({
   onResolve: (c: CommentBlock) => void;
   onReopen: (c: CommentBlock) => void;
   onActivate: (id: string) => void;
+  onEditNote: (c: CommentBlock, noteIndex: number, body: string) => void;
+  onDeleteThread: (c: CommentBlock) => void;
 }) {
   const [reply, setReply] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div
       className={`ip-comment ip-status-${c.status} ${active ? 'ip-comment-active' : ''} ${c.kind ? `ip-kind-${c.kind}` : ''}`}
@@ -31,16 +94,44 @@ function CommentCard({
             Resolved{c.resolvedBy ? ` by ${c.resolvedBy === 'user' ? 'you' : c.resolvedBy}` : ''}
           </span>
         )}
+        {confirmDelete ? (
+          <span className="ip-del-confirm" onClick={(e) => e.stopPropagation()}>
+            Delete thread?
+            <button
+              className="ip-btn ip-btn-danger"
+              onClick={() => {
+                onDeleteThread(c);
+                setConfirmDelete(false);
+              }}
+            >
+              Delete
+            </button>
+            <button className="ip-btn ip-btn-ghost" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            className="ip-thread-del"
+            title="Delete this comment thread"
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmDelete(true);
+            }}
+          >
+            🗑
+          </button>
+        )}
       </header>
       <div className="ip-notes">
         {c.notes.map((n, i) => (
-          <div key={i} className={`ip-note ip-by-${n.by}`}>
-            <div className="ip-note-meta">
-              <span className="ip-note-by">{n.by}</span>
-              {n.at && <span className="ip-note-at">{n.at}</span>}
-            </div>
-            <Markdown source={n.body} escapeHtml />
-          </div>
+          <NoteView
+            key={i}
+            note={n}
+            index={i}
+            canEdit={n.by === 'user'}
+            onEdit={(idx, body) => onEditNote(c, idx, body)}
+          />
         ))}
       </div>
       {c.status === 'open' ? (
@@ -97,6 +188,8 @@ export function CommentRail({
   onResolve,
   onReopen,
   onActivate,
+  onEditNote,
+  onDeleteThread,
 }: {
   comments: CommentBlock[];
   activeId: string | null;
@@ -104,22 +197,17 @@ export function CommentRail({
   onResolve: (c: CommentBlock) => void;
   onReopen: (c: CommentBlock) => void;
   onActivate: (id: string) => void;
+  onEditNote: (c: CommentBlock, noteIndex: number, body: string) => void;
+  onDeleteThread: (c: CommentBlock) => void;
 }) {
   const [showResolved, setShowResolved] = useState(false);
   const openComments = comments.filter((c) => c.status === 'open');
   const resolved = comments.filter((c) => c.status === 'resolved');
+  const cardProps = { onReply, onResolve, onReopen, onActivate, onEditNote, onDeleteThread };
   return (
     <aside className="ip-rail">
       {openComments.map((c) => (
-        <CommentCard
-          key={c.id}
-          c={c}
-          active={c.id === activeId}
-          onReply={onReply}
-          onResolve={onResolve}
-          onReopen={onReopen}
-          onActivate={onActivate}
-        />
+        <CommentCard key={c.id} c={c} active={c.id === activeId} {...cardProps} />
       ))}
       {resolved.length > 0 && (
         <div className="ip-resolved-section">
@@ -127,17 +215,7 @@ export function CommentRail({
             {showResolved ? 'Hide' : 'Show'} {resolved.length} resolved
           </button>
           {showResolved &&
-            resolved.map((c) => (
-              <CommentCard
-                key={c.id}
-                c={c}
-                active={c.id === activeId}
-                onReply={onReply}
-                onResolve={onResolve}
-                onReopen={onReopen}
-                onActivate={onActivate}
-              />
-            ))}
+            resolved.map((c) => <CommentCard key={c.id} c={c} active={c.id === activeId} {...cardProps} />)}
         </div>
       )}
       {openComments.length === 0 && resolved.length === 0 && (

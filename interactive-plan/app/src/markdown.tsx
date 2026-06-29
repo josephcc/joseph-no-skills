@@ -30,13 +30,23 @@ export function preprocessHighlights(
   toks.sort((a, b) => a.i - b.i);
   let out = '';
   let last = 0;
-  for (const t of toks) {
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
     out += md.slice(last, t.i);
     if (t.open) {
       const meta = kinds[t.id!];
       const cls = ['ip-hl'];
       if (meta?.status === 'resolved') cls.push('ip-hl-resolved');
       const kindAttr = meta?.kind ? ` data-kind="${meta.kind}"` : '';
+      // An empty highlight (open immediately followed by its close) is a
+      // "target": render a single clickable ◆ marker instead of an empty span.
+      const next = toks[k + 1];
+      if (next && !next.open && next.i === t.i + t.len) {
+        out += `<mark class="${cls.join(' ')} ip-hl-target" data-comment="${t.id}"${kindAttr}>◆</mark>`;
+        last = next.i + next.len;
+        k++; // consume the paired close
+        continue;
+      }
       out += `<mark class="${cls.join(' ')}" data-comment="${t.id}"${kindAttr}>`;
     } else {
       out += '</mark>';

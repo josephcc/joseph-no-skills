@@ -1,6 +1,7 @@
 import type {
   Answer,
   Block,
+  CheckBlock,
   CommentBlock,
   DecisionBlock,
   Diagnostic,
@@ -12,7 +13,7 @@ import type {
   QuestionBlock,
 } from './types';
 
-const BLOCK_TAGS = ['open-question', 'decision', 'finding', 'comment'] as const;
+const BLOCK_TAGS = ['open-question', 'decision', 'finding', 'comment', 'check'] as const;
 type BlockTagName = (typeof BLOCK_TAGS)[number];
 
 // --- attribute parsing -------------------------------------------------------
@@ -110,7 +111,7 @@ function scanBlockTags(raw: string, prot: Range[]): RawBlockTag[] {
       i = lt + 1;
       continue;
     }
-    const m = /^<(open-question|decision|finding|comment)\b/.exec(raw.slice(lt, lt + 16));
+    const m = /^<(open-question|decision|finding|comment|check)\b/.exec(raw.slice(lt, lt + 16));
     if (!m) {
       i = lt + 1;
       continue;
@@ -331,6 +332,17 @@ function parseComment(open: string, inner: string, range: Range): CommentBlock {
   };
 }
 
+function parseCheck(open: string, inner: string, range: Range): CheckBlock {
+  const a = parseAttrs(open);
+  return {
+    type: 'check',
+    id: a.id ?? '',
+    status: a.status === 'done' ? 'done' : 'todo',
+    label: inner.trim(),
+    range,
+  };
+}
+
 // --- main parse --------------------------------------------------------------
 
 export function parsePlan(raw: string): ParsedPlan {
@@ -351,6 +363,7 @@ export function parsePlan(raw: string): ParsedPlan {
     if (t.name === 'open-question') blocks.push(parseQuestion(open, inner, range));
     else if (t.name === 'decision') blocks.push(parseDecision(open, inner, range));
     else if (t.name === 'finding') blocks.push(parseFinding(open, inner, range));
+    else if (t.name === 'check') blocks.push(parseCheck(open, inner, range));
     else blocks.push(parseComment(open, inner, range));
     cursor = t.end;
   }
@@ -417,6 +430,12 @@ export function serializeComment(c: CommentBlock): string {
   return s;
 }
 
+// One line so the round-trip is byte-stable and a label can't accidentally
+// introduce a structural newline. The label markdown is kept verbatim.
+export function serializeCheck(c: CheckBlock): string {
+  return `<check id="${escapeAttr(c.id)}" status="${c.status}">${c.label}</check>`;
+}
+
 export function serializeBlock(b: Block): string {
   switch (b.type) {
     case 'question':
@@ -427,6 +446,8 @@ export function serializeBlock(b: Block): string {
       return serializeFinding(b);
     case 'comment':
       return serializeComment(b);
+    case 'check':
+      return serializeCheck(b);
     case 'markdown':
       return b.text;
   }
@@ -437,6 +458,100 @@ export function serializeBlock(b: Block): string {
 export function replaceBlock(raw: string, range: { start: number; end: number }, replacement: string): string {
   return raw.slice(0, range.start) + replacement + raw.slice(range.end);
 }
+
+// --- highlight anchoring ------------------------------------------------------
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Wrap the `occ`-th (0-based) whitespace-tolerant occurrence of `selText` in
+// `field` with a <user-highlight comment="id"> span. Matches inside code
+// (inline/fenced) are skipped — wrapping there would corrupt the code. Returns
+// null when there aren't `occ`+1 matches (caller then falls back to a target),
+// which is what makes anchoring precise: the viewer counts how many copies of
+// the selected phrase precede the selection and asks for exactly that one,
+// instead of always grabbing the first match.
+export function wrapNthOccurrence(field: string, selText: string, occ: number, id: string): string | null {
+  const norm = selText.trim();
+  if (!norm) return null;
+  const prot = protectedRanges(field);
+  const re = new RegExp(escapeRegExp(norm).replace(/\s+/g, '\\s+'), 'g');
+  let m: RegExpExecArray | null;
+  let count = 0;
+  while ((m = re.exec(field))) {
+    const at = m.index;
+    if (m.index === re.lastIndex) re.lastIndex++; // guard against zero-length loops
+    if (inAnyRange(at, prot)) continue;
+    if (count === occ)
+      return (
+        field.slice(0, at) +
+        `<user-highlight comment="${id}">` +
+        m[0] +
+        `</user-highlight>` +
+        field.slice(at + m[0].length)
+      );
+    count++;
+  }
+  return null;
+}
+
+// Append an empty highlight "target" (rendered as a clickable ◆ marker) to a
+// field, before any trailing whitespace so the field's block structure is
+// preserved. This is the universal anchor for things a span can't reliably wrap
+// — repeated/short phrases, or structured elements (decisions, findings, …).
+export function appendTarget(field: string, id: string): string {
+  const trail = /\s*$/.exec(field)?.[0] ?? '';
+  const core = field.slice(0, field.length - trail.length);
+  const sep = core && !/\s$/.test(core) ? ' ' : '';
+  return `${core}${sep}<user-highlight comment="${id}"></user-highlight>${trail}`;
+}
+
+// Strip every <user-highlight comment="id"> anchor for one comment id, keeping
+// the wrapped inner text (a target's inner is empty, so it vanishes). Opens are
+// paired to closes with a stack so nested highlights survive — only the targeted
+// id's own tags are removed. Used when deleting a comment thread.
+export function removeHighlight(raw: string, id: string): string {
+  const prot = protectedRanges(raw);
+  const inCode = (i: number) => inAnyRange(i, prot);
+  type Tok = { i: number; len: number; open: boolean; id?: string };
+  const toks: Tok[] = [];
+  const openRe = /<user-highlight\b[^>]*\bcomment="([^"]+)"[^>]*>/g;
+  const closeRe = /<\/user-highlight>/g;
+  let m: RegExpExecArray | null;
+  while ((m = openRe.exec(raw))) if (!inCode(m.index)) toks.push({ i: m.index, len: m[0].length, open: true, id: m[1] });
+  while ((m = closeRe.exec(raw))) if (!inCode(m.index)) toks.push({ i: m.index, len: m[0].length, open: false });
+  toks.sort((a, b) => a.i - b.i);
+  const stack: Tok[] = [];
+  const cut: { start: number; end: number }[] = [];
+  for (const t of toks) {
+    if (t.open) stack.push(t);
+    else {
+      const o = stack.pop();
+      if (o && o.id === id) {
+        cut.push({ start: o.i, end: o.i + o.len });
+        cut.push({ start: t.i, end: t.i + t.len });
+      }
+    }
+  }
+  if (!cut.length) return raw;
+  cut.sort((a, b) => b.start - a.start); // splice from the end so offsets stay valid
+  let out = raw;
+  for (const c of cut) out = out.slice(0, c.start) + out.slice(c.end);
+  return out;
+}
+
+// The distinct comment ids anchored within a field (span or target), in order.
+// Lets a structured block show a marker for the comments that point at it.
+export function anchoredCommentIds(field: string): string[] {
+  const prot = protectedRanges(field);
+  const re = /<user-highlight\b[^>]*\bcomment="([^"]+)"[^>]*>/g;
+  const ids: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(field))) if (!inAnyRange(m.index, prot)) ids.push(m[1]);
+  return [...new Set(ids)];
+}
+
 
 // --- lint --------------------------------------------------------------------
 
@@ -503,6 +618,7 @@ export function lintPlan(raw: string): Diagnostic[] {
       required: ['id'],
       enums: { status: ['open', 'resolved'], kind: ['error', 'clarify', 'question', 'nit'] },
     },
+    check: { allowed: ['id', 'status'], required: ['id'], enums: { status: ['todo', 'done'] } },
   };
   for (const t of tags) {
     if (t.closeIdx === -1) continue;

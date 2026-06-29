@@ -21,7 +21,7 @@ The skill lives at `~/.claude/skills/interactive-plan/`:
 - `app/` — the Vite+React viewer + Node file-API + the linter.
 - `examples/` — worked fixtures (`interactive-plan-skill.plan.md`, `demo.plan.md`).
 
-## Authoring cheatsheet (the five tags)
+## Authoring cheatsheet (the six tags)
 
 Everything not in a tag is plain markdown (rendered with code-ref linkifying + highlighted code
 blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
@@ -57,6 +57,12 @@ things for the user; the user can reply/resolve, and so can you.
   <note by="agent" at="2026-06-27T10:00">Your note.</note>
 </comment>
 ```
+An **empty** `<user-highlight comment="cN"></user-highlight>` (no inner text) is a **◆ target**: an
+anchor for a whole structured element (decision/finding/check/question) or any phrase a span can't
+pin to one occurrence. The viewer adds these via each element's ◆ affordance and as a fallback when
+a prose span would be ambiguous; author one to attach a comment to an element. In the viewer the
+user can edit their own notes and **delete** a thread (removes the `<comment>` + its anchor) as an
+alternative to resolving it.
 
 **Finding** — an audit/review item; renders as a filterable severity matrix.
 ```
@@ -65,6 +71,18 @@ What's wrong, why, suggested fix (markdown, may contain code refs).
 </finding>
 ```
 `severity`: `p0`–`p3`. `status`: `open|fixed|wontfix|deferred|partial`.
+
+**Check** — a checkable task item the user (or you) can tick off in the viewer; the click flips
+`status` and saves back to the file. Use for tutorials, test scripts, acceptance/QA checklists — any
+"tick as you go" list. Each is id-addressed (don't reuse a plain GFM `- [ ]` for a *persisted*
+checklist — those render read-only). Consecutive checks render as one tight checklist; `done` shows
+struck-through.
+```
+**✅ Expect**
+<check id="k1" status="todo">A welcome modal opens with the **graph name** as its heading.</check>
+<check id="k2" status="todo">The `Start Exploring` button is visible.</check>
+```
+`status`: `todo` | `done` (omit ⇒ `todo`). The label is inline markdown (code refs, `code`, bold).
 
 ### Authoring rules
 - Stable, unique ids; never renumber; never delete resolved/superseded items (they collapse).
