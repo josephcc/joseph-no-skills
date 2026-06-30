@@ -1,4 +1,4 @@
-# josephcc-skills
+# joseph-no-skills
 
 > Personal [Claude Code](https://claude.com/claude-code) skills, each built to kill a specific bit
 > of friction in how I actually work with coding agents.
@@ -78,8 +78,8 @@ table. Codex is treated as *a capable second opinion, not an authority*.
 ## Install
 
 ```bash
-git clone git@github.com:josephcc/josephcc-skills.git
-cd josephcc-skills
+git clone git@github.com:josephcc/joseph-no-skills.git
+cd joseph-no-skills
 ./install.sh        # symlinks each skill into ~/.claude/skills/
 ```
 
