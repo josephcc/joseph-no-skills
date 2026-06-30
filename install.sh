@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install josephcc-skills into ~/.claude/skills/ via symlinks.
+# Install joseph-no-skills into ~/.claude/skills/ via symlinks.
 # Re-run safe: existing symlinks are replaced; existing real directories are
 # refused (so we don't clobber a skill you've edited in place).
 
