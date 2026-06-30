@@ -41,6 +41,7 @@ highlighted span — threads you and the agent can both reply to and resolve:
 - **Live round-trip**: the viewer watches the file and re-renders when the agent rewrites it, and warns on edit conflicts.
 - **Clickable code refs**: `file.ts:123` opens in your editor (default [Zed](https://zed.dev), configurable), resolving shorthand paths against the repo.
 - **One shared server** for all plans, keyed by `?plan=<path>` — no swarm of localhost ports.
+- **Open straight from Zed**: a keybinding / command-palette task opens the focused `.md` in the viewer (reusing the shared server, never spawning a duplicate) — [setup + copy-paste configs](interactive-plan/docs/zed-integration.md).
 
 **The loop:** agent writes/updates a plan → you open the viewer, answer & comment → it saves back
 into the `.md` → "review my feedback on plan X" → agent revises → repeat until you're happy →
