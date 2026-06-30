@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { preprocessHighlights } from './markdown';
+import { preprocessHighlights, resolvePlanHref } from './markdown';
 
 const NO_META: Record<string, { status: string; kind: string | null }> = {};
 
@@ -37,5 +37,35 @@ describe('preprocessHighlights', () => {
     });
     expect(out).toContain('ip-hl-resolved');
     expect(out).toContain('data-kind="error"');
+  });
+});
+
+describe('resolvePlanHref', () => {
+  const BASE = '/Users/j/proj/notebook/hci/main.md';
+  const enc = (p: string) => `?plan=${encodeURIComponent(p)}`;
+
+  it('resolves a sibling .md link against the current plan dir', () => {
+    expect(resolvePlanHref('new-domains.md', BASE)).toBe(enc('/Users/j/proj/notebook/hci/new-domains.md'));
+  });
+  it('resolves a parent (../) .md link', () => {
+    expect(resolvePlanHref('../main.md', BASE)).toBe(enc('/Users/j/proj/notebook/main.md'));
+    expect(resolvePlanHref('../pathway/main.md', BASE)).toBe(enc('/Users/j/proj/notebook/pathway/main.md'));
+  });
+  it('preserves a #fragment', () => {
+    expect(resolvePlanHref('main.md#chi-paper', BASE)).toBe(enc('/Users/j/proj/notebook/hci/main.md') + '#chi-paper');
+  });
+  it('accepts an absolute fs path to a .md file', () => {
+    expect(resolvePlanHref('/abs/other.md', BASE)).toBe(enc('/abs/other.md'));
+  });
+  it('ignores external URLs, in-page anchors, and non-.md targets', () => {
+    expect(resolvePlanHref('https://example.com/x.md', BASE)).toBeNull();
+    expect(resolvePlanHref('mailto:a@b.com', BASE)).toBeNull();
+    expect(resolvePlanHref('#section', BASE)).toBeNull();
+    expect(resolvePlanHref('notes.txt', BASE)).toBeNull();
+    expect(resolvePlanHref('', BASE)).toBeNull();
+  });
+  it('skips a relative link when there is no base plan path', () => {
+    expect(resolvePlanHref('new-domains.md', null)).toBeNull();
+    expect(resolvePlanHref('/abs/other.md', null)).toBe(enc('/abs/other.md')); // absolute still works
   });
 });

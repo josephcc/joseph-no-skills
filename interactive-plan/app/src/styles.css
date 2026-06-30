@@ -232,6 +232,13 @@ body {
 .ip-coderef:hover {
   background: var(--asta-green-20);
 }
+/* Wiki link to another plan (.md) — opens that file in the viewer in a new tab. */
+.ip-planlink::after {
+  content: "↗";
+  font-size: 0.8em;
+  opacity: 0.55;
+  margin-left: 0.12em;
+}
 .ip-hl {
   background: #ffe9a8;
   border-bottom: 2px solid var(--asta-amber);

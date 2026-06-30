@@ -26,6 +26,12 @@ The skill lives at `~/.claude/skills/interactive-plan/`:
 Everything not in a tag is plain markdown (rendered with code-ref linkifying + highlighted code
 blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
 
+**Plans interlink like a wiki.** A plain relative markdown link to another `.md` plan
+(`[Pathway](../pathway/main.md)`, `[details](hci/main.md#status)`) is detected by the viewer and
+rewritten to open that file **in a new viewer tab** (`?plan=<abs>`) — no special syntax, just a normal
+link. Use this to build a portal/thread structure across many plan files. External URLs, in-page
+`#anchors`, and non-`.md` links are left as ordinary links.
+
 **Open question** — a fork awaiting the user. Options carry rich markdown; the viewer auto-adds an
 "Other" choice + a freeform box, so list only real candidates.
 ```

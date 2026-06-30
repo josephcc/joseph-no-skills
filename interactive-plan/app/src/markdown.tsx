@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { marked } from 'marked';
 import { decodeEntities, protectedRanges } from './parser';
+import { planPathFromUrl } from './api';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -129,6 +130,53 @@ function scrubLinks(root: HTMLElement): void {
   });
 }
 
+// Resolve a markdown link that points to ANOTHER .md plan into a viewer URL
+// (`?plan=<abs>`), so the same viewer renders the linked file. Returns null when
+// `raw` isn't a relative/absolute link to a .md file (external URLs, in-page
+// anchors, non-.md targets, or a relative link with no current-plan base to
+// resolve against are all left untouched). Pure + exported for unit tests.
+export function resolvePlanHref(raw: string, base: string | null): string | null {
+  if (!raw) return null;
+  if (raw.startsWith('#') || raw.startsWith('?')) return null; // in-page anchor / already a query
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null; // has a scheme (http:, mailto:, file:, …)
+  const pathPart = raw.split(/[?#]/)[0];
+  if (!/\.md$/i.test(pathPart)) return null; // only .md targets
+  let absPath: string;
+  let frag = '';
+  try {
+    if (raw.startsWith('/')) {
+      const h = raw.indexOf('#');
+      absPath = h >= 0 ? raw.slice(0, h) : raw; // already an absolute fs path
+      frag = h >= 0 ? raw.slice(h) : '';
+    } else {
+      if (!base) return null; // can't resolve a relative link without the current plan path
+      const u = new URL(raw, `file://${base}`); // resolves ./ and ../ against the current plan's dir
+      absPath = decodeURIComponent(u.pathname);
+      frag = u.hash;
+    }
+  } catch {
+    return null;
+  }
+  return `?plan=${encodeURIComponent(absPath)}${frag}`;
+}
+
+// Catch relative links to other .md plans and point them at the viewer, opening
+// in a new tab — so the wiki of interlinked plan files navigates in-app without
+// changing the authored markdown (plain relative links stay plain).
+function rewritePlanLinks(root: HTMLElement): void {
+  const base = planPathFromUrl();
+  root.querySelectorAll('a[href]').forEach((a) => {
+    const href = resolvePlanHref(a.getAttribute('href') ?? '', base);
+    if (!href) return;
+    a.setAttribute('href', href);
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
+    a.classList.add('ip-planlink');
+    const name = decodeURIComponent(href.replace(/^\?plan=/, '').split('#')[0]).split('/').pop() ?? '';
+    a.setAttribute('title', `Open ${name} in the viewer`);
+  });
+}
+
 // In escaped user content, code spans get double-escaped: escapeHtmlText turns
 // `<` into `&lt;`, then marked re-escapes the `&` inside the code span. Decode
 // the code element's text back so `<Foo>` displays as typed. Using textContent
@@ -160,6 +208,7 @@ export function Markdown({
     linkifyCodeRefs(ref.current);
     decorateCodeBlocks(ref.current);
     if (escapeHtml) scrubLinks(ref.current);
+    rewritePlanLinks(ref.current);
   }, [html, escapeHtml]);
   return <div className="ip-md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
 }

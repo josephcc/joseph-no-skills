@@ -57,6 +57,11 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 
 - **Code references** — `file.ts:123`, `App.tsx:1318-1370`, bare 7–40 char commit SHAs, and
   `#123` / PR URLs are auto-linkified (hover shows the path; click opens it / the PR).
+- **Inter-plan links** — a plain relative/absolute markdown link to another `.md` plan
+  (`[x](../pathway/main.md)`, `[x](hci/main.md#status)`) is resolved against the current plan's path
+  and rewritten to open that file in the viewer in a **new tab** (`?plan=<abs>`). Lets plan files
+  interlink like a wiki with no special syntax. External URLs, `#anchors`, and non-`.md` links are
+  untouched.
 - **Code blocks** — fenced blocks are syntax-highlighted with a language label + copy button, and
   collapse behind a "show N lines" toggle when long.
 - **Tables, lists, headings, blockquotes** — standard markdown rendering, styled.
