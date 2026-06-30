@@ -1,0 +1,14 @@
+// Example Zed keybinding — copy into ~/.config/zed/keymap.json (merge into the
+// existing array if you already have one). Binds cmd-shift-m to spawn the task
+// defined in tasks.example.json. The task_name must match the task's "label".
+[
+  {
+    "context": "Workspace",
+    "bindings": {
+      "cmd-shift-m": [
+        "task::Spawn",
+        { "task_name": "Open in interactive-plan viewer" }
+      ]
+    }
+  }
+]

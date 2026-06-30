@@ -117,6 +117,14 @@ node ~/.claude/skills/interactive-plan/app/server.mjs <abs-path-to-plan.md> [--n
   the user edited it. Code refs (`file.ts:123`) open in the user's editor (default Zed; configurable
   in `~/.claude/skills/interactive-plan/config.json`).
 
+### Open from Zed (keybinding + command palette)
+The user can open the focused `.md` in the viewer from Zed without an extension: a Zed
+**task** runs `server.mjs $ZED_FILE` (idempotent — reuses the shared daemon, never spawns a
+duplicate), bound to a key and surfaced in the command palette. Zed has no webview/custom-UI
+extension API, so the viewer can't render *inside* an editor tab and there's no right-click
+menu item — keybinding + palette is the supported surface. Setup + copy-paste example configs:
+[`docs/zed-integration.md`](docs/zed-integration.md).
+
 ### Manage the daemon
 ```bash
 node ~/.claude/skills/interactive-plan/app/server.mjs --status   # JSON: running?, port, pid, open plans

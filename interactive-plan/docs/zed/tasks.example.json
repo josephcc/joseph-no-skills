@@ -1,0 +1,21 @@
+// Example Zed task — copy into ~/.config/zed/tasks.json (merge into the existing
+// array if you already have one). Opens the file in the active Zed editor in the
+// interactive-plan viewer. Reuses the single shared daemon if it's already up;
+// never spawns a duplicate server.
+//
+// Adjust the absolute path to server.mjs for your machine. Zed does not reliably
+// expand `~` in args, so use a full path.
+[
+  {
+    "label": "Open in interactive-plan viewer",
+    "command": "node",
+    "args": [
+      "/Users/YOU/.claude/skills/interactive-plan/app/server.mjs",
+      "$ZED_FILE"
+    ],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus",
+    "hide": "on_success"
+  }
+]
