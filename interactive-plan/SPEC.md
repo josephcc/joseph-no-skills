@@ -24,9 +24,14 @@ Two audiences, one file:
    prose, so they are machine-parseable and unambiguous.
 4. **Nothing is destroyed.** Resolved comments, superseded decisions, and answered questions are
    *kept* (collapsed in the UI), never deleted — the file is an auditable history.
-5. **Both parties write.** The user writes via the viewer; the agent writes by editing the file.
-   The vocabulary is symmetric — an agent can pose a question or drop a comment for the user, and
-   the user can answer or comment for the agent.
+5. **Both parties write — often at the same time.** The user writes via the viewer; the agent
+   writes by editing the file. The vocabulary is symmetric — an agent can pose a question or drop a
+   comment for the user, and the user can answer or comment for the agent. Because both sides may be
+   editing concurrently, the viewer saves optimistically and reloads if the file moved under it, and
+   the **agent must edit surgically** (smallest unique region) and **retry against a fresh read** if
+   an edit stops matching — never overwriting the user's concurrent changes. One asymmetry:
+   **resolving a thread is the user's action** — the agent replies and may suggest resolving, but
+   does not set a comment to `resolved` itself.
 
 ---
 
@@ -74,7 +79,7 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 |---|---|---|
 | `<open-question>` | A question awaiting the user's input | choice picker + Other + freeform answer |
 | `<decision>` | A decision, proposed or locked | lock / reopen / supersede; collapsible rationale |
-| `<comment>` | A threaded margin comment (Google-Docs) | reply, resolve/reopen by either party |
+| `<comment>` | A threaded margin comment (Google-Docs) | reply by either party; **resolve/reopen by the user** |
 | `<user-highlight>` | Inline anchor binding a span to a comment | the highlighted span; click ↔ its comment card |
 | `<finding>` | An audit/review finding (severity matrix item) | filter by severity; toggle status |
 | `<check>` | A checkable task item (tutorial / QA checklist) | tick the checkbox; flips `status`, saved to file |
@@ -213,9 +218,12 @@ the durable unit is a <user-highlight comment="c7">full materialized graph-versi
 - `kind` (optional) — `error` | `clarify` | `question` | `nit`; color-codes the highlight so a
   reader can scan for errors.
 - `resolved-by` / `resolved-at` (set when resolved) — the card shows "Resolved by you" vs
-  "Resolved by agent".
+  "Resolved by agent". The format permits either value, but by convention the **user** resolves, so
+  in practice this reads "Resolved by you".
 - Children: ordered `<note by="user|agent" at="ISO-8601">…markdown…</note>` — the thread. Either
-  party appends notes; either party can resolve or reopen.
+  party appends notes; **the user resolves or reopens** — the agent replies and may suggest
+  resolving, but leaves the `status` to the user. An open thread whose *last* note is `by="user"` is
+  the signal that the agent owes a reply.
 
 **Rendering** — highlighted spans (or ◆ targets) in the body; comment cards docked in the right
 margin. Resolved threads collapse out of the margin behind a **"Show N resolved"** toggle. Click a
@@ -306,17 +314,19 @@ matching — the toggle is addressed by `id`). The agent authors the checks; the
 | Answer a question | **Viewer** | adds `<answer>`; sets question `status="answered"` |
 | Tick / untick a check | **Viewer** | sets `<check status>` (`todo`↔`done`) |
 | Comment / reply | **Viewer** or **Agent** | adds `<user-highlight>` + `<comment>` / appends `<note>` |
-| Resolve / reopen a comment | **Viewer** or **Agent** | sets `<comment status>` + `resolved-by`/`resolved-at` |
+| Resolve / reopen a comment | **Viewer** (the user) | sets `<comment status>` + `resolved-by`/`resolved-at` |
 | Lock / reopen / supersede a decision | **Viewer** or **Agent** | sets `<decision status>`/`date` |
 | Change a finding's status | **Viewer** or **Agent** | sets `<finding status>` |
 | Convert answered question → decision | **Agent** | replaces `<open-question status="answered">` with `<decision from="Q-…">`, carrying the id link |
-| Address a comment in the plan body | **Agent** | edits prose; appends an agent `<note>`; may resolve |
+| Address a comment in the plan body | **Agent** | edits prose (surgically); appends an agent `<note>`; **suggests the user resolve** |
 | Pose a new question / add a finding | **Agent** | inserts a new `<open-question>` / `<finding>` |
 
 **Invariants the viewer guarantees:** it only edits attributes and appends `<answer>`/`<note>`
 nodes and new `<user-highlight>`/`<comment>` pairs; it never deletes content or rewrites plan prose.
-**Invariant the agent must honor:** never silently drop a user's comment or answer — resolve it
-(with a reply) or carry it forward.
+**Invariant the agent must honor:** never silently drop a user's comment or answer — **reply** to it
+and carry it forward (leave *resolving* to the user). And since the user may be editing in parallel,
+keep every edit **surgical** and **retry against a fresh read** on a conflict rather than overwriting
+their changes.
 
 ---
 
@@ -333,7 +343,9 @@ When writing or updating a plan in this format:
 3. **Record settled choices as `<decision status="locked">`** with a `<rationale>`; link it to its
    originating question with `from`. Use `proposed` when you're recommending but want sign-off.
 4. **On each review pass:** read every `<answer>` and open `<comment>`; update the plan; convert
-   answered questions to decisions; reply to and/or resolve comments; never discard feedback.
+   answered questions to decisions; **reply** to comments (the user resolves them); never discard
+   feedback. If the user is actively reviewing, do this **live** on a watch loop rather than only
+   when asked — see the skill's "Watch the plan live" section.
 5. **Preserve ids and history.** Don't renumber. Don't delete resolved/superseded items.
 6. **Findings** capture audit issues with a real `severity`; flip `status` as they're addressed.
 
