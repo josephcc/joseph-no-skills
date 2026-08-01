@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { loadPlan, openInEditor, planPathFromUrl, savePlan, watchPlan } from './api';
+import { loadPlan, openInEditor, planPathFromUrl, savePlan, watchPlan, exportPdf } from './api';
 import {
   appendTarget,
   encodeEntities,
@@ -53,6 +53,7 @@ export function App() {
   const [conflict, setConflict] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [composer, setComposer] = useState<{ sel: SelInfo; text: string } | null>(null);
   const [elComposer, setElComposer] = useState<{ block: Block; text: string; x: number; y: number } | null>(null);
@@ -348,6 +349,30 @@ export function App() {
 
   const openCount = plan.blocks.filter((b) => b.type === 'question' && b.status === 'open').length;
 
+
+  // Download the plan as a PDF. The daemon renders it (see /api/pdf); we only trigger the
+  // browser download and surface failures, since a render takes a few seconds.
+  const onExportPdf = async () => {
+    if (!path) return;
+    setExporting(true);
+    try {
+      const blob = await exportPdf(path);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (path.split('/').pop() ?? 'plan').replace(/\.md$/, '') + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setToast(`PDF export failed — ${e instanceof Error ? e.message : String(e)}`);
+      setTimeout(() => setToast(null), 5000);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="ip-app">
       <header className={`ip-header ${scrolled ? 'ip-header-compact' : ''}`}>
@@ -366,6 +391,14 @@ export function App() {
           <span className="ip-path" title={path}>
             {path.split('/').slice(-1)[0]}
           </span>
+          <button
+            className="ip-btn ip-btn-ghost ip-pdf-btn"
+            onClick={onExportPdf}
+            disabled={exporting}
+            title="Download this plan as a PDF to share"
+          >
+            {exporting ? 'Rendering…' : 'PDF'}
+          </button>
         </div>
       </header>
 

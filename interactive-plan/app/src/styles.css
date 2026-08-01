@@ -888,3 +888,11 @@ body {
     overflow: visible;
   }
 }
+
+/* Export-to-PDF button in the header. Sized to sit beside the filename chip without
+   competing with it — this is a convenience, not a primary action. */
+.ip-pdf-btn {
+  padding: 2px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}

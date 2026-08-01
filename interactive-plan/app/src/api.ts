@@ -62,3 +62,29 @@ export function watchPlan(planPath: string, onChange: (p: { content: string; has
   });
   return () => es.close();
 }
+
+export interface PdfOptions {
+  noComments?: boolean;
+  noQuestions?: boolean;
+  noChecks?: boolean;
+}
+
+/** Ask the daemon to render this plan and hand back the PDF bytes. */
+export async function exportPdf(planPath: string, opts: PdfOptions = {}): Promise<Blob> {
+  const q = new URLSearchParams({ plan: planPath });
+  if (opts.noComments) q.set('no-comments', '1');
+  if (opts.noQuestions) q.set('no-questions', '1');
+  if (opts.noChecks) q.set('no-checks', '1');
+  const r = await fetch(`/api/pdf?${q}`);
+  if (!r.ok) {
+    // The route reports render failures as JSON; fall back to the status code.
+    let msg = `export failed (${r.status})`;
+    try {
+      msg = (await r.json()).error ?? msg;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
+  }
+  return r.blob();
+}

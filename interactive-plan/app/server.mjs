@@ -14,6 +14,7 @@ import express from 'express';
 import { createHash } from 'node:crypto';
 import { execFileSync, execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -207,6 +208,48 @@ function runServer() {
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
+  });
+
+
+  // Render the plan to a PDF and stream it back as a download. The rendering itself lives in
+  // pdf.ts (bun + TS, sharing the viewer's parser), so this only validates, spawns, and pipes.
+  app.get('/api/pdf', (req, res) => {
+    const planPath = validatePlanPath(req.query?.plan);
+    if (!planPath) return res.status(400).json({ error: 'bad plan path' });
+    const args = [path.join(__dirname, 'pdf.ts'), planPath];
+    for (const f of ['no-comments', 'no-questions', 'no-checks']) {
+      if (req.query?.[f] === '1') args.push(`--${f}`);
+    }
+    const out = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ip-pdf-route-')),
+      path.basename(planPath).replace(/\.md$/, '') + '.pdf',
+    );
+    args.push(out);
+    // `bun` is already required to lint and test this app, so it is a fair assumption; if it
+    // is missing say so plainly rather than failing with ENOENT.
+    const child = spawn('bun', args, { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', (d) => (err += d.toString().slice(0, 2000)));
+    child.on('error', (e) =>
+      res.headersSent
+        ? res.end()
+        : res.status(500).json({
+            error: e.code === 'ENOENT' ? 'bun not found on PATH — needed to render the PDF' : String(e),
+          }),
+    );
+    child.on('close', () => {
+      if (res.headersSent) return;
+      if (!fs.existsSync(out) || fs.statSync(out).size === 0) {
+        return res.status(500).json({ error: err.trim() || 'render produced no PDF' });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(out)}"`);
+      const stream = fs.createReadStream(out);
+      stream.pipe(res);
+      // Clean up the temp render once it has been sent either way.
+      stream.on('close', () => fs.rm(path.dirname(out), { recursive: true, force: true }, () => {}));
+    });
   });
 
   app.get('/api/config', (_req, res) => res.json(readConfig()));

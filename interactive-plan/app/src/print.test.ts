@@ -148,6 +148,32 @@ describe('user-authored code spans', () => {
   });
 });
 
+describe('comment anchors', () => {
+  const raw = [
+    '# T',
+    '',
+    'a claim with a <user-highlight comment="c1">highlighted span</user-highlight> in it',
+    'and a target <user-highlight comment="c2"></user-highlight>',
+    '',
+    '<comment id="c1" status="open"><note by="user" at="t">why this?</note></comment>',
+  ].join('\n');
+
+  it('keeps the anchor visible when comments are printed, so a remark has a referent', () => {
+    const html = planToPrintHtml(raw);
+    expect(html).toContain('<mark class="phl">highlighted span</mark>');
+    expect(html).toContain('<sup class="phlref">c2</sup>');
+    expect(html).toContain('why this?');
+  });
+
+  it('drops the anchors when comments are omitted — nothing left to point at', () => {
+    const html = planToPrintHtml(raw, { noComments: true });
+    expect(html).not.toContain('<mark');
+    // the class name also appears in the inlined stylesheet, so assert on the element
+    expect(html).not.toContain('<sup class="phlref"');
+    expect(html).toContain('highlighted span'); // the text itself survives
+  });
+});
+
 describe('content before the title', () => {
   it('keeps ordinary prose that sits between the preamble and the title', () => {
     const raw = `**Status:** open\n\nan intro paragraph before the heading\n\n# T\n\nbody`;

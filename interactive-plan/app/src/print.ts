@@ -41,21 +41,61 @@ const esc = (s: string) =>
  * tag written literally inside a code fence stays literal, matching the viewer.
  */
 export function stripHighlights(md: string): string {
+  return transformHighlights(md, false);
+}
+
+/**
+ * Rewrite `<user-highlight>` anchors: either drop them, or keep them visible.
+ *
+ * When comment threads are printed they need a referent on the page, otherwise a reader sees
+ * a remark with no idea what it is about. `mark = true` renders the wrapped span as `<mark>`
+ * carrying the comment id, and an empty ◆ target as a small id marker. When comments are
+ * omitted there is nothing to point at, so the anchors are dropped instead.
+ *
+ * Uses the parser's `protectedRanges` so a tag written literally inside a code fence stays
+ * literal, matching the viewer.
+ */
+export function transformHighlights(md: string, mark: boolean): string {
   const prot = protectedRanges(md);
   const inCode = (i: number) => prot.some((r) => i >= r.start && i < r.end);
-  const re = /<\/?user-highlight\b[^>]*>/g;
+  const open = /<user-highlight\b[^>]*\bcomment="([^"]+)"[^>]*>/g;
+  const close = /<\/user-highlight>/g;
+  type Tok = { i: number; len: number; open: boolean; id?: string };
+  const toks: Tok[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = open.exec(md))) {
+    if (!inCode(m.index)) toks.push({ i: m.index, len: m[0].length, open: true, id: m[1] });
+  }
+  while ((m = close.exec(md))) {
+    if (!inCode(m.index)) toks.push({ i: m.index, len: m[0].length, open: false });
+  }
+  if (!toks.length) return md;
+  toks.sort((a, b) => a.i - b.i);
   let out = '';
   let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(md))) {
-    if (inCode(m.index)) continue;
-    out += md.slice(last, m.index);
-    last = m.index + m[0].length;
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    out += md.slice(last, t.i);
+    if (mark) {
+      if (t.open) {
+        // An empty anchor (`◆` target) has its close tag immediately after: render a marker
+        // rather than an empty <mark>.
+        const next = toks[k + 1];
+        const empty = next && !next.open && next.i === t.i + t.len;
+        out += empty ? `<sup class="phlref">${esc(t.id ?? '')}</sup>` : `<mark class="phl">`;
+        if (empty) k++; // consume the paired close
+      } else {
+        out += '</mark>';
+      }
+    }
+    last = t.i + t.len;
   }
   return out + md.slice(last);
 }
 
-const md2html = (md: string) => marked.parse(stripHighlights(md ?? '')) as string;
+let markHighlights = false; // set per render; anchors only matter when comments are printed
+const md2html = (md: string) =>
+  marked.parse(transformHighlights(md ?? '', markHighlights)) as string;
 /** Inline markdown (no wrapping <p>), for titles and checkbox labels. */
 const inline2html = (md: string) => marked.parseInline(stripHighlights(md ?? '')) as string;
 
@@ -201,6 +241,7 @@ function checklist(items: { id: string; status: string; label: string }[]): stri
 }
 
 export function renderBlocks(blocks: Block[], opts: PrintOptions = {}): string {
+  markHighlights = !opts.noComments;
   const out: string[] = [];
   let pending: { id: string; status: string; label: string }[] = [];
   const flush = () => {
@@ -290,6 +331,9 @@ pre code { background: none; padding: 0; }
   border-left: 2px solid #e4ebed; }
 .popts > li > b { font: 8.5pt "SF Mono", Menlo, monospace; color: #7d8f96; }
 .pnote { margin: 5px 0; font-size: 9.5pt; } .pnote b { color: var(--accent); }
+mark.phl { background: #fff3bf; color: inherit; padding: 0 1px; border-radius: 2px; }
+sup.phlref { font-size: 7pt; color: var(--accent); background: #eef4f5; padding: 0 3px;
+             border-radius: 2px; margin-left: 1px; }
 .pchecks { list-style: none; margin: 8px 0; }
 .pchecks li { display: flex; gap: 7px; align-items: baseline; margin: 3px 0; }
 .pbox { flex: 0 0 11px; height: 11px; border: 1px solid #9bb0b5; border-radius: 2px;
@@ -334,6 +378,7 @@ function trimPreambleText(raw: string): string {
 
 /** Full standalone HTML document for a plan. */
 export function planToPrintHtml(raw: string, opts: PrintOptions = {}): string {
+  markHighlights = !opts.noComments;
   const plan = parsePlan(raw);
   const meta = plan.preamble.length
     ? `<div class="pmetacard">${plan.preamble
