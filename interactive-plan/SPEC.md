@@ -24,14 +24,12 @@ Two audiences, one file:
    prose, so they are machine-parseable and unambiguous.
 4. **Nothing is destroyed.** Resolved comments, superseded decisions, and answered questions are
    *kept* (collapsed in the UI), never deleted — the file is an auditable history.
-5. **Both parties write — often at the same time.** The user writes via the viewer; the agent
-   writes by editing the file. The vocabulary is symmetric — an agent can pose a question or drop a
-   comment for the user, and the user can answer or comment for the agent. Because both sides may be
-   editing concurrently, the viewer saves optimistically and reloads if the file moved under it, and
-   the **agent must edit surgically** (smallest unique region) and **retry against a fresh read** if
-   an edit stops matching — never overwriting the user's concurrent changes. One asymmetry:
-   **resolving a thread is the user's action** — the agent replies and may suggest resolving, but
-   does not set a comment to `resolved` itself.
+5. **Both parties write, in turns.** The user writes via the viewer; the agent writes by editing the
+   file. The vocabulary is symmetric — an agent can pose a question or drop a comment for the user,
+   and the user can answer or comment for the agent. To avoid racing writes, the two sides take
+   turns: the agent revises when the user hands a review pass back, not while the user is actively
+   editing in the viewer. One asymmetry: **resolving a thread is the user's action** — the agent
+   replies and may suggest resolving, but does not set a comment to `resolved` itself.
 
 ---
 
@@ -318,15 +316,15 @@ matching — the toggle is addressed by `id`). The agent authors the checks; the
 | Lock / reopen / supersede a decision | **Viewer** or **Agent** | sets `<decision status>`/`date` |
 | Change a finding's status | **Viewer** or **Agent** | sets `<finding status>` |
 | Convert answered question → decision | **Agent** | replaces `<open-question status="answered">` with `<decision from="Q-…">`, carrying the id link |
-| Address a comment in the plan body | **Agent** | edits prose (surgically); appends an agent `<note>`; **suggests the user resolve** |
+| Address a comment in the plan body | **Agent** | edits prose; appends an agent `<note>`; **suggests the user resolve** |
 | Pose a new question / add a finding | **Agent** | inserts a new `<open-question>` / `<finding>` |
 
 **Invariants the viewer guarantees:** it only edits attributes and appends `<answer>`/`<note>`
 nodes and new `<user-highlight>`/`<comment>` pairs; it never deletes content or rewrites plan prose.
 **Invariant the agent must honor:** never silently drop a user's comment or answer — **reply** to it
-and carry it forward (leave *resolving* to the user). And since the user may be editing in parallel,
-keep every edit **surgical** and **retry against a fresh read** on a conflict rather than overwriting
-their changes.
+and carry it forward (leave *resolving* to the user). Revise in turns: edit the plan when the user
+hands a review pass back, not while they're actively editing it in the viewer, so the two sides never
+race on the same file.
 
 ---
 
@@ -344,8 +342,7 @@ When writing or updating a plan in this format:
    originating question with `from`. Use `proposed` when you're recommending but want sign-off.
 4. **On each review pass:** read every `<answer>` and open `<comment>`; update the plan; convert
    answered questions to decisions; **reply** to comments (the user resolves them); never discard
-   feedback. If the user is actively reviewing, do this **live** on a watch loop rather than only
-   when asked — see the skill's "Watch the plan live" section.
+   feedback. Do this when the user hands the pass back, not while they're still editing in the viewer.
 5. **Preserve ids and history.** Don't renumber. Don't delete resolved/superseded items.
 6. **Findings** capture audit issues with a real `severity`; flip `status` as they're addressed.
 

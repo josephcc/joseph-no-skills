@@ -678,21 +678,37 @@ body {
   border-radius: 6px;
   font-family: ui-monospace, monospace;
 }
-.ip-sev-p0 {
+/* Severity colors apply to the badge only — scoped to .ip-sev so they don't
+   bleed onto the .ip-frow row (which carries the same ip-sev-* class). */
+.ip-sev.ip-sev-p0 {
   background: var(--asta-error);
   color: #fff;
 }
-.ip-sev-p1 {
+.ip-sev.ip-sev-p1 {
   background: #ff8a3d;
   color: #3a1500;
 }
-.ip-sev-p2 {
+.ip-sev.ip-sev-p2 {
   background: #ffd24d;
   color: #3a2e00;
 }
-.ip-sev-p3 {
+.ip-sev.ip-sev-p3 {
   background: var(--asta-gray-20);
   color: var(--asta-gray);
+}
+/* Row-level severity accent: a colored left edge instead of a full fill, so the
+   body text and inline code stay readable on the normal card surface. */
+.ip-frow.ip-sev-p0 {
+  border-left: 3px solid var(--asta-error);
+}
+.ip-frow.ip-sev-p1 {
+  border-left: 3px solid #ff8a3d;
+}
+.ip-frow.ip-sev-p2 {
+  border-left: 3px solid #ffd24d;
+}
+.ip-frow.ip-sev-p3 {
+  border-left: 3px solid var(--asta-gray-20);
 }
 
 /* comments */

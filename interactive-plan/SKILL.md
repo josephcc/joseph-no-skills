@@ -1,6 +1,6 @@
 ---
 name: interactive-plan
-description: Author and review detailed spec/implementation plans in an interactive, taggable markdown format, then open a local web viewer to read, answer questions, pick options, and comment Google-Docs-style. Use this WHENEVER you are about to write or substantially update a plan / spec / design doc in the user's repo at their request — load it first so you author in the correct tagged syntax, and launch the viewer at the end so the user can review and give feedback. After you launch the viewer and share its URL, treat the user as actively reviewing: if you can watch the plan file for changes (preferred) or otherwise run work periodically, respond to their new comment threads in-file as they arrive — surgically, and without resolving the threads (resolving is the user's call).
+description: Author and review detailed spec/implementation plans in an interactive, taggable markdown format, then open a local web viewer to read, answer questions, pick options, and comment Google-Docs-style. Use this WHENEVER you are about to write or substantially update a plan / spec / design doc in the user's repo at their request — load it first so you author in the correct tagged syntax, and launch the viewer at the end so the user can review and give feedback.
 argument-hint: [path to a plan .md to open in the viewer, or a plan to author]
 allowed-tools: Read, Write, Edit, Bash(bun:*), Bash(bunx:*), Bash(node:*), Bash(git rev-parse:*), Bash(git diff:*)
 ---
@@ -14,6 +14,9 @@ clean interactive web page instead of raw markdown.
 **Always author plans in this format** (the user's standing decision). When the user asks you to
 write or substantially revise a plan, spec, or design doc: load this skill, author in the tagged
 syntax below, lint it, and launch the viewer so they can review.
+
+Need a shareable copy for people who won't open the viewer? See
+[Export a PDF to share](#export-a-pdf-to-share).
 
 The skill lives at `~/.claude/skills/interactive-plan/`:
 - `SPEC.md` — the **full** format specification. **Read it** before authoring if you need detail
@@ -133,6 +136,73 @@ extension API, so the viewer can't render *inside* an editor tab and there's no 
 menu item — keybinding + palette is the supported surface. Setup + copy-paste example configs:
 [`docs/zed-integration.md`](docs/zed-integration.md).
 
+## Export a PDF to share
+
+When the plan needs to go to people who won't open the viewer — a summary for colleagues, a
+decision record for a review — export it. **In the viewer** there's a **PDF** button in the
+header, beside the filename; it renders and downloads `<plan>.pdf`. From the CLI:
+
+```bash
+cd ~/.claude/skills/interactive-plan/app && bun run pdf <abs-path-to-plan.md> [out.pdf]
+```
+
+The button calls `GET /api/pdf?plan=<abs>[&no-comments=1&no-questions=1&no-checks=1]`, which
+runs the same renderer and streams the result back as a download. It needs `bun` on `PATH`
+(already true if you lint or test this app) and says so plainly if it's missing.
+
+This does **not** print the viewer. The viewer is built for interaction and has no print
+stylesheet, so printing it yields a mess. `bun run pdf` renders the same parsed plan through a
+print-first presentation (`app/src/print.ts`): the preamble becomes a header card, decisions and
+findings become callouts with their status/severity badges, checklists keep their tick state, and
+an answered question collapses to **just the chosen option** — a settled question shouldn't read
+as an open menu.
+
+Flags, for trimming a working document into something shareable:
+- `--no-questions` — drop *unanswered* questions (answered ones stay, as decisions-in-progress)
+- `--no-comments` — drop comment threads
+- `--no-checks` — drop checklists
+- `--html` — emit the styled HTML instead of a PDF (useful to tweak CSS, or to print by hand)
+
+Needs a headless browser; it tries chromium, Brave, Edge, then Chrome, and if none is present it
+writes the HTML and tells the user to print it. **Prefer chromium**: Chrome's
+`--headless=new --print-to-pdf` hangs indefinitely on some macOS builds where chromium renders the
+same page in seconds (`brew install --cask chromium`).
+
+Two things to know if you touch `pdf.ts`: the browser's output must go to `/dev/null` rather than
+be captured (it writes enough to stderr to fill a pipe, and nothing drains it until exit, which
+deadlocks the render), and it may write the PDF correctly yet never exit — so the CLI polls until
+the file stops growing and then kills it, instead of waiting on exit.
+
+**Always look at the result** — `Read` the generated `.pdf` (the Read tool renders PDF pages, and
+needs no extra Bash allowance). Layout bugs here are invisible in the HTML and obvious in the
+render: a wrapped header line spilling out of its card, markdown showing up as literal
+`**asterisks**`, a callout stranded on its own page.
+
+### What the export covers
+
+All six tags render, plus the preamble, tables, and code blocks:
+
+| construct | in the PDF |
+|---|---|
+| preamble | header card |
+| `<decision>` | callout with status badge, date, `from`/`supersedes` |
+| `<finding>` | callout with severity badge, status, effort |
+| `<check>` | checklist, consecutive checks grouped, `done` struck through |
+| `<open-question>` | open → question + options; answered → question + **only the chosen option** + the answer |
+| `<comment>` | thread, with its `<user-highlight>` anchor kept visible so a remark has a referent |
+| `<user-highlight>` | highlighted span; dropped entirely under `--no-comments`, since there is then nothing to point at |
+
+Three deliberate differences from the viewer, so nobody reports them as bugs:
+- **Findings keep source order** rather than being severity-sorted like the viewer's matrix —
+  reordering a document's content under the reader would be worse than a mismatched sort.
+- **Code refs** (`file.ts:12`) print as code text, not editor links; **inter-plan links** stay
+  relative rather than being rewritten to `?plan=…`, since neither target works from a PDF.
+- **Resolved comments print inline** instead of collapsing behind a "Show N resolved" toggle.
+
+Two fields are treated as **untrusted** and escaped + link-scrubbed, matching the viewer:
+freeform answer text and comment notes. Everything else is plan prose, so intentional inline
+HTML in a plan still renders.
+
 ### Manage the daemon
 ```bash
 node ~/.claude/skills/interactive-plan/app/server.mjs --status   # JSON: running?, port, pid, open plans
@@ -146,72 +216,10 @@ a leak. Run `--status` if you've lost the port (or `curl -s http://localhost:<po
 
 1. Author/update the plan in this format → 2. lint → 3. launch the viewer → 4. the user answers
 questions, picks options, and comments (saved back into the same `.md`) → 5. they tell you to
-"review my feedback on plan X" — **or, if you're watching (below), you pick it up live** → you read
-the answers + open comments, revise, convert answered questions to decisions, and **reply** to
-comments (the user resolves them) → 6. repeat until the plan is ready to implement.
+"review my feedback on plan X" → you read the answers + open comments, revise, convert answered
+questions to decisions, and **reply** to comments (the user resolves them) → 6. repeat until the
+plan is ready to implement.
 
-## Watch the plan live while the user reviews
-
-The comment threads are meant to be a **live back-and-forth**, not just a batch you read once when
-told to. **Once you've launched the viewer and given the user its URL, assume they're actively
-reviewing** — and if your harness can **watch the plan file for changes** (or, failing that, run
-work on a schedule), open a **watch loop** and answer their comments as they arrive, like a
-collaborator in a shared doc. Tell the user you'll be watching (so they know their comments get live
-replies) before you start.
-
-**What to look for each pass.** Re-read the file and find **open comments whose _last_ `<note>` is
-`by="user"`** — that is exactly the set awaiting you, whether a brand-new thread the user opened or a
-reply they added to one of yours. (A thread whose last note is `by="agent"` is waiting on the
-*user* — leave it.) User notes are timestamped (`<note by="user" at="2026-06-27T10:02">…`); use the
-`at` stamps to see what's arrived since your last pass. Fold in any other fresh user input on the
-same pass — new `<answer>`s, reopened items.
-
-**How to respond.**
-- **Reply in-thread:** append a `<note by="agent" at="…">` to that comment (a surgical insert — see
-  the next section). Answer the question, or say what you changed.
-- **Update the plan** when the comment calls for it — a surgical edit to the relevant prose /
-  decision / finding — and point to it from your note. The viewer live-reloads, so your reply shows
-  up in the user's margin within a second.
-- **Never resolve or delete a thread.** *Resolving is the user's role.* When a thread is settled,
-  say so and **suggest** they resolve it ("Addressed in D4 — resolve when you're happy"); don't set
-  `status="resolved"` / `resolved-by` yourself.
-
-**Cadence & when to stop — watch, don't poll.** Be prompt but don't hammer the file, and prefer
-*event-driven* watching over any timed loop:
-1. **If your harness can watch a specific file / block until it changes, use that** — you wake
-   exactly when the user saves, with zero wasted checks and no polling timer to tune.
-2. **Otherwise, if you can run a background process,** block on the viewer's change-stream with this
-   `node` one-liner (within the skill's allowed `node` tool) — it's still event-driven (it watches
-   the file via the daemon) and prints `changed` the moment the user saves, or `idle` after 10
-   minutes. Run it in the **background** and let it re-invoke you:
-```bash
-# $PLAN = absolute plan path. Arms on connect and fires only on the NEXT change,
-# so re-arming right after your own edit won't loop.
-node -e 'const fs=require("fs"),h=require("http");let p;try{p=JSON.parse(fs.readFileSync("/tmp/interactive-plan-viewer.json","utf8")).port}catch{console.log("no-daemon");process.exit(1)}h.get({port:p,path:"/api/events?path="+encodeURIComponent(process.argv[1])},r=>{let b="";r.on("data",d=>{b+=d;if(b.includes("event: change")){console.log("changed");process.exit(0)}})}).on("error",()=>{console.log("err");process.exit(1)});setTimeout(()=>{console.log("idle");process.exit(0)},600000)' "$PLAN"
-```
-On wake: if it printed `changed`, do a pass (above) and **re-arm** it; if it printed `idle`,
-**pause** — tell the user you've stopped watching and will pick their feedback up whenever they ask
-(or ping you) to resume. (A native file-watch from (1) is handled the same way: wake → pass →
-re-watch, and pause after ~10 min idle.)
-
-3. **Only as a last resort** — no file-watch and no background process, just a coarse periodic
-   scheduler — poll: start at about **every 5s** and **back off** as nothing changes (5s → 10s → 15s
-   → 30s, capped at 30s), **reset to 5s** on any new activity, and **pause after ~10 minutes idle**.
-
-## Editing the plan while the user edits it too
-
-**Assume you and the user are writing to the file at the same time** — they save through the viewer
-(which posts the whole file and reloads if it moved under them) while you edit it from here. **You
-are the side that must edit carefully and retry**; the viewer already refuses a stale save on its
-end. Two rules:
-
-1. **Surgical edits only — never rewrite the whole file.** Don't `Write` over an existing plan. Use
-   `Edit` with the **smallest unique `old_string`** that pins just the region you're changing: one
-   block's attribute, or — to reply — that thread's **last existing `<note>…</note>`** (unique to
-   the thread) with your new `<note>` appended after it, before `</comment>`. A scoped write can't
-   clobber an answer or note the user just added elsewhere.
-2. **Re-read, then edit; retry on a miss.** Immediately before editing, **re-read the file** so
-   you're on the user's latest state (they may have typed a note or answer since your last read). If
-   an `Edit` fails because its `old_string` no longer matches, the user just changed that exact
-   region — **re-read and reapply your change against the new text.** Don't force it; you're the
-   retrying side.
+Review in **batches, when the user asks** — not by watching the file live. Don't edit the plan while
+the user is actively reviewing it in the viewer: concurrent writes from both sides race against each
+other. Wait until they hand the pass back to you.
