@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planToPrintHtml, renderBlocks, stripHighlights } from './print';
+import { planToPrintHtml, renderBlocks, scrubHrefs, stripHighlights } from './print';
 import { parsePlan } from './parser';
 
 const render = (raw: string, opts = {}) => planToPrintHtml(raw, opts);
@@ -42,6 +42,76 @@ describe('planToPrintHtml', () => {
     expect(html.startsWith('<!doctype html>')).toBe(true);
     expect(html).toContain('@page');
     expect(html).not.toContain('<link');
+  });
+});
+
+describe('untrusted fields (answers and comment notes)', () => {
+  const answered = (text: string) =>
+    [
+      '# T',
+      '',
+      '<open-question id="Q" title="Q?" status="answered">',
+      'body',
+      `<answer by="user" at="t" chose="other">${text}</answer>`,
+      '</open-question>',
+    ].join('\n');
+
+  it('escapes raw HTML a user typed into an answer instead of emitting it', () => {
+    const html = blocks(answered('<img src=x onerror=alert(1)>'));
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img src=x');
+  });
+
+  it('escapes raw HTML in a comment note', () => {
+    const html = blocks(
+      '# T\n\n<comment id="c1" status="open"><note by="user" at="t"><script>bad()</script></note></comment>',
+    );
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('keeps a user-typed <Foo> visible rather than swallowing it as a tag', () => {
+    expect(blocks(answered('use the <Foo> component'))).toContain('&lt;Foo&gt;');
+  });
+
+  it('strips a javascript: link a user wrote in an answer', () => {
+    const html = blocks(answered('[click](javascript:alert(1))'));
+    expect(html).not.toContain('href="javascript:');
+  });
+
+  it('still trusts plan prose, which may contain intentional inline HTML', () => {
+    // A decision body is plan prose, not user free-text — the viewer does not escape it.
+    const html = blocks('# T\n\n<decision id="D" title="t" status="locked">a <b>bold</b> claim</decision>');
+    expect(html).toContain('<b>bold</b>');
+  });
+});
+
+describe('scrubHrefs', () => {
+  it('removes dangerous protocols', () => {
+    expect(scrubHrefs('<a href="javascript:x()">a</a>')).not.toContain('href=');
+    expect(scrubHrefs('<a href="vbscript:x">a</a>')).not.toContain('href=');
+    expect(scrubHrefs('<a href="data:text/html,x">a</a>')).not.toContain('href=');
+  });
+
+  it('sees through entity and whitespace evasion, which a DOM-less scrub would miss', () => {
+    expect(scrubHrefs('<a href="&#106;avascript:alert(1)">a</a>')).not.toContain('href=');
+    expect(scrubHrefs('<a href="java\tscript:alert(1)">a</a>')).not.toContain('href=');
+  });
+
+  it('leaves ordinary links alone', () => {
+    expect(scrubHrefs('<a href="https://example.com">a</a>')).toContain('href="https://example.com"');
+    expect(scrubHrefs('<a href="./other.md">a</a>')).toContain('href="./other.md"');
+  });
+});
+
+describe('base href', () => {
+  it('emits a base element so relative assets resolve at the plan directory', () => {
+    const html = planToPrintHtml('# T\n\n![d](./d.png)', { baseHref: 'file:///plans/' });
+    expect(html).toContain('<base href="file:///plans/">');
+  });
+
+  it('omits it when not supplied', () => {
+    expect(planToPrintHtml('# T\n\nx')).not.toContain('<base');
   });
 });
 

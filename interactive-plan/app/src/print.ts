@@ -10,7 +10,7 @@
 // here as well as in the React blocks.
 
 import { marked } from 'marked';
-import { parsePlan, protectedRanges } from './parser';
+import { decodeEntities, parsePlan, protectedRanges } from './parser';
 import type { Block, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -22,6 +22,13 @@ export interface PrintOptions {
   noQuestions?: boolean;
   /** Drop checklists. */
   noChecks?: boolean;
+  /**
+   * `file://` URL of the plan's directory, emitted as `<base href>`.
+   *
+   * The CLI renders from a temp directory, so without this a relative image or link in the
+   * plan (`![d](./d.png)`) would resolve against the temp dir and silently come out broken.
+   */
+  baseHref?: string;
 }
 
 const esc = (s: string) =>
@@ -51,6 +58,40 @@ export function stripHighlights(md: string): string {
 const md2html = (md: string) => marked.parse(stripHighlights(md ?? '')) as string;
 /** Inline markdown (no wrapping <p>), for titles and checkbox labels. */
 const inline2html = (md: string) => marked.parseInline(stripHighlights(md ?? '')) as string;
+
+const UNSAFE_HREF = /^(javascript|data|vbscript):/i;
+
+/**
+ * Strip dangerous link protocols from rendered HTML.
+ *
+ * The viewer does this on the live DOM (`scrubLinks`), which sees browser-decoded hrefs; here
+ * there is no DOM, so decode entities and whitespace before testing or `&#106;avascript:`
+ * slips through.
+ */
+export function scrubHrefs(html: string): string {
+  return html.replace(/href="([^"]*)"/gi, (whole, href: string) => {
+    // `decodeEntities` only covers the three the parser escapes, so numeric and hex character
+    // references (`&#106;avascript:`) must be expanded here too, then whitespace and control
+    // characters dropped — a browser ignores both inside a protocol.
+    const probe = decodeEntities(href)
+      .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);?/g, (_m, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+      .replace(/[\s\u0000-\u0020-]/g, '');
+    return UNSAFE_HREF.test(probe) ? 'data-unsafe-href-removed=""' : whole;
+  });
+}
+
+/**
+ * Render *user-authored* text — comment notes and freeform answers.
+ *
+ * The viewer deliberately treats these as untrusted (`<Markdown … escapeHtml />`) while plan
+ * prose is trusted; print must honour the same boundary. Escaping also stops a user who typed
+ * `<Foo>` in an answer from having it silently swallowed as a tag.
+ */
+function userMd2html(md: string): string {
+  const escaped = esc(stripHighlights(md ?? '')).replace(/&quot;/g, '"');
+  return scrubHrefs(marked.parse(escaped) as string);
+}
 
 function badge(text: string, cls: string) {
   return `<span class="pb pb-${cls}">${esc(text)}</span>`;
@@ -100,7 +141,7 @@ function question(q: QuestionBlock): string {
     const label = a.chose.includes('other') ? 'Other' : chosen.map((o) => o.id).join(', ');
     parts.push(`<div class="pans"><b>Answer${label ? ` — ${esc(label)}` : ''}</b>`);
     for (const o of chosen) parts.push(md2html(o.body));
-    if (a.text.trim()) parts.push(md2html(a.text));
+    if (a.text.trim()) parts.push(userMd2html(a.text));
     parts.push(`</div>`);
   } else if (q.options.length) {
     parts.push('<ul class="popts">');
@@ -113,7 +154,7 @@ function question(q: QuestionBlock): string {
 
 function comment(c: CommentBlock): string {
   const notes = c.notes
-    .map((n) => `<div class="pnote"><b>${esc(n.by)}</b> ${md2html(n.body)}</div>`)
+    .map((n) => `<div class="pnote"><b>${esc(n.by)}</b> ${userMd2html(n.body)}</div>`)
     .join('');
   return [
     `<section class="pcall pcall-note">`,
@@ -260,6 +301,7 @@ export function planToPrintHtml(raw: string, opts: PrintOptions = {}): string {
   const body = renderBlocks(blocks, opts);
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
+    opts.baseHref ? `<base href="${esc(opts.baseHref)}">` : '',
     `<title>${esc(plan.title ?? 'plan')}</title>`,
     `<style>${PRINT_CSS}</style></head><body>`,
     meta,

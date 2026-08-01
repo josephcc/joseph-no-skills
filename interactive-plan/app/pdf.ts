@@ -6,9 +6,19 @@
 // Presentation lives in src/print.ts; this only handles files and the browser.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { planToPrintHtml, type PrintOptions } from './src/print';
 
 // Ordered by how reliably each one produces a PDF headlessly. Chrome is last on purpose:
@@ -25,6 +35,9 @@ const BROWSERS = [
 ];
 
 function findBrowser(): string | null {
+  // Escape hatch for an unusual install location — and it makes the failure path testable.
+  const override = process.env.IP_PDF_BROWSER;
+  if (override) return override;
   for (const b of BROWSERS) {
     if (b.startsWith('/')) {
       if (existsSync(b)) return b;
@@ -43,13 +56,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *
  * Waits on the *artifact*, not on process exit: the browser reliably writes the PDF but on
  * some platforms never exits when spawned from a script, so polling until the file stops
- * growing is the difference between "works" and "hangs until timeout". Output is sent to
- * /dev/null rather than captured — the browser writes enough to stderr to fill a pipe, and
- * nothing drains it until exit, which deadlocks the render.
+ * growing is the difference between "works" and "hangs until timeout". It still breaks as
+ * soon as the process exits, so a launch failure reports immediately instead of burning the
+ * whole timeout.
+ *
+ * Browser output goes to a log *file*, never a pipe: it writes enough to stderr to fill a pipe
+ * buffer, and nothing drains it until exit, which deadlocks the render. A file keeps the
+ * diagnostics without that hazard, and the tail is surfaced when no PDF appears.
  */
 async function printToPdf(browser: string, htmlPath: string, out: string, timeoutMs = 180_000) {
   if (existsSync(out)) unlinkSync(out);
   const profile = mkdtempSync(join(tmpdir(), `ip-pdf-${basename(browser)}-`));
+  const logPath = join(profile, 'browser.log');
+  const log = openSync(logPath, 'w');
   const child = spawn(
     browser,
     [
@@ -61,16 +80,18 @@ async function printToPdf(browser: string, htmlPath: string, out: string, timeou
       `--print-to-pdf=${out}`,
       htmlPath,
     ],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', log, log] },
   );
 
   const deadline = Date.now() + timeoutMs;
   let last = -1;
   let stable = 0;
   let exited = false;
+  let spawnError: Error | null = null;
   child.on('exit', () => (exited = true));
+  child.on('error', (e) => ((spawnError = e), (exited = true)));
   while (Date.now() < deadline) {
-    if (exited && existsSync(out)) break;
+    if (exited) break;
     const size = existsSync(out) ? statSync(out).size : -1;
     stable = size === last && size > 0 ? stable + 1 : 0;
     last = size;
@@ -78,8 +99,19 @@ async function printToPdf(browser: string, htmlPath: string, out: string, timeou
     await sleep(500);
   }
   if (!exited) child.kill();
+  closeSync(log);
   if (!existsSync(out) || statSync(out).size === 0) {
-    throw new Error(`no PDF produced — inspect the HTML at ${htmlPath}`);
+    const tail = existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n').slice(-8).join('\n') : '';
+    throw new Error(
+      [
+        `no PDF produced by ${basename(browser)}`,
+        spawnError ? `spawn error: ${(spawnError as Error).message}` : '',
+        tail ? `browser output:\n${tail}` : '',
+        `HTML kept at ${htmlPath}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
   }
 }
 
@@ -103,6 +135,9 @@ const opts: PrintOptions = {
   noComments: flags.has('--no-comments'),
   noQuestions: flags.has('--no-questions'),
   noChecks: flags.has('--no-checks'),
+  // Relative images/links in the plan must resolve against the plan's directory, not
+  // wherever the HTML happens to be written.
+  baseHref: pathToFileURL(dirname(srcPath) + '/').href,
 };
 const html = planToPrintHtml(readFileSync(srcPath, 'utf8'), opts);
 const htmlOut = srcPath.replace(/\.md$/, '') + '.print.html';

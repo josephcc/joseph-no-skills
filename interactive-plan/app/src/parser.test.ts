@@ -29,6 +29,18 @@ describe('parsePlan', () => {
     });
   });
 
+  it('stops continuing a preamble value after a blank line', () => {
+    const raw = `**Status:** open\n\nunrelated prose before the title\n\n# T\n\nbody`;
+    const p = parsePlan(raw);
+    expect(p.preamble).toContainEqual({ key: 'Status', value: 'open' });
+  });
+
+  it('does not absorb fenced content into a preamble value', () => {
+    const raw = ['**Status:** open', '', '```', 'code line', '```', '', '# T', '', 'body'].join('\n');
+    const p = parsePlan(raw);
+    expect(p.preamble).toContainEqual({ key: 'Status', value: 'open' });
+  });
+
   it('does not absorb structural markdown into a preamble value', () => {
     const raw = `**Date:** 2026-06-27\n\n---\n\n# T\n\nbody`;
     const p = parsePlan(raw);
