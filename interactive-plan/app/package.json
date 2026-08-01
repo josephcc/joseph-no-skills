@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "serve": "node server.mjs",
     "lint:plan": "bun lint.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pdf": "bun pdf.ts"
   },
   "dependencies": {
     "express": "^4.21.2",

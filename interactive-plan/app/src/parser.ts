@@ -159,7 +159,19 @@ function parsePreamble(raw: string): { preamble: KeyVal[]; title: string | null 
       break;
     }
     const kv = /^\*\*([^:*]+):\*\*\s*(.*)$/.exec(line.trim());
-    if (kv) preamble.push({ key: kv[1].trim(), value: kv[2].trim() });
+    if (kv) {
+      preamble.push({ key: kv[1].trim(), value: kv[2].trim() });
+      continue;
+    }
+    // A long value wraps onto the next line, which has no `**Key:**` of its own. Append it
+    // to the entry it belongs to — otherwise the tail of the value is silently dropped.
+    // Structural markdown (a `---` rule, a list, a quote, a fence) is not a continuation.
+    const cont = line.trim();
+    const structural = /^(-{3,}|\*{3,}|_{3,}|#{1,6}\s|[-*+]\s|\d+\.\s|>|\||```|~~~)/.test(cont);
+    if (cont && !structural && preamble.length) {
+      const prev = preamble[preamble.length - 1];
+      prev.value = `${prev.value} ${cont}`.trim();
+    }
   }
   return { preamble, title };
 }

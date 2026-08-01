@@ -20,6 +20,21 @@ describe('parsePlan', () => {
     expect(p.title).toBe('Hello');
   });
 
+  it('keeps the tail of a preamble value that wraps onto the next line', () => {
+    const raw = `**Verdict:** the pipeline returns a third of the\nbaseline's evidence\n\n# T\n\nbody`;
+    const p = parsePlan(raw);
+    expect(p.preamble).toContainEqual({
+      key: 'Verdict',
+      value: "the pipeline returns a third of the baseline's evidence",
+    });
+  });
+
+  it('does not absorb structural markdown into a preamble value', () => {
+    const raw = `**Date:** 2026-06-27\n\n---\n\n# T\n\nbody`;
+    const p = parsePlan(raw);
+    expect(p.preamble).toContainEqual({ key: 'Date', value: '2026-06-27' });
+  });
+
   it('does NOT parse tags inside fenced code blocks (F-3)', () => {
     const raw = ['# T', '', '```xml', '<decision id="D1" title="x" status="locked">nope</decision>', '```', '', 'real text'].join('\n');
     const p = parsePlan(raw);
