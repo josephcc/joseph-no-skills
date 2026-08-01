@@ -59,26 +59,49 @@ const md2html = (md: string) => marked.parse(stripHighlights(md ?? '')) as strin
 /** Inline markdown (no wrapping <p>), for titles and checkbox labels. */
 const inline2html = (md: string) => marked.parseInline(stripHighlights(md ?? '')) as string;
 
-const UNSAFE_HREF = /^(javascript|data|vbscript):/i;
+const SAFE_SCHEMES = /^(https?|mailto)$/i;
 
 /**
- * Strip dangerous link protocols from rendered HTML.
+ * Is this href safe to keep in a user-authored field?
  *
- * The viewer does this on the live DOM (`scrubLinks`), which sees browser-decoded hrefs; here
- * there is no DOM, so decode entities and whitespace before testing or `&#106;avascript:`
- * slips through.
+ * An **allowlist**, deliberately. A blocklist cannot work without a DOM: `javascript&colon;x`
+ * and `&#106;avascript:x` both reach the browser as `javascript:`, and there are ~2000 named
+ * character references to decode. So instead: no scheme (relative link or anchor) is fine,
+ * an http/https/mailto scheme is fine, and anything else — including anything still carrying
+ * an entity or percent-escape where the scheme would be — is refused rather than guessed at.
  */
+export function isSafeHref(href: string): boolean {
+  const s = decodeEntities(href)
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);?/g, (_m, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/[\s\u0000-\u0020]/g, '');
+  // Only the part before the first /, ? or # can carry a scheme; an `&` in a query string is
+  // ordinary, an `&` before that point means an entity we could not fully decode.
+  const head = s.split(/[/?#]/, 1)[0] ?? '';
+  if (/[&%]/.test(head)) return false;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(s);
+  return scheme ? SAFE_SCHEMES.test(scheme[1]) : true;
+}
+
+/** Drop unsafe hrefs from rendered HTML (the viewer's `scrubLinks`, without a DOM). */
 export function scrubHrefs(html: string): string {
-  return html.replace(/href="([^"]*)"/gi, (whole, href: string) => {
-    // `decodeEntities` only covers the three the parser escapes, so numeric and hex character
-    // references (`&#106;avascript:`) must be expanded here too, then whitespace and control
-    // characters dropped — a browser ignores both inside a protocol.
-    const probe = decodeEntities(href)
-      .replace(/&#x([0-9a-f]+);?/gi, (_m, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
-      .replace(/&#(\d+);?/g, (_m, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
-      .replace(/[\s\u0000-\u0020-]/g, '');
-    return UNSAFE_HREF.test(probe) ? 'data-unsafe-href-removed=""' : whole;
-  });
+  return html.replace(/href="([^"]*)"/gi, (whole, href: string) =>
+    isSafeHref(href) ? whole : 'data-unsafe-href-removed=""',
+  );
+}
+
+/**
+ * Undo the *extra* escaping inside code spans, matching the viewer's `decodeUserCode`.
+ *
+ * User text is escaped before `marked` sees it, so marked re-escapes the `&` of `&lt;` inside
+ * code and an answer mentioning `` `<Foo>` `` would print as literal `&lt;Foo&gt;`. Turning
+ * `&amp;` back into `&` restores the display without un-escaping any tag: `<` stays `&lt;`.
+ */
+function decodeCodeSpans(html: string): string {
+  return html.replace(
+    /(<code[^>]*>)([\s\S]*?)(<\/code>)/gi,
+    (_m, open: string, inner: string, close: string) => open + inner.replace(/&amp;/g, '&') + close,
+  );
 }
 
 /**
@@ -90,7 +113,7 @@ export function scrubHrefs(html: string): string {
  */
 function userMd2html(md: string): string {
   const escaped = esc(stripHighlights(md ?? '')).replace(/&quot;/g, '"');
-  return scrubHrefs(marked.parse(escaped) as string);
+  return decodeCodeSpans(scrubHrefs(marked.parse(escaped) as string));
 }
 
 function badge(text: string, cls: string) {
@@ -281,8 +304,32 @@ pre code { background: none; padding: 0; }
  * block, so rendering both the header card and that block would print it twice.
  */
 function trimPreambleText(raw: string): string {
-  const m = /^#[ \t]+/m.exec(raw);
-  return m ? raw.slice(m.index) : raw;
+  const lines = raw.split('\n');
+  const kept: string[] = [];
+  let inPreamble = true;
+  let continuing = false;
+  for (const line of lines) {
+    if (!inPreamble) {
+      kept.push(line);
+      continue;
+    }
+    if (/^#\s+/.test(line)) {
+      inPreamble = false;
+      kept.push(line);
+      continue;
+    }
+    const t = line.trim();
+    if (/^\*\*([^:*]+):\*\*/.test(t)) {
+      continuing = true;
+      continue; // a preamble entry — shown in the header card instead
+    }
+    const structural = /^(-{3,}|\*{3,}|_{3,}|#{1,6}\s|[-*+]\s|\d+\.\s|>|\||```|~~~)/.test(t);
+    if (continuing && t && !structural) continue; // its wrapped continuation
+    continuing = false;
+    // Ordinary prose before the title is real content — the viewer renders it, so must we.
+    kept.push(line);
+  }
+  return kept.join('\n');
 }
 
 /** Full standalone HTML document for a plan. */

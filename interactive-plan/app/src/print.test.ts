@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planToPrintHtml, renderBlocks, scrubHrefs, stripHighlights } from './print';
+import { isSafeHref, planToPrintHtml, renderBlocks, scrubHrefs, stripHighlights } from './print';
 import { parsePlan } from './parser';
 
 const render = (raw: string, opts = {}) => planToPrintHtml(raw, opts);
@@ -86,21 +86,82 @@ describe('untrusted fields (answers and comment notes)', () => {
   });
 });
 
-describe('scrubHrefs', () => {
-  it('removes dangerous protocols', () => {
-    expect(scrubHrefs('<a href="javascript:x()">a</a>')).not.toContain('href=');
-    expect(scrubHrefs('<a href="vbscript:x">a</a>')).not.toContain('href=');
-    expect(scrubHrefs('<a href="data:text/html,x">a</a>')).not.toContain('href=');
+describe('isSafeHref (allowlist)', () => {
+  it('allows relative links, anchors and the safe schemes', () => {
+    for (const ok of [
+      './other.md',
+      '../up/other.md',
+      'plain.md',
+      '#anchor',
+      '/abs/path',
+      'https://example.com/a?b=1&c=2',
+      'HTTP://EXAMPLE.COM',
+      'mailto:a@b.com',
+    ]) {
+      expect(isSafeHref(ok), ok).toBe(true);
+    }
   });
 
-  it('sees through entity and whitespace evasion, which a DOM-less scrub would miss', () => {
-    expect(scrubHrefs('<a href="&#106;avascript:alert(1)">a</a>')).not.toContain('href=');
-    expect(scrubHrefs('<a href="java\tscript:alert(1)">a</a>')).not.toContain('href=');
+  it('refuses every dangerous scheme and every encoding of it', () => {
+    for (const bad of [
+      'javascript:alert(1)',
+      'JaVaScRiPt:alert(1)',
+      'java\tscript:alert(1)',
+      ' javascript:alert(1)',
+      'vbscript:x',
+      'data:text/html,x',
+      'file:///etc/passwd',
+      // a blocklist cannot catch these without decoding every named reference
+      'javascript&colon;alert(1)',
+      'data&colon;text/html,x',
+      '&#106;avascript:alert(1)',
+      '&#x6a;avascript:alert(1)',
+      '%6Aavascript:alert(1)',
+    ]) {
+      expect(isSafeHref(bad), bad).toBe(false);
+    }
   });
 
-  it('leaves ordinary links alone', () => {
+  it('scrubHrefs drops exactly the unsafe ones from rendered HTML', () => {
+    expect(scrubHrefs('<a href="javascript&colon;alert(1)">a</a>')).not.toContain('href=');
     expect(scrubHrefs('<a href="https://example.com">a</a>')).toContain('href="https://example.com"');
-    expect(scrubHrefs('<a href="./other.md">a</a>')).toContain('href="./other.md"');
+  });
+});
+
+describe('user-authored code spans', () => {
+  it('shows a code span the user typed as <Foo>, not as escaped entities', () => {
+    const raw = [
+      '# T',
+      '',
+      '<comment id="c1" status="open"><note by="user" at="t">use the `<Foo>` component</note></comment>',
+    ].join('\n');
+    const html = renderBlocks(parsePlan(raw).blocks);
+    expect(html).toContain('<code>&lt;Foo&gt;</code>');
+    expect(html).not.toContain('&amp;lt;Foo');
+  });
+
+  it('still does not let a code span smuggle a tag out', () => {
+    const raw =
+      '# T\n\n<comment id="c1" status="open"><note by="user" at="t">`</code><script>x()</script>`</note></comment>';
+    const html = renderBlocks(parsePlan(raw).blocks);
+    expect(html).not.toContain('<script>');
+  });
+});
+
+describe('content before the title', () => {
+  it('keeps ordinary prose that sits between the preamble and the title', () => {
+    const raw = `**Status:** open\n\nan intro paragraph before the heading\n\n# T\n\nbody`;
+    const html = planToPrintHtml(raw);
+    expect(html).toContain('an intro paragraph before the heading');
+    // ...while still showing the preamble only in the header card
+    expect(html.match(/<b>Status:<\/b>/g)).toHaveLength(1);
+  });
+
+  it('drops a wrapped preamble continuation from the body, not just the first line', () => {
+    const raw = `**Verdict:** a long verdict that\nwraps onto a second line\n\n# T\n\nbody`;
+    const html = planToPrintHtml(raw);
+    expect(html).toContain('wraps onto a second line'); // present in the card
+    expect(html).not.toContain('<p>wraps onto a second line'); // not repeated as body
   });
 });
 
