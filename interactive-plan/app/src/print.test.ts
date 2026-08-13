@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isSafeHref, planToPrintHtml, renderBlocks, scrubHrefs, stripHighlights } from './print';
+import { anchorHref } from './anchor';
 import { parsePlan } from './parser';
 
 const render = (raw: string, opts = {}) => planToPrintHtml(raw, opts);
@@ -171,6 +172,74 @@ describe('comment anchors', () => {
     // the class name also appears in the inlined stylesheet, so assert on the element
     expect(html).not.toContain('<sup class="phlref"');
     expect(html).toContain('highlighted span'); // the text itself survives
+  });
+
+  it('links each anchor to its comment when annotations are wanted', () => {
+    const html = planToPrintHtml(raw, { comments: 'annotations' });
+    expect(html).toContain(
+      `<a class="phla" href="${anchorHref('c1')}"><mark class="phl">highlighted span</mark></a>`,
+    );
+    // An empty ◆ target still needs a rectangle, so it is linked too.
+    expect(html).toContain(`<a class="phla" href="${anchorHref('c2')}"><sup class="phlref">c2</sup></a>`);
+  });
+
+  it('drops the inline thread under annotations, and keeps it under both', () => {
+    expect(planToPrintHtml(raw, { comments: 'annotations' })).not.toContain('why this?');
+    const both = planToPrintHtml(raw, { comments: 'both' });
+    expect(both).toContain('why this?');
+    expect(both).toContain(`href="${anchorHref('c1')}"`);
+  });
+
+  // The class name also appears in the inlined stylesheet, so these assert on the element.
+  it('emits no anchor links unless annotations were asked for', () => {
+    expect(planToPrintHtml(raw)).not.toContain('<a class="phla"');
+    expect(planToPrintHtml(raw, { comments: 'inline' })).not.toContain('<a class="phla"');
+  });
+
+  it('lets noComments override a comment mode, so the older flag still means none', () => {
+    const html = planToPrintHtml(raw, { comments: 'annotations', noComments: true });
+    expect(html).not.toContain('<a class="phla"');
+    expect(html).not.toContain('why this?');
+  });
+
+  it('escapes a hostile comment id rather than letting it break out of the href', () => {
+    const nasty = '# T\n\nx <user-highlight comment="a&quot; onclick=&quot;evil()">y</user-highlight>';
+    const html = planToPrintHtml(nasty, { comments: 'annotations' });
+    expect(html).not.toContain('onclick="');
+    expect(html).toContain('a%26quot%3B%20onclick%3D%26quot%3Bevil()');
+  });
+
+  it('splits the anchor around a link inside the highlight, keeping both', () => {
+    const withLink =
+      '# T\n\nx <user-highlight comment="c1">see [the spec](https://example.com/s) for why</user-highlight> y';
+    const html = planToPrintHtml(withLink, { comments: 'annotations' });
+    // `<a>` can't nest: our anchor stops before the real link and resumes after it, so the
+    // whole span still reports rectangles and the link stays clickable.
+    expect(html).toContain(
+      `<a class="phla" href="${anchorHref('c1')}"><mark class="phl">see </a>` +
+        `<a href="https://example.com/s">the spec</a>` +
+        `<a class="phla" href="${anchorHref('c1')}"> for why</mark></a>`,
+    );
+    expect(html).not.toContain('<a href="https://example.com/s">the spec</a></a>');
+  });
+
+  it('leaves no empty anchor when a link starts or ends the highlight', () => {
+    const edge = '# T\n\n<user-highlight comment="c1">[only a link](https://example.com/s)</user-highlight>';
+    const html = planToPrintHtml(edge, { comments: 'annotations' });
+    expect(html).not.toMatch(/<a class="phla"[^>]*><\/a>/);
+    expect(html).toContain('<a href="https://example.com/s">only a link</a>');
+  });
+
+  it('drops the CSS fill only when the annotation layer will paint it', () => {
+    expect(planToPrintHtml(raw, { comments: 'annotations' })).toContain('<body class="ip-annotated">');
+    expect(planToPrintHtml(raw, { comments: 'inline' })).toContain('<body>');
+  });
+
+  it('leaves an anchor inside a code fence alone, in every mode', () => {
+    const fenced = ['# T', '', '```md', '<user-highlight comment="c9">x</user-highlight>', '```'].join('\n');
+    for (const comments of ['annotations', 'both', 'inline', 'none'] as const) {
+      expect(planToPrintHtml(fenced, { comments })).not.toContain('<a class="phla"');
+    }
   });
 });
 

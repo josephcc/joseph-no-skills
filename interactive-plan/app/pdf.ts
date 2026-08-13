@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 // Render a plan .md to a shareable PDF (or to HTML with --html).
-// Usage: bun pdf.ts <plan.md> [out.pdf] [--no-comments] [--no-questions] [--no-checks] [--html]
+// Usage: bun pdf.ts <plan.md> [out.pdf] [--comments=<mode>] [--no-comments]
+//                             [--no-questions] [--no-checks] [--html]
 //        (or via `bun run pdf <plan.md>`)
 //
-// Presentation lives in src/print.ts; this only handles files and the browser.
+// Presentation lives in src/print.ts and comment annotations in src/annotate.ts; this only
+// handles files and the browser.
 
 import { spawn } from 'node:child_process';
 import {
@@ -19,7 +21,9 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { planToPrintHtml, type PrintOptions } from './src/print';
+import { annotatePdf } from './src/annotate';
+import { parsePlan } from './src/parser';
+import { planToPrintHtml, type CommentMode, type PrintOptions } from './src/print';
 
 // Ordered by how reliably each one produces a PDF headlessly. Chrome is last on purpose:
 // its --headless=new --print-to-pdf hangs indefinitely on some macOS builds, where the
@@ -115,16 +119,31 @@ async function printToPdf(browser: string, htmlPath: string, out: string, timeou
   }
 }
 
+const USAGE =
+  'usage: bun pdf.ts <plan.md> [out.pdf] [--comments=annotations|inline|both|none]\n' +
+  '                            [--no-comments] [--no-questions] [--no-checks] [--html]';
+
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
 const positional = argv.filter((a) => !a.startsWith('--'));
 const src = positional[0];
 if (!src) {
-  console.error(
-    'usage: bun pdf.ts <plan.md> [out.pdf] [--no-comments] [--no-questions] [--no-checks] [--html]',
-  );
+  console.error(USAGE);
   process.exit(2);
 }
+
+const MODES: CommentMode[] = ['annotations', 'inline', 'both', 'none'];
+// Real PDF comments are the default: the whole point of exporting a reviewed plan is to carry
+// the review with it, and a reader that shows threads in its sidebar beats a wall of boxes.
+// `--html` has no annotation layer to write into, so it falls back to printing them inline.
+const modeFlag = argv.find((a) => a.startsWith('--comments='))?.split('=')[1];
+if (modeFlag && !MODES.includes(modeFlag as CommentMode)) {
+  console.error(`unknown --comments mode: ${modeFlag}\n${USAGE}`);
+  process.exit(2);
+}
+const mode: CommentMode = flags.has('--no-comments')
+  ? 'none'
+  : ((modeFlag as CommentMode | undefined) ?? (flags.has('--html') ? 'inline' : 'annotations'));
 const srcPath = resolve(src);
 if (!existsSync(srcPath)) {
   console.error(`not found: ${srcPath}`);
@@ -132,7 +151,7 @@ if (!existsSync(srcPath)) {
 }
 
 const opts: PrintOptions = {
-  noComments: flags.has('--no-comments'),
+  comments: mode,
   noQuestions: flags.has('--no-questions'),
   noChecks: flags.has('--no-checks'),
   // Relative images/links in the plan must resolve against the plan's directory, not
@@ -167,4 +186,34 @@ try {
   console.error(String(e instanceof Error ? e.message : e));
   process.exit(1);
 }
-console.log(`${out}  (${Math.round(statSync(out).size / 1024)} KB, via ${basename(browser)})`);
+
+// Comments become real PDF annotations, using the anchor links the render left in the file.
+// A failure here costs the comments, not the document, so it is reported and not thrown: a PDF
+// missing its annotations is still the plan, and deleting it would help nobody.
+let note = '';
+const wantsAnnotations = mode === 'annotations' || mode === 'both';
+const threads = wantsAnnotations
+  ? parsePlan(readFileSync(srcPath, 'utf8')).blocks.filter((b) => b.type === 'comment')
+  : [];
+if (threads.length) {
+  try {
+    const { bytes, placed, missing } = await annotatePdf(readFileSync(out), threads);
+    writeFileSync(out, bytes);
+    note = `, ${placed.length} comment${placed.length === 1 ? '' : 's'}`;
+    if (missing.length) {
+      console.error(
+        `warning: ${missing.length} comment thread(s) had nothing to attach to (${missing.join(', ')}) — ` +
+          `no <user-highlight> anchor, so their text is not in the PDF. ` +
+          `Re-run with --comments=both to print those inline.`,
+      );
+    }
+  } catch (e) {
+    console.error(
+      `warning: comments could not be added as PDF annotations (${e instanceof Error ? e.message : e}).\n` +
+        `The document itself is fine — re-run with --comments=inline to print them in the flow instead.`,
+    );
+  }
+}
+console.log(
+  `${out}  (${Math.round(statSync(out).size / 1024)} KB, via ${basename(browser)}${note})`,
+);

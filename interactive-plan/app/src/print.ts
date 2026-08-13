@@ -10,13 +10,34 @@
 // here as well as in the React blocks.
 
 import { marked } from 'marked';
+import { anchorHref } from './anchor';
 import { decodeEntities, parsePlan, protectedRanges } from './parser';
 import type { Block, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 marked.setOptions({ gfm: true, breaks: false });
 
+/**
+ * How comment threads are carried into the document.
+ *
+ * - `inline` — printed as note callouts in the flow of the document (the only option before
+ *   PDF annotations existed, and the only one that survives being printed on paper).
+ * - `annotations` — the callouts are dropped and each thread becomes a real PDF annotation,
+ *   anchored to its highlighted span. See `src/annotate.ts`.
+ * - `both` — belt and braces: annotations for readers that support them, callouts for the rest.
+ * - `none` — dropped entirely.
+ */
+export type CommentMode = 'inline' | 'annotations' | 'both' | 'none';
+
+/** The mode in effect, honouring the older `noComments` flag. */
+export function commentMode(opts: PrintOptions): CommentMode {
+  if (opts.noComments) return 'none';
+  return opts.comments ?? 'inline';
+}
+
 export interface PrintOptions {
-  /** Drop comment threads (margin annotations rarely belong in a shared document). */
+  /** How comment threads are rendered. Default `inline`; the CLI defaults to `annotations`. */
+  comments?: CommentMode;
+  /** Drop comment threads. Predates `comments`; equivalent to `comments: 'none'`, and wins. */
   noComments?: boolean;
   /** Drop unanswered questions — useful when sharing conclusions rather than a live plan. */
   noQuestions?: boolean;
@@ -41,21 +62,30 @@ const esc = (s: string) =>
  * tag written literally inside a code fence stays literal, matching the viewer.
  */
 export function stripHighlights(md: string): string {
-  return transformHighlights(md, false);
+  return transformHighlights(md, 'strip');
 }
 
 /**
- * Rewrite `<user-highlight>` anchors: either drop them, or keep them visible.
+ * What to do with a `<user-highlight>` anchor.
  *
- * When comment threads are printed they need a referent on the page, otherwise a reader sees
- * a remark with no idea what it is about. `mark = true` renders the wrapped span as `<mark>`
- * carrying the comment id, and an empty ◆ target as a small id marker. When comments are
- * omitted there is nothing to point at, so the anchors are dropped instead.
+ * - `strip` — drop it, keeping any text it wraps. With no comments printed there is nothing
+ *   for it to point at.
+ * - `mark` — render the wrapped span as `<mark>`, and an empty ◆ target as a small id marker,
+ *   so a printed thread has a referent on the page.
+ * - `anchor` — as `mark`, plus a link to `anchorHref(id)`. The link is not for the reader:
+ *   the browser turns it into a /Link annotation whose rectangle tells `annotate.ts` exactly
+ *   where the span landed, and it is deleted once that rectangle has been read.
+ */
+export type HighlightMode = 'strip' | 'mark' | 'anchor';
+
+/**
+ * Rewrite `<user-highlight>` anchors according to `mode`.
  *
  * Uses the parser's `protectedRanges` so a tag written literally inside a code fence stays
- * literal, matching the viewer.
+ * literal, matching the viewer. A consequence worth knowing: an anchor written inside a fence
+ * is not a real anchor, so its thread has no rectangle and cannot become an annotation.
  */
-export function transformHighlights(md: string, mark: boolean): string {
+export function transformHighlights(md: string, mode: HighlightMode): string {
   const prot = protectedRanges(md);
   const inCode = (i: number) => prot.some((r) => i >= r.start && i < r.end);
   const open = /<user-highlight\b[^>]*\bcomment="([^"]+)"[^>]*>/g;
@@ -71,21 +101,32 @@ export function transformHighlights(md: string, mark: boolean): string {
   }
   if (!toks.length) return md;
   toks.sort((a, b) => a.i - b.i);
+  const link = mode === 'anchor';
   let out = '';
   let last = 0;
+  // Ids of anchors we opened a link for, so the matching close emits the same number of tags.
+  const openLinks: boolean[] = [];
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
     out += md.slice(last, t.i);
-    if (mark) {
+    if (mode !== 'strip') {
       if (t.open) {
+        const id = t.id ?? '';
+        const a = link ? `<a class="phla" href="${esc(anchorHref(id))}">` : '';
         // An empty anchor (`◆` target) has its close tag immediately after: render a marker
-        // rather than an empty <mark>.
+        // rather than an empty <mark>. It still needs the link — an annotation with no
+        // rectangle has nowhere to live, and the marker is the only ink the ◆ leaves behind.
         const next = toks[k + 1];
         const empty = next && !next.open && next.i === t.i + t.len;
-        out += empty ? `<sup class="phlref">${esc(t.id ?? '')}</sup>` : `<mark class="phl">`;
-        if (empty) k++; // consume the paired close
+        if (empty) {
+          out += `${a}<sup class="phlref">${esc(id)}</sup>${link ? '</a>' : ''}`;
+          k++; // consume the paired close
+        } else {
+          out += `${a}<mark class="phl">`;
+          openLinks.push(link);
+        }
       } else {
-        out += '</mark>';
+        out += openLinks.pop() ? '</mark></a>' : '</mark>';
       }
     }
     last = t.i + t.len;
@@ -93,9 +134,51 @@ export function transformHighlights(md: string, mark: boolean): string {
   return out + md.slice(last);
 }
 
-let markHighlights = false; // set per render; anchors only matter when comments are printed
-const md2html = (md: string) =>
-  marked.parse(transformHighlights(md ?? '', markHighlights)) as string;
+/**
+ * Split an anchor link around any link nested inside it.
+ *
+ * `<a>` cannot contain `<a>`. When a highlighted span contains a markdown link, the browser
+ * silently closes our anchor at the inner one — so the annotation's rectangle stops at the link
+ * and the rest of the span goes uncovered. Closing and reopening around the inner link keeps
+ * both: the real link stays clickable, and the highlight comes back as further rectangles,
+ * which is exactly what QuadPoints wants anyway.
+ */
+export function unnestAnchors(html: string): string {
+  if (!html.includes('<a class="phla"')) return html;
+  const tag = /<a\b[^>]*>|<\/a>/g;
+  let out = '';
+  let last = 0;
+  let open: string | null = null; // our anchor's opening tag, while we are inside one
+  let suspended = false; // ...and currently interrupted by an inner link
+  let m: RegExpExecArray | null;
+  while ((m = tag.exec(html))) {
+    out += html.slice(last, m.index);
+    last = m.index + m[0].length;
+    const isClose = m[0] === '</a>';
+    if (!open) {
+      out += m[0];
+      if (!isClose && m[0].startsWith('<a class="phla"')) open = m[0];
+    } else if (!isClose) {
+      out += `</a>${m[0]}`; // step out of ours, let the inner link have its own
+      suspended = true;
+    } else if (suspended) {
+      out += `</a>${open}`; // inner link done — resume ours
+      suspended = false;
+    } else {
+      out += m[0];
+      open = null;
+    }
+  }
+  // Reopening right before the span ends (or an inner link starting it) leaves an empty anchor,
+  // which would be a link annotation with no text under it.
+  return (out + html.slice(last)).replace(/<a class="phla"[^>]*><\/a>/g, '');
+}
+
+let highlightMode: HighlightMode = 'strip'; // set per render, from the comment mode
+const md2html = (md: string) => {
+  const html = marked.parse(transformHighlights(md ?? '', highlightMode)) as string;
+  return highlightMode === 'anchor' ? unnestAnchors(html) : html;
+};
 /** Inline markdown (no wrapping <p>), for titles and checkbox labels. */
 const inline2html = (md: string) => marked.parseInline(stripHighlights(md ?? '')) as string;
 
@@ -240,8 +323,14 @@ function checklist(items: { id: string; status: string; label: string }[]): stri
   return `<ul class="pchecks">${rows}</ul>`;
 }
 
+/** Highlight handling implied by a comment mode: anchors exist to be pointed at. */
+const highlightModeFor = (m: CommentMode): HighlightMode =>
+  m === 'none' ? 'strip' : m === 'inline' ? 'mark' : 'anchor';
+
 export function renderBlocks(blocks: Block[], opts: PrintOptions = {}): string {
-  markHighlights = !opts.noComments;
+  const mode = commentMode(opts);
+  highlightMode = highlightModeFor(mode);
+  const inlineComments = mode === 'inline' || mode === 'both';
   const out: string[] = [];
   let pending: { id: string; status: string; label: string }[] = [];
   const flush = () => {
@@ -266,7 +355,7 @@ export function renderBlocks(blocks: Block[], opts: PrintOptions = {}): string {
         if (!(opts.noQuestions && b.status !== 'answered')) out.push(question(b));
         break;
       case 'comment':
-        if (!opts.noComments) out.push(comment(b));
+        if (inlineComments) out.push(comment(b));
         break;
       case 'check':
         if (!opts.noChecks) pending.push({ id: b.id, status: b.status, label: b.label });
@@ -332,6 +421,13 @@ pre code { background: none; padding: 0; }
 .popts > li > b { font: 8.5pt "SF Mono", Menlo, monospace; color: #7d8f96; }
 .pnote { margin: 5px 0; font-size: 9.5pt; } .pnote b { color: var(--accent); }
 mark.phl { background: #fff3bf; color: inherit; padding: 0 1px; border-radius: 2px; }
+/* The anchor is machinery, not a link — it must leave no trace on the page. Its only job is to
+   make the browser emit a /Link annotation whose rectangle annotate.ts can read. */
+a.phla { color: inherit; text-decoration: none; }
+/* When the annotation layer will paint the span itself, the CSS fill has to get out of the way:
+   two colours multiplied together turn a grey "resolved" thread olive. The rule stays visible
+   so a reader with no annotation support still sees which words the remark is about. */
+.ip-annotated mark.phl { background: none; padding: 0; border-bottom: 1px solid #e8c95a; }
 sup.phlref { font-size: 7pt; color: var(--accent); background: #eef4f5; padding: 0 3px;
              border-radius: 2px; margin-left: 1px; }
 .pchecks { list-style: none; margin: 8px 0; }
@@ -378,7 +474,7 @@ function trimPreambleText(raw: string): string {
 
 /** Full standalone HTML document for a plan. */
 export function planToPrintHtml(raw: string, opts: PrintOptions = {}): string {
-  markHighlights = !opts.noComments;
+  highlightMode = highlightModeFor(commentMode(opts));
   const plan = parsePlan(raw);
   const meta = plan.preamble.length
     ? `<div class="pmetacard">${plan.preamble
@@ -395,7 +491,9 @@ export function planToPrintHtml(raw: string, opts: PrintOptions = {}): string {
     '<!doctype html><html><head><meta charset="utf-8">',
     opts.baseHref ? `<base href="${esc(opts.baseHref)}">` : '',
     `<title>${esc(plan.title ?? 'plan')}</title>`,
-    `<style>${PRINT_CSS}</style></head><body>`,
+    `<style>${PRINT_CSS}</style></head>`,
+    // Tells the stylesheet that annotations will paint the highlights, so it shouldn't.
+    `<body${highlightMode === 'anchor' ? ' class="ip-annotated"' : ''}>`,
     meta,
     body,
     '</body></html>',

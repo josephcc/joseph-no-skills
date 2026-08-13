@@ -220,6 +220,14 @@ function runServer() {
     for (const f of ['no-comments', 'no-questions', 'no-checks']) {
       if (req.query?.[f] === '1') args.push(`--${f}`);
     }
+    // Allow-listed, since this becomes an argument to a spawned process.
+    const comments = req.query?.comments;
+    if (typeof comments === 'string') {
+      if (!['annotations', 'inline', 'both', 'none'].includes(comments)) {
+        return res.status(400).json({ error: 'bad comments mode' });
+      }
+      args.push(`--comments=${comments}`);
+    }
     const out = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), 'ip-pdf-route-')),
       path.basename(planPath).replace(/\.md$/, '') + '.pdf',

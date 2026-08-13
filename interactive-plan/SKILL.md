@@ -146,8 +146,8 @@ header, beside the filename; it renders and downloads `<plan>.pdf`. From the CLI
 cd ~/.claude/skills/interactive-plan/app && bun run pdf <abs-path-to-plan.md> [out.pdf]
 ```
 
-The button calls `GET /api/pdf?plan=<abs>[&no-comments=1&no-questions=1&no-checks=1]`, which
-runs the same renderer and streams the result back as a download. It needs `bun` on `PATH`
+The button calls `GET /api/pdf?plan=<abs>[&comments=<mode>&no-comments=1&no-questions=1&no-checks=1]`,
+which runs the same renderer and streams the result back as a download. It needs `bun` on `PATH`
 (already true if you lint or test this app) and says so plainly if it's missing.
 
 This does **not** print the viewer. The viewer is built for interaction and has no print
@@ -158,6 +158,7 @@ an answered question collapses to **just the chosen option** — a settled quest
 as an open menu.
 
 Flags, for trimming a working document into something shareable:
+- `--comments=<mode>` — how comment threads travel; see [Comments become PDF comments](#comments-become-pdf-comments)
 - `--no-questions` — drop *unanswered* questions (answered ones stay, as decisions-in-progress)
 - `--no-comments` — drop comment threads
 - `--no-checks` — drop checklists
@@ -189,7 +190,7 @@ All six tags render, plus the preamble, tables, and code blocks:
 | `<finding>` | callout with severity badge, status, effort |
 | `<check>` | checklist, consecutive checks grouped, `done` struck through |
 | `<open-question>` | open → question + options; answered → question + **only the chosen option** + the answer |
-| `<comment>` | thread, with its `<user-highlight>` anchor kept visible so a remark has a referent |
+| `<comment>` | a real PDF comment on its anchored span — see below; or a note callout under `--comments=inline` |
 | `<user-highlight>` | highlighted span; dropped entirely under `--no-comments`, since there is then nothing to point at |
 
 Three deliberate differences from the viewer, so nobody reports them as bugs:
@@ -197,7 +198,49 @@ Three deliberate differences from the viewer, so nobody reports them as bugs:
   reordering a document's content under the reader would be worse than a mismatched sort.
 - **Code refs** (`file.ts:12`) print as code text, not editor links; **inter-plan links** stay
   relative rather than being rewritten to `?plan=…`, since neither target works from a PDF.
-- **Resolved comments print inline** instead of collapsing behind a "Show N resolved" toggle.
+- **Resolved comments are exported like open ones** (dimmed, marked `resolved`) instead of
+  collapsing behind a "Show N resolved" toggle.
+
+### Comments become PDF comments
+
+By default a `<comment>` is not printed into the document — it becomes a **PDF annotation**: a
+`/Highlight` over the exact words its `<user-highlight>` wraps, the first `<note>` as the comment,
+and every later note chained to it as a threaded reply. Open the result in Preview, Acrobat, or
+any reviewer with a comments sidebar and the plan's review is *in* the file, in the same shape it
+had in the viewer. `kind` picks the colour (error/question/clarify/nit), `by` becomes the author,
+`at` the timestamp, and a resolved thread is dimmed and says so in its subject.
+
+Pick a mode with `--comments=` (or `&comments=` on the route):
+
+| mode | what a recipient gets |
+|---|---|
+| `annotations` *(default)* | real PDF comments; nothing extra in the flow of the document |
+| `inline` | note callouts printed in the document, as before annotations existed |
+| `both` | annotations *and* the callouts — for a plan that will be printed on paper |
+| `none` | no comments at all (same as `--no-comments`) |
+
+Worth knowing before you send one:
+- **Reader support varies.** Preview and Acrobat show a proper comments sidebar. Chrome's
+  built-in viewer draws the highlights but not the popups, and some readers ignore threading and
+  list replies flat. Nothing is ever *lost* — every note's text is in the file either way.
+- **Paper loses the text.** Printing a PDF prints highlights, not popups. Use `--comments=both`
+  when the destination is a printer.
+- **A thread with no anchor can't be placed**, and the CLI says so by id rather than dropping it
+  quietly. That means an anchor an agent forgot to add, or one written inside a code fence.
+
+How it works, since the mechanism is not obvious: Chrome's `--print-to-pdf` emits **no** markup
+annotations, and nothing in the DOM knows where a paragraph lands once the browser has paginated
+it. But Chrome *does* emit a `/Link` annotation per line box, with the rectangle it laid that
+fragment out in. So `print.ts` wraps each highlight in a link to a `.invalid` URL carrying the
+comment id (`src/anchor.ts`), and `src/annotate.ts` reads those rectangles back with `pdf-lib`,
+strips the links, and writes the annotations in their place. The browser does the layout; we only
+re-label its output. Two consequences fall out of that: a highlight containing a link has to be
+split around it (`<a>` cannot nest — `unnestAnchors`), and under `annotations` the CSS highlight
+fill is dropped in favour of a thin underline, so the annotation's own colour isn't multiplied
+with a yellow already on the page.
+
+If annotating fails, the CLI keeps the rendered PDF and warns — a document without its comments
+still beats no document.
 
 Two fields are treated as **untrusted** and escaped + link-scrubbed, matching the viewer:
 freeform answer text and comment notes. Everything else is plan prose, so intentional inline
