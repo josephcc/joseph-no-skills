@@ -5,3 +5,7 @@ dist/
 # logs & OS cruft
 *.log
 .DS_Store
+
+# write-like-joseph: personal writing exemplars, not for distribution
+write-like-joseph/examples/
+write-like-joseph-workspace/

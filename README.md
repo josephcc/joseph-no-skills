@@ -3,13 +3,14 @@
 > Personal [Claude Code](https://claude.com/claude-code) skills, each built to kill a specific bit
 > of friction in how I actually work with coding agents.
 
-Two skills today, in a layout that lets me drop in more. Each top-level directory is one
+Three skills today, in a layout that lets me drop in more. Each top-level directory is one
 self-contained skill; install once and Claude Code auto-loads them in any repo.
 
 | Skill | One-liner |
 |---|---|
 | [**`interactive-plan`**](#-interactive-plan--read--comment-on-plans-like-a-google-doc) | Turn long planning docs into an interactive web page — answer questions, pick options, and comment Google-Docs-style; feedback round-trips into the same `.md`. |
 | [**`codex-audit`**](#-codex-audit--a-second-pair-of-eyes-on-your-diff-triaged-with-judgment) | Have the OpenAI Codex CLI audit your diff, then triage its report with independent judgment — verify each finding, reject false positives, fix what's real. |
+| [**`write-like-joseph`**](#-write-like-joseph--paper-prose-in-my-voice-not-an-llms) | Draft and revise academic-paper sections in my writing voice, grounded in section-by-section examples from my published papers (the examples themselves are local-only, not in the repo). |
 
 ---
 
@@ -75,6 +76,31 @@ table. Codex is treated as *a capable second opinion, not an authority*.
 
 ---
 
+## ✍️ `write-like-joseph` — paper prose in my voice, not an LLM's
+
+**Why I built it.** When an agent helps me draft a paper section, the prose comes out fluent but
+generic — LLM vocabulary, LLM cadence, LLM tells everywhere. I don't want "academic style"; I want
+*my* style. This skill grounds the agent in verbatim sections from my published papers, organized
+by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qualitative-findings/`,
+…), so it reads how I actually open an intro or report a study before writing a word of mine.
+
+**Highlights**
+- **Corpus-grounded blocklist**: every "LLM word" rule was frequency-checked against ~102k words of
+  my published writing — words I never use are banned with their counts as evidence, and words I
+  genuinely do use (that naive lists ban) are kept, with usage guidance and a mined
+  "what I write instead" table.
+- **Context loading strategy**: per-section dependency table (e.g., related work loads the draft's
+  own intro/abstract for framing and the method for differentiation claims).
+- **Honest placeholders** (`[CITE: …]`, `[TODO(joseph): …]`, `[CHECK: …]`) instead of fluent filler
+  or invented citations, plus a citation report on every handback: new citations flagged for
+  vetting, stretched citations shown with evidence and reasoning.
+- **The voice doesn't ship**: `examples/` is gitignored — only the instructions are in the repo.
+  The skill tells you to populate `examples/<section>/<corpus_id>.md` from your own papers
+  (mine were extracted from the full texts of ten of my publications). Swap in your own corpus and
+  it's `write-like-you`.
+
+---
+
 ## Install
 
 ```bash
@@ -91,6 +117,7 @@ directory (so it won't clobber a skill you've edited in place). To install a sub
 **Per-skill requirements**
 - `interactive-plan` — [Bun](https://bun.sh) (the viewer is a Vite/React app + a small Node daemon; first launch runs `bun install` + build automatically). Optional: an editor CLI for click-to-open refs (defaults to Zed; see `interactive-plan/config.json`).
 - `codex-audit` — the [OpenAI Codex CLI](https://github.com/openai/codex) (`brew install codex`, then `codex login`) and a git repo.
+- `write-like-joseph` — no tooling, but the gitignored `examples/` corpus must be populated locally from your own papers before it can imitate anyone.
 
 ## Wire the skills into a repo
 
