@@ -94,6 +94,9 @@ by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qual
 - **Honest placeholders** (`[CITE: …]`, `[TODO(joseph): …]`, `[CHECK: …]`) instead of fluent filler
   or invented citations, plus a citation report on every handback: new citations flagged for
   vetting, stretched citations shown with evidence and reasoning.
+- **Gated per repo**: the skill refuses to imitate unless a `.i-am-joseph` marker file exists at
+  the repo root (`touch .i-am-joseph`) — same opt-in pattern as `codex-audit`, but hard: no
+  marker, no voice, even when invoked explicitly.
 - **The voice doesn't ship**: `examples/` is gitignored — only the instructions are in the repo.
   The skill tells you to populate `examples/<section>/<corpus_id>.md` from your own papers
   (mine were extracted from the full texts of ten of my publications). Swap in your own corpus and
