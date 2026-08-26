@@ -324,6 +324,41 @@ class TestBrokenInstallGuards:
     assert 'Exception' in caught
 
 
+class TestCueTextEscaping:
+  """Found by audit: spoken angle brackets were read back as VTT tags and dropped."""
+
+  def test_spoken_angle_brackets_are_escaped(self):
+    out = tr.render_vtt([(0.0, 1.0, 'S0', 'use vector<int>')], source='a.mp4', model='m')
+    assert '&lt;int&gt;' in out
+
+  def test_the_voice_tag_itself_is_not_escaped(self):
+    """Escaping our own tag would make the speaker unreadable to the parser."""
+    out = tr.render_vtt([(0.0, 1.0, 'SPEAKER_00', 'hi')], source='a.mp4', model='m')
+    assert '<v SPEAKER_00>hi' in out
+
+  def test_ampersand_is_escaped(self):
+    out = tr.render_vtt([(0.0, 1.0, None, 'Q&A')], source='a.mp4', model='m')
+    assert 'Q&amp;A' in out
+
+  def test_text_that_looks_like_a_voice_tag_cannot_forge_a_speaker(self):
+    """Otherwise transcribed text could invent an attribution out of nothing."""
+    out = tr.render_vtt([(0.0, 1.0, None, '<v Impostor>hello')], source='a.mp4', model='m')
+    parsed = snap.parse_vtt(out)[0]
+    assert parsed.speaker is None
+    assert parsed.text == '<v Impostor>hello'
+
+
+class TestRefusesToCompeteWithAnExistingTranscript:
+  """Found by audit: it would add `recording.vtt` beside a real `captions.vtt`.
+
+  setup_meeting_snapshots.py picks the *largest* transcript in a folder, so the
+  machine transcript could silently win over an export that has real names.
+  """
+
+  def test_transcript_suffixes_match_the_readers(self):
+    assert tr.TRANSCRIPT_SUFFIXES == snap.TRANSCRIPT_SUFFIXES
+
+
 class TestRoundTripThroughTheRealParser:
   """The contract: what this script writes, setup_meeting_snapshots.py must read.
 
@@ -489,6 +524,27 @@ class TestFindModel:
       (directory / 'ggml-large-v3-turbo.bin').write_bytes(b'x')
     monkeypatch.setattr(tr, 'MODEL_SEARCH', (first, second))
     assert tr.find_model(None).parent == first
+
+  def test_quantized_good_tier_beats_an_exact_worse_tier(self, tmp_path, monkeypatch):
+    """Found by audit: exact-name matching made a quantized large lose to `small`.
+
+    Tiers are matched by prefix now, so `large-v3-turbo-q5_0` ranks with
+    `large-v3-turbo` instead of falling past every entry to the first exact hit.
+    """
+    (tmp_path / 'ggml-large-v3-turbo-q5_0.bin').write_bytes(b'x' * 100)
+    (tmp_path / 'ggml-small.bin').write_bytes(b'x' * 10)
+    monkeypatch.setattr(tr, 'MODEL_SEARCH', (tmp_path,))
+    assert tr.find_model(None).name == 'ggml-large-v3-turbo-q5_0.bin'
+
+  def test_a_longer_tier_is_not_swallowed_by_its_own_prefix(self):
+    """`large-v3` is a prefix of `large-v3-turbo`, so order in the list matters."""
+    assert tr.MODEL_PREFERENCE.index('large-v3-turbo') < tr.MODEL_PREFERENCE.index('large-v3')
+
+  def test_full_precision_wins_over_quantized_within_a_tier(self, tmp_path, monkeypatch):
+    (tmp_path / 'ggml-large-v3-turbo.bin').write_bytes(b'x' * 500)
+    (tmp_path / 'ggml-large-v3-turbo-q5_0.bin').write_bytes(b'x' * 100)
+    monkeypatch.setattr(tr, 'MODEL_SEARCH', (tmp_path,))
+    assert tr.find_model(None).name == 'ggml-large-v3-turbo.bin'
 
   def test_unrecognized_model_name_still_usable(self, tmp_path, monkeypatch):
     """A quantized or fine-tuned build is a real model, just not on the list."""

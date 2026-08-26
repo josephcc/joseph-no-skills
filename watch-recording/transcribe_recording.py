@@ -2,7 +2,10 @@
 # /// script
 # requires-python = ">=3.10,<3.14"
 # dependencies = [
-#   "pyannote.audio>=3.1",
+#   # Pinned to the tested major. 3.x is not merely older: it calls
+#   # torchaudio.AudioMetaData, removed in the torchaudio pinned below, so a
+#   # resolver that picked it would fail at import.
+#   "pyannote.audio>=4,<5",
 #   "numpy",
 #   # torch and torchaudio must move as a pair: torchaudio ships a compiled
 #   # extension linked against one torch ABI, and pyannote imports torchaudio at
@@ -54,6 +57,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import html
 import re
 import shutil
 import subprocess
@@ -66,6 +70,10 @@ from pathlib import Path
 
 VIDEO_SUFFIXES = ('.mp4', '.mov', '.mkv', '.webm', '.m4v', '.avi')
 AUDIO_SUFFIXES = ('.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg')
+
+# Must stay in step with setup_meeting_snapshots.py: these are what that script will
+# discover as "the" transcript, and so what this one must not quietly compete with.
+TRANSCRIPT_SUFFIXES = ('.vtt', '.srt')
 
 # whisper.cpp wants 16 kHz mono 16-bit PCM and will not resample for us.
 WHISPER_SAMPLE_RATE = 16000
@@ -221,11 +229,20 @@ def find_model(explicit: Path | None) -> Path:
       name = candidate.stem.removeprefix('ggml-')
       found.setdefault(name, candidate)
 
-  for name in MODEL_PREFERENCE:
-    if name in found:
-      return found[name]
-  # An unrecognized name is still a real model (a quantized or fine-tuned build);
-  # prefer the largest, as a stand-in for the most capable.
+  # Match each tier by prefix, not equality, so a quantized or fine-tuned build of a
+  # good tier (`large-v3-turbo-q5_0`) ranks with that tier instead of falling past
+  # every entry and losing to an exact match on a worse one (`small`). Tiers are
+  # tested in order and the list puts longer names first, so `large-v3-turbo` is
+  # considered before `large-v3` and cannot be swallowed by it.
+  for tier in MODEL_PREFERENCE:
+    matches = [
+      path for name, path in found.items() if name == tier or name.startswith(f'{tier}-')
+    ]
+    if matches:
+      # Within one tier, the largest file is the least quantized, so the most accurate.
+      return max(matches, key=lambda p: p.stat().st_size)
+  # An unrecognized name is still a real model; prefer the largest as a stand-in for
+  # the most capable.
   if found:
     return max(found.values(), key=lambda p: p.stat().st_size)
 
@@ -605,7 +622,12 @@ def render_vtt(cues: list[tuple[float, float, str | None, str]], *, source: str,
   for index, (start, end, speaker, text) in enumerate(cues, start=1):
     lines.append(str(index))
     lines.append(f'{format_vtt_time(start)} --> {format_vtt_time(end)}')
-    lines.append(f'<v {speaker}>{text}' if speaker else text)
+    # Escape the *text* only, never the `<v ...>` tag we are emitting. Whisper can
+    # transcribe spoken angle brackets ("use vector<int>"), and unescaped they read
+    # back as a VTT tag and get stripped -- losing words from a transcript whose
+    # whole purpose is quoting people accurately.
+    body = html.escape(text, quote=False)
+    lines.append(f'<v {speaker}>{body}' if speaker else body)
     lines.append('')
   return '\n'.join(lines)
 
@@ -644,6 +666,31 @@ def main() -> None:
       f'error: {out_vtt.name} already exists. Refusing to overwrite a transcript.\n'
       '  Pass --force if you really mean to replace it.'
     )
+
+  # Nor sit *beside* one under a different name. setup_meeting_snapshots.py picks the
+  # largest transcript in a folder, so adding `recording.vtt` next to an existing
+  # `captions.vtt` can silently promote the machine transcript over the real export --
+  # exactly backwards. Skipped when an explicit --output says where this should go.
+  if not args.force and args.output is None:
+    existing = [
+      path
+      for path in sorted(media.parent.iterdir())
+      if path.is_file() and path.suffix.lower() in TRANSCRIPT_SUFFIXES
+    ]
+    if existing:
+      names = ', '.join(path.name for path in existing)
+      sys.exit(
+        f'error: {media.parent} already has a transcript: {names}\n'
+        '  That is very likely a real caption export, which carries real speaker\n'
+        '  names this script cannot reproduce -- so transcribing would be a\n'
+        '  downgrade, and the new file could win on size and be used instead.\n'
+        '  Use that transcript, or pass --force / --output to override.'
+      )
+
+  # Check the hard prerequisites first: find_model can fall through to a 1.5 GB
+  # download, and discovering only afterwards that whisper-cli is absent wastes it.
+  require_tool('ffmpeg', 'brew install ffmpeg')
+  require_tool('whisper-cli', 'brew install whisper-cpp')
 
   model = find_model(args.model)
   print(f'media: {media.name}', file=sys.stderr)

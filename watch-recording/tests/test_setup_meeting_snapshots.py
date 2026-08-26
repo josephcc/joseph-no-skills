@@ -153,6 +153,25 @@ class TestParseVtt:
     assert cue.text == 'no voice tag here'
 
 
+class TestEntityUnescaping:
+  """WebVTT escapes `&`, `<`, `>` in cue text, and real Teams exports do it.
+
+  Found while auditing the generated-VTT path: the reader never unescaped, so a
+  real export's `&amp;` reached transcript.md verbatim.
+  """
+
+  def test_ampersand_entity_is_decoded(self):
+    vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Alice>Q&amp;A time\n'
+    assert mod.parse_vtt(vtt)[0].text == 'Q&A time'
+
+  def test_escaped_angle_brackets_survive_the_tag_strip(self):
+    """Unescaping before stripping tags would let the tag regex eat the result."""
+    vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Bob>the &lt;filter&gt; panel\n'
+    cue = mod.parse_vtt(vtt)[0]
+    assert cue.speaker == 'Bob'
+    assert cue.text == 'the <filter> panel'
+
+
 class TestMergeTurns:
   def test_merges_a_speakers_consecutive_cues(self):
     turns = mod.merge_turns(mod.parse_vtt(VTT), max_gap=2.5)

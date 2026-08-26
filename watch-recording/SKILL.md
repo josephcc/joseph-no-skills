@@ -528,8 +528,14 @@ Rules for the ledger:
 | `--whisper-model` / `--language` | With `--transcribe`: pick a specific `.bin`, or a non-English language. |
 
 `transcribe_recording.py` takes the same transcription flags plus `--min-speakers` / `--max-speakers`
-(when the count is a range, not a number), `--force` to replace an existing `.vtt`, and `--keep-wav`
-to retain the decoded audio for re-listening.
+(when the count is a range, not a number), `-o/--output` to place the `.vtt` somewhere specific, and
+`--keep-wav` to retain the decoded audio for re-listening.
+
+It **refuses to run if the folder already holds any `.vtt`/`.srt`** — not just one matching the
+video's name. That existing file is probably a real export with real names, and adding a second
+transcript beside it is worse than useless: `setup_meeting_snapshots.py` picks the *largest*
+transcript in a folder, so the machine one can silently win. `--force` overrides the refusal (and
+overwrites), `--output` sidesteps it by saying explicitly where the file should go.
 
 ### Why transcription is built the way it is
 

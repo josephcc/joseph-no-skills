@@ -25,6 +25,7 @@ under a bare `python3` as well as `uv run`.
 from __future__ import annotations
 
 import argparse
+import html
 import os
 import re
 import shutil
@@ -164,7 +165,10 @@ def parse_vtt(text: str) -> list[Cue]:
     payload = ' '.join(lines[timed + 1 :])
     voice = VOICE_RE.search(payload)
     speaker = voice.group(1).strip() if voice else None
-    body = ' '.join(TAG_RE.sub('', payload).split())
+    # Strip real VTT tags first, then unescape -- in that order. WebVTT escapes
+    # `&`, `<` and `>` in cue text (real Teams exports do this), so unescaping first
+    # would turn `&lt;filter&gt;` into `<filter>` and the tag strip would then eat it.
+    body = ' '.join(html.unescape(TAG_RE.sub('', payload)).split())
     if body:
       cues.append(Cue(start=start, end=end, speaker=speaker, text=body))
   return cues
