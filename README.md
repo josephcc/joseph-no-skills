@@ -135,6 +135,15 @@ pushes the agent to open **tens** of them and to log every one.
   handed only the directory can work it out; re-runs skip existing frames and never eat your notes.
 - **Notices dead air** — recordings keep rolling on empty rooms (one ran 21 min past the last
   word); the generated docs say so, so blank frames don't read as a broken extraction.
+- **No captions? It transcribes locally** — a QuickTime capture or a phone interview has no export
+  to pull. `--transcribe` runs **whisper.cpp** for the words and **pyannote** for who said them, all
+  on your machine, and writes a `.vtt` the normal path already reads. Whisper alone has no concept
+  of a speaker, so the second model isn't a nicety — without it every turn is `(unattributed)` and
+  the attribution analysis is impossible. Speakers are assigned **per word** and grouped afterwards,
+  because one Whisper segment happily spans a speaker change. A model already on the machine gets
+  reused before anything is downloaded, and the generated `.vtt` carries a `NOTE` saying the words
+  may be misheard and the labels are guesses — a machine transcript shouldn't launder itself into
+  looking like a real export.
 - **Ends in a report, not a chat message** — it hands off to [`interactive-plan`](#-interactive-plan--read--comment-on-plans-like-a-google-doc):
   the meeting's contested claims become findings, open questions and decisions you can answer in
   the viewer, with frames **cropped and inlined at their use sites** (quote → image → what the
@@ -161,7 +170,7 @@ directory (so it won't clobber a skill you've edited in place). To install a sub
 - `interactive-plan` — [Bun](https://bun.sh) (the viewer is a Vite/React app + a small Node daemon; first launch runs `bun install` + build automatically). Optional: an editor CLI for click-to-open refs (defaults to Zed; see `interactive-plan/config.json`).
 - `codex-audit` — the [OpenAI Codex CLI](https://github.com/openai/codex) (`brew install codex`, then `codex login`) and a git repo.
 - `write-like-joseph` — no tooling, but the gitignored `examples/` corpus must be populated locally from your own papers before it can imitate anyone.
-- `watch-recording` — [ffmpeg](https://ffmpeg.org) on PATH (`brew install ffmpeg`), plus a recording folder holding a video and its `.vtt` captions. Optional: ImageMagick, to crop a frame for use as a figure.
+- `watch-recording` — [ffmpeg](https://ffmpeg.org) on PATH (`brew install ffmpeg`), plus a recording folder holding a video and its `.vtt` captions. Optional: ImageMagick, to crop a frame for use as a figure. For recordings with *no* captions, local transcription additionally needs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`brew install whisper-cpp`) and, for speaker labels, [uv](https://docs.astral.sh/uv/) plus a HuggingFace token with the gated [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1) and [`pyannote/segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) conditions accepted.
 
 ## Wire the skills into a repo
 

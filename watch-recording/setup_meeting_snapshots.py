@@ -430,19 +430,79 @@ def extract_frame(
   return True
 
 
-def discover_inputs(folder: Path) -> tuple[Path, Path]:
-  """Find the video and transcript in a meeting folder (largest wins if several)."""
+def discover_inputs(folder: Path) -> tuple[Path, Path | None]:
+  """Find the video and transcript in a meeting folder (largest wins if several).
+
+  The transcript is optional here, unlike the video: a recording with no caption
+  export can still be transcribed locally (see transcribe_recording.py), so the
+  caller decides whether a missing one is fatal.
+  """
   if not folder.is_dir():
     sys.exit(f'error: not a directory: {folder}')
 
-  def pick(suffixes: tuple[str, ...], label: str) -> Path:
+  def pick(suffixes: tuple[str, ...]) -> Path | None:
     # Top level only, so previously extracted snapshots are never candidates.
     found = [p for p in sorted(folder.iterdir()) if p.is_file() and p.suffix.lower() in suffixes]
     if not found:
-      sys.exit(f'error: no {label} found in {folder} (looked for {", ".join(suffixes)})')
+      return None
     return max(found, key=lambda p: p.stat().st_size)
 
-  return pick(VIDEO_SUFFIXES, 'video'), pick(TRANSCRIPT_SUFFIXES, 'transcript')
+  video = pick(VIDEO_SUFFIXES)
+  if video is None:
+    sys.exit(f'error: no video found in {folder} (looked for {", ".join(VIDEO_SUFFIXES)})')
+  return video, pick(TRANSCRIPT_SUFFIXES)
+
+
+def transcribe_locally(folder: Path, video: Path, *, extra_args: list[str]) -> Path:
+  """Shell out to transcribe_recording.py, then re-discover the .vtt it wrote.
+
+  Kept as a subprocess rather than an import because that script optionally pulls
+  in torch/pyannote, and this one is deliberately stdlib-only. Running it under
+  `uv` when available means the heavy deps are fetched on demand instead of being
+  a hard requirement of the skill.
+  """
+  script = Path(__file__).resolve().parent / 'transcribe_recording.py'
+  if not script.is_file():
+    sys.exit(f'error: {script.name} is missing from the skill directory')
+
+  diarizing = '--no-diarize' not in extra_args
+  if diarizing and shutil.which('uv'):
+    # `uv run <script>` reads that script's PEP 723 header, so the pinned torch /
+    # pyannote set is resolved there rather than duplicated in this command.
+    command = ['uv', 'run', str(script)]
+  else:
+    command = [sys.executable, str(script)]
+  # Pass the resolved video, not the folder: both scripts pick "the" media out of a
+  # directory by their own rules, and a folder holding more than one would let them
+  # disagree -- producing a transcript of a different recording than the frames.
+  command += [str(video), *extra_args]
+
+  print(f'no transcript found in {folder.name}; transcribing {video.name} locally', file=sys.stderr)
+  print('  ' + ' '.join(command), file=sys.stderr)
+  if subprocess.run(command).returncode != 0:
+    sys.exit('error: local transcription failed (see above)')
+
+  _, transcript = discover_inputs(folder)
+  if transcript is None:
+    sys.exit('error: transcription reported success but wrote no .vtt')
+  return transcript
+
+
+def no_transcript_error(folder: Path) -> str:
+  """The message for a recording with no captions and no --transcribe."""
+  script = Path(__file__).resolve().parent / 'transcribe_recording.py'
+  return (
+    f'error: no transcript found in {folder} '
+    f'(looked for {", ".join(TRANSCRIPT_SUFFIXES)})\n'
+    '\n'
+    '  A caption export is much better than a machine transcript: it carries real\n'
+    '  speaker names. Try the platform first -- Teams, Zoom and Meet all export one.\n'
+    '\n'
+    '  Otherwise transcribe locally (nothing leaves this machine):\n'
+    f'    python3 {script} {folder}\n'
+    '  or let this script chain it for you:\n'
+    f'    python3 {Path(__file__).resolve()} {folder} --transcribe'
+  )
 
 
 def main() -> None:
@@ -486,12 +546,38 @@ def main() -> None:
     action='store_true',
     help='re-render the markdown transcript without touching frames',
   )
+  transcribe = parser.add_argument_group(
+    'local transcription',
+    'For a recording with no caption export. Runs whisper.cpp + pyannote on this '
+    'machine via transcribe_recording.py; nothing is uploaded.',
+  )
+  transcribe.add_argument(
+    '--transcribe',
+    action='store_true',
+    help='if no captions are found, transcribe the audio locally instead of failing',
+  )
+  transcribe.add_argument(
+    '--no-diarize',
+    action='store_true',
+    help='transcribe without speaker labels (no pyannote/torch); every turn unattributed',
+  )
+  transcribe.add_argument(
+    '--speakers', type=int, help='tell diarization the exact number of speakers, if known'
+  )
+  transcribe.add_argument(
+    '--whisper-model', type=Path, help='ggml Whisper model to transcribe with (.bin)'
+  )
+  transcribe.add_argument(
+    '--language', default=None, help="spoken language for transcription, or 'auto'"
+  )
   args = parser.parse_args()
 
   folder = args.meeting_dir.resolve()
   video, transcript = discover_inputs(folder)
   snapshot_dir = folder / SNAPSHOT_DIRNAME
 
+  # `--at` only pulls one frame, so it runs happily on a recording with no
+  # captions at all -- check for a transcript after this branch, not before.
   if args.at is not None:
     _require_tool('ffmpeg')
     seconds = parse_timestamp(args.at)
@@ -501,6 +587,20 @@ def main() -> None:
       sys.exit(1)
     print(out)
     return
+
+  if transcript is None:
+    if not args.transcribe:
+      sys.exit(no_transcript_error(folder))
+    passthrough: list[str] = []
+    if args.no_diarize:
+      passthrough.append('--no-diarize')
+    if args.speakers:
+      passthrough += ['--speakers', str(args.speakers)]
+    if args.whisper_model:
+      passthrough += ['--model', str(args.whisper_model)]
+    if args.language:
+      passthrough += ['--language', args.language]
+    transcript = transcribe_locally(folder, video, extra_args=passthrough)
 
   duration, source_width = probe_video(video)
   cues = parse_vtt(transcript.read_text(encoding='utf-8', errors='replace'))

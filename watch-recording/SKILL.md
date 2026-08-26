@@ -1,8 +1,8 @@
 ---
 name: watch-recording
-description: "Read and analyze a long video recording — a meeting, user-study session, interview, demo, or screen share — that is far too large to load into context, by pairing its transcript with a grid of timestamp-named frames you open only where the screen matters. Sets the recording folder up (one frame every N seconds plus a readable speaker-attributed transcript), then works through it: attributing every claim to a speaker, separating what people did from what they said they would do, and checking on-screen actions against the frames. Use whenever the user points at a recording (.mp4/.mov/.mkv plus .vtt/.srt captions) and asks what happened in it, what someone said or did, or to pull quotes, findings, or evidence out of a call — including writing the whole thing up as a report with cropped frames interleaved as evidence."
+description: "Read and analyze a long video recording — a meeting, user-study session, interview, demo, or screen share — that is far too large to load into context, by pairing its transcript with a grid of timestamp-named frames you open only where the screen matters. Sets the recording folder up (one frame every N seconds plus a readable speaker-attributed transcript), then works through it: attributing every claim to a speaker, separating what people did from what they said they would do, and checking on-screen actions against the frames. Use whenever the user points at a recording (.mp4/.mov/.mkv, with .vtt/.srt captions or none at all — it can transcribe and diarize locally) and asks what happened in it, what someone said or did, or to pull quotes, findings, or evidence out of a call — including writing the whole thing up as a report with cropped frames interleaved as evidence."
 argument-hint: [path to the recording folder, plus what you're looking for in it]
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash(python3:*), Bash(ffmpeg:*), Bash(ffprobe:*), Bash(ls:*), Bash(du:*), Bash(magick:*), Bash(command -v:*)
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash(python3:*), Bash(ffmpeg:*), Bash(ffprobe:*), Bash(whisper-cli:*), Bash(uv:*), Bash(ls:*), Bash(du:*), Bash(magick:*), Bash(command -v:*)
 ---
 
 # Watch a recording you can't load
@@ -35,8 +35,53 @@ pixels only where the screen is the point.
   back `(unattributed)`, which makes most of Step 4 impossible. If only an `.srt` exists, say so
   before starting: the analysis will be much weaker.
 - **ffmpeg + ffprobe** on PATH (`brew install ffmpeg`). Check with `command -v ffmpeg`.
-- No captions at all? Stop and say so. Transcribing audio is out of scope for this skill — get the
-  platform's caption export (Teams, Zoom, and Meet all have one), or transcribe separately first.
+- **No captions at all?** Transcribe locally — see the next section. Ask the user for the
+  platform's export first, though: it is strictly better, and free.
+
+### No captions: transcribe locally
+
+A platform export names the people who spoke. Nothing you can compute does. So **always ask for the
+export first** — Teams, Zoom and Meet all have one, and pulling it takes the user a minute. Only
+fall back when it genuinely does not exist (a QuickTime screen recording, a phone interview, a
+partner who never enabled captions).
+
+The fallback runs entirely on this machine — no audio is uploaded anywhere, which is the whole
+reason it is local and worth saying out loud to the user:
+
+```bash
+python3 ~/.claude/skills/watch-recording/setup_meeting_snapshots.py <recording-dir> --transcribe
+```
+
+That chains `transcribe_recording.py`, which does two separate jobs with two separate models:
+**whisper.cpp** turns audio into timestamped words, and **pyannote** decides who was speaking when.
+Whisper alone cannot do the second job — it has no notion of speakers — and without it every turn
+lands `(unattributed)` and Step 4 collapses. Speakers are assigned per *word* and grouped
+afterwards, because one natural Whisper segment happily spans a speaker change.
+
+Pass `--speakers N` whenever the user knows the count. It measurably improves the clustering, and
+they almost always know.
+
+**Then treat the result as a weaker source than an export, for the rest of the analysis:**
+
+| | |
+| --- | --- |
+| Labels are `SPEAKER_00`, not names | Map them to people by reading the transcript — self-introductions, who gets addressed by name, who owns which project. **Say which mapping you inferred and what it rests on.** An unmappable speaker stays `SPEAKER_02`; do not guess. |
+| Words can be wrong | Whisper mishears names, jargon and product terms especially. Before quoting a line that carries real weight, re-listen to that moment (`--at HH:MM:SS` gets you the frame; the audio is in the source file) or flag the quote as machine-transcribed. |
+| Boundaries can be wrong | Diarization splits and merges people imperfectly, most often in crosstalk. A turn that reads oddly — one speaker answering their own question — is usually a mis-split, not a person being strange. |
+| Say so in the report | State in the write-up that the transcript is machine-generated, and which model produced it. A reader who thinks these are real names and verbatim words will over-trust every quote in it. |
+
+Options worth knowing: `--no-diarize` skips pyannote entirely (needs no `torch`, gives no speakers —
+only worth it for a single-speaker recording), `--whisper-model` points at a specific `.bin`, and
+`--language auto` handles a non-English call. Run `transcribe_recording.py` directly for the full
+set. Run it directly as `uv run ~/.claude/skills/watch-recording/transcribe_recording.py <dir>` —
+its dependencies are declared in the script's own PEP 723 header, so there is no `--with` chain to
+get right.
+
+**Requirements.** `whisper-cli` (`brew install whisper-cpp`) and, for diarization, `uv` plus a
+HuggingFace token with the gated [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)
+conditions accepted. A Whisper model is found automatically if one is already on the machine
+(including the `large-v3-turbo` that OpenSuperWhisper ships) and downloaded only if none is.
+Transcription is not fast — budget a few minutes per hour of audio — so start it and say so.
 
 ---
 
@@ -470,6 +515,35 @@ Rules for the ledger:
 | `--transcript-only` | Re-render `transcript.md` without touching frames. |
 | `--force` | Re-extract existing frames and overwrite the README. |
 | `--jobs N` | Parallel ffmpeg calls (default 8). |
+| `--transcribe` | No captions in the folder? Transcribe locally instead of failing. |
+| `--no-diarize` | With `--transcribe`: skip speaker labelling (no `torch`; every turn unattributed). |
+| `--speakers N` | With `--transcribe`: tell diarization the speaker count. Use it whenever known. |
+| `--whisper-model` / `--language` | With `--transcribe`: pick a specific `.bin`, or a non-English language. |
+
+`transcribe_recording.py` takes the same transcription flags plus `--min-speakers` / `--max-speakers`
+(when the count is a range, not a number), `--force` to replace an existing `.vtt`, and `--keep-wav`
+to retain the decoded audio for re-listening.
+
+### Why transcription is built the way it is
+
+- **Two models, two jobs.** whisper.cpp produces words; pyannote produces speakers. Whisper has no
+  concept of a speaker, so without the second model the attribution analysis in Step 4 is
+  impossible, not merely degraded.
+- **Speakers are assigned per word, then grouped.** One natural Whisper segment routinely spans a
+  speaker change ("…so we shipped it — wait, did we?" is one segment, two people). Whisper runs with
+  `-ml 1 -sow` for one segment per word; each word takes the speaker whose turn contains its
+  **midpoint** (edges bleed into the neighbour), and cues are formed afterwards. So a cue boundary
+  lands where the speaker actually changed.
+- **A model already on the machine is reused.** It looks through the usual whisper.cpp locations and
+  OpenSuperWhisper's model directory before downloading anything, and skips brew's
+  `for-tests-ggml-tiny.bin` stub, which loads happily and emits garbage.
+- **pyannote is handed a decoded waveform, not a path.** Its file-decoding stack
+  (torchaudio/torchcodec) is a compiled extension that must match the torch ABI exactly and fails
+  with an unreadable `.dylib` error when it doesn't. The script already made a known-format WAV with
+  ffmpeg, so it reads that with the stdlib and skips the problem.
+- **The provenance is written into the `.vtt` itself**, as a `NOTE` naming both models. A transcript
+  that gets copied around should carry the fact that its words may be misheard and its speaker
+  labels are guesses.
 
 ### Why the defaults are what they are
 
@@ -484,11 +558,15 @@ Rules for the ledger:
 
 ### Tests
 
-The timestamp math and the caption parsing are pinned:
+The timestamp math, the caption parsing, and the transcription seams are pinned:
 
 ```bash
 cd ~/.claude/skills/watch-recording && uv run --with pytest python -m pytest tests/ -q
 ```
 
 They cover the real-world traits that break naive parsers — CRLF exports, speaker names containing
-commas and parens, cues wrapped mid-sentence, interleaved speakers, and overlapping cue times.
+commas and parens, cues wrapped mid-sentence, interleaved speakers, and overlapping cue times — plus
+the transcription fallback's own seams: merging a speaker timeline onto word timings, model
+discovery, and a **round-trip** proving that a `.vtt` this skill generates parses back through the
+same reader a Teams export goes through. No test runs Whisper or pyannote — the models are slow and
+big, and the inference is not what breaks.

@@ -348,6 +348,54 @@ class TestDiscoverInputs:
     _, transcript = mod.discover_inputs(tmp_path)
     assert transcript.suffix == '.srt'
 
+  def test_missing_transcript_is_not_fatal(self, tmp_path):
+    """A caption-less recording can still be transcribed, so this returns None.
+
+    It used to exit here, which dead-ended every recording without a platform
+    caption export. The caller decides now.
+    """
+    (tmp_path / 'video.mp4').write_bytes(b'x')
+    video, transcript = mod.discover_inputs(tmp_path)
+    assert video.name == 'video.mp4'
+    assert transcript is None
+
+
+class TestTranscribeLocally:
+  """The chain into transcribe_recording.py.
+
+  The signature matters more than it looks: both scripts pick "the" media out of a
+  folder by their own rules, so the video must be passed through explicitly rather
+  than re-discovered, or a folder with two recordings yields a transcript of one
+  and frames of the other.
+  """
+
+  def test_takes_the_resolved_video_not_just_the_folder(self):
+    import inspect
+
+    params = list(inspect.signature(mod.transcribe_locally).parameters)
+    assert params[:2] == ['folder', 'video']
+
+
+class TestNoTranscriptError:
+  """The message a caption-less recording produces without --transcribe.
+
+  It is the only place the user learns the fallback exists, so it must name the
+  command rather than just complaining.
+  """
+
+  def test_points_at_the_caption_export_first(self, tmp_path):
+    message = mod.no_transcript_error(tmp_path)
+    assert 'Teams' in message and 'speaker names' in message
+
+  def test_gives_both_runnable_commands(self, tmp_path):
+    message = mod.no_transcript_error(tmp_path)
+    assert 'transcribe_recording.py' in message
+    assert '--transcribe' in message
+
+  def test_says_the_audio_stays_local(self, tmp_path):
+    message = mod.no_transcript_error(tmp_path)
+    assert 'leaves this machine' in message
+
 
 class TestParseSrt:
   """SRT support is incidental -- same block layout, comma decimals, no <v> tags."""
