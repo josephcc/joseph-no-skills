@@ -115,7 +115,8 @@ call started. I kept hand-scrubbing the video to check single moments against si
 
 `watch-recording` turns the recording into something readable. One ffmpeg frame every 10 seconds,
 each **named after its own timestamp**, plus the captions rendered as a speaker-attributed
-transcript — so the transcript becomes an index into the video. Read a line, take its `[HH:MM:SS]`,
+transcript — or, when there are no captions, one transcribed and diarized locally — so the
+transcript becomes an index into the video. Read a line, take its `[HH:MM:SS]`,
 floor it to the interval, open `video-snapshots/HH-MM-SS.jpg`. You read the whole meeting as text
 and spend pixels where the screen carries the argument — a frame is ~1.8k tokens, so the skill
 pushes the agent to open **tens** of them and to log every one.
@@ -136,14 +137,27 @@ pushes the agent to open **tens** of them and to log every one.
 - **Notices dead air** — recordings keep rolling on empty rooms (one ran 21 min past the last
   word); the generated docs say so, so blank frames don't read as a broken extraction.
 - **No captions? It transcribes locally** — a QuickTime capture or a phone interview has no export
-  to pull. `--transcribe` runs **whisper.cpp** for the words and **pyannote** for who said them, all
-  on your machine, and writes a `.vtt` the normal path already reads. Whisper alone has no concept
-  of a speaker, so the second model isn't a nicety — without it every turn is `(unattributed)` and
-  the attribution analysis is impossible. Speakers are assigned **per word** and grouped afterwards,
-  because one Whisper segment happily spans a speaker change. A model already on the machine gets
-  reused before anything is downloaded, and the generated `.vtt` carries a `NOTE` saying the words
-  may be misheard and the labels are guesses — a machine transcript shouldn't launder itself into
-  looking like a real export.
+  to pull. `--transcribe` runs **whisper.cpp** for the words and **pyannote** for who said them,
+  entirely on your machine, and writes a `.vtt` the normal path already reads — so a machine
+  transcript and a Teams export flow through identical code (a round-trip test pins that, because a
+  silent disagreement there would yield an empty transcript rather than an error). Whisper alone has
+  no concept of a speaker, so pyannote isn't a nicety: without it every turn is `(unattributed)` and
+  the attribution analysis is impossible, not merely weaker. Speakers are assigned **per word** and
+  grouped afterwards, because one Whisper segment happily spans a speaker change. `--no-diarize`
+  drops to ffmpeg + whisper alone, no `torch`, when the recording has one voice anyway.
+- **But it asks for the platform's export first** — an export has real *names*; nothing computed
+  locally can produce those. So local transcription is the fallback, not the default, and the skill
+  is built to say so. A generated `.vtt` carries a `NOTE` naming both models and warning that the
+  words may be misheard and `SPEAKER_00` is a clustering guess — a machine transcript shouldn't
+  launder itself into looking like a real export — and the analysis rules downgrade it accordingly:
+  map labels to people and show your reasoning, re-listen before quoting, say so in the report.
+- **The artifact I chose not to hide** — per-word attribution sometimes leaves a sub-second one-word
+  turn inside someone else's stretch (`[00:00:14] SPEAKER_01: ask`), where the boundary landed a word
+  late. Smoothing them away would have scored 88/88 instead of 86/88 on a deliberately hostile test
+  — one voice pitch-shifted into a second, both saying identical words, four hard cuts. I left them:
+  real backchannel — "yeah", "right", "no, wait" — has the identical shape, and *who pushed
+  back* is often the entire point of reading a meeting. So the skill documents the signature and
+  tells you to treat a one-word island as unverified, rather than quietly deciding for you.
 - **Ends in a report, not a chat message** — it hands off to [`interactive-plan`](#-interactive-plan--read--comment-on-plans-like-a-google-doc):
   the meeting's contested claims become findings, open questions and decisions you can answer in
   the viewer, with frames **cropped and inlined at their use sites** (quote → image → what the
