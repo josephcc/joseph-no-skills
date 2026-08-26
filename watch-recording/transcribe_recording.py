@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -116,6 +117,18 @@ CUE_MAX_DURATION = 12.0
 
 HF_TOKEN_FILE = Path.home() / '.cache/huggingface/token'
 DIARIZATION_MODEL = 'pyannote/speaker-diarization-3.1'
+
+# Loading one pipeline pulls several repos, and which ones changed between
+# pyannote majors: 3.x resolves its embeddings from wespeaker-*, while 4.x reaches
+# into speaker-diarization-community-1 for xvec_transform.npz. Each is separately
+# gated, so a token that opens the pipeline's own repo can still be refused
+# downstream. Listed here only as a fallback for when the error names none.
+GATED_REPOS = (
+  'pyannote/speaker-diarization-3.1',
+  'pyannote/segmentation-3.0',
+  'pyannote/speaker-diarization-community-1',
+)
+REPO_RE = re.compile(r'\b(pyannote/[A-Za-z0-9._-]+)')
 
 
 @dataclass
@@ -367,19 +380,25 @@ def load_pipeline(token: str):
   raise RuntimeError('; '.join(errors))
 
 
-def gate_help() -> str:
-  """The instructions for an unaccepted gated model, which is the usual failure.
+def gate_help(message: str = '') -> str:
+  """Instructions for an unaccepted gated model, naming the repos actually refused.
 
-  Worth spelling out because a valid token is not sufficient and the distinction
-  is invisible from the API: repo *metadata* reads fine without access, so only
-  fetching a file reveals that the conditions were never accepted.
+  Worth the parsing: a valid token is not sufficient, and the distinction is
+  invisible from the API -- repo *metadata* reads fine without access, so only
+  fetching a file reveals the conditions were never accepted. And the repo that
+  gets refused is often not the one you asked for, because loading a pipeline
+  pulls its segmentation and embedding models from separate gated repos.
   """
+  named = [repo for repo in dict.fromkeys(REPO_RE.findall(message)) if repo]
+  repos = named or list(GATED_REPOS)
+  listed = '\n'.join(f'    https://huggingface.co/{repo}' for repo in repos)
   return (
-    f'  {DIARIZATION_MODEL} is gated, and a valid token is not enough on its own --\n'
-    '  the model conditions have to be accepted by your account. While logged in, open\n'
-    f'    https://huggingface.co/{DIARIZATION_MODEL}\n'
-    '    https://huggingface.co/pyannote/segmentation-3.0\n'
-    '  accept the conditions on both, then re-run. Both are free and instant.\n'
+    '  These are gated models, and a valid token is not enough on its own -- the\n'
+    '  conditions have to be accepted by your account. While logged in, open:\n'
+    f'{listed}\n'
+    '  accept the conditions on each, then re-run. They are free and instant.\n'
+    '  Note that one pipeline pulls several repos, so a second run can be refused\n'
+    '  by a different one; accept whichever it names.\n'
     '  Or pass --no-diarize to transcribe now without speaker labels.'
   )
 
@@ -397,7 +416,7 @@ def run_diarization(
   """
   try:
     import torch
-  except ImportError:
+  except Exception:  # noqa: BLE001 - a broken wheel raises more than ImportError
     sys.exit(
       'error: diarization needs pyannote.audio and torch, which are declared in this\n'
       "  script's PEP 723 header. Run it under uv so they are fetched on demand:\n"
@@ -406,10 +425,17 @@ def run_diarization(
     )
   try:
     import pyannote.audio  # noqa: F401
-  except ImportError as exc:
+  except Exception as exc:  # noqa: BLE001 - see below
+    # Deliberately broad. A version-mismatched install does not fail with
+    # ImportError: pyannote 3.x against a modern torchaudio raises AttributeError
+    # on `torchaudio.AudioMetaData` at import time, and a torch/torchaudio ABI
+    # mismatch raises OSError on a .dylib. Letting any of those through as a
+    # traceback tells the user nothing about what to do.
     sys.exit(
-      f'error: torch is installed but pyannote.audio is not usable: {exc}\n'
-      '  Run under uv so the pinned dependency set is used:\n'
+      f'error: torch is installed but pyannote.audio is not usable:\n'
+      f'    {type(exc).__name__}: {exc}\n'
+      '  This is almost always a version mismatch. Run under uv so the pinned set\n'
+      "  in this script's PEP 723 header is used, rather than whatever is on PATH:\n"
       '    uv run transcribe_recording.py <dir>\n'
       '  Or pass --no-diarize to transcribe without speaker labels.'
     )
@@ -431,9 +457,12 @@ def run_diarization(
     message = str(exc)
     # A 403 here means the token works but the conditions were never accepted --
     # by far the most common way this fails, and the least self-explanatory.
-    if '403' in message or 'gated' in message.lower() or 'authorized' in message.lower():
-      sys.exit(f'error: access to {DIARIZATION_MODEL} was refused.\n{gate_help()}')
-    sys.exit(f'error: could not load {DIARIZATION_MODEL}: {message}\n{gate_help()}')
+    gated = '403' in message or 'gated' in message.lower() or 'authorized' in message.lower()
+    if gated or 'Could not download' in message:
+      refused = REPO_RE.findall(message)
+      what = refused[0] if refused else DIARIZATION_MODEL
+      sys.exit(f'error: access to {what} was refused.\n{gate_help(message)}')
+    sys.exit(f'error: could not load {DIARIZATION_MODEL}: {message}\n{gate_help(message)}')
 
   # Apple Silicon: MPS is markedly faster than CPU here, but some pyannote ops
   # still fall back, so a failure to move must not be fatal.

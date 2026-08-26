@@ -205,6 +205,74 @@ class TestRenderVtt:
     assert '<v ' not in out.split('NOTE')[-1].split('\n\n', 1)[-1]
 
 
+class TestGateHelp:
+  """The gated-model message, which is the most likely thing a user ever sees.
+
+  Loading one pipeline pulls several separately-gated repos, and which ones
+  changed between pyannote 3.x and 4.x -- so the message reads the failure rather
+  than reciting a hardcoded list that goes stale.
+  """
+
+  def test_names_the_repo_the_error_actually_blamed(self):
+    message = (
+      'Could not download xvec_transform.npz from '
+      'pyannote/speaker-diarization-community-1.'
+    )
+    out = tr.gate_help(message)
+    assert 'pyannote/speaker-diarization-community-1' in out
+
+  def test_does_not_recite_unrelated_repos_when_one_is_named(self):
+    """Sending someone to accept a licence that was not the problem wastes a trip."""
+    message = 'Could not download config.yaml from pyannote/segmentation-3.0.'
+    out = tr.gate_help(message)
+    assert 'pyannote/segmentation-3.0' in out
+    assert 'community-1' not in out
+
+  def test_lists_every_known_repo_when_the_error_names_none(self):
+    out = tr.gate_help('some opaque failure')
+    for repo in tr.GATED_REPOS:
+      assert repo in out
+
+  def test_deduplicates_a_repo_mentioned_repeatedly(self):
+    message = 'pyannote/segmentation-3.0 failed; retry pyannote/segmentation-3.0'
+    out = tr.gate_help(message)
+    assert out.count('https://huggingface.co/pyannote/segmentation-3.0') == 1
+
+  def test_warns_that_a_rerun_can_be_refused_by_a_different_repo(self):
+    """Accepting one licence and re-running often surfaces the next gate."""
+    out = tr.gate_help('pyannote/segmentation-3.0')
+    assert 'different one' in out
+
+  def test_always_offers_the_no_diarize_escape(self):
+    assert '--no-diarize' in tr.gate_help('anything')
+
+  def test_says_a_token_alone_is_insufficient(self):
+    """The failure is invisible from the API, so this has to be spelled out."""
+    assert 'not enough on its own' in tr.gate_help('anything')
+
+
+class TestBrokenInstallGuards:
+  """A mismatched pyannote/torch install must produce advice, not a traceback.
+
+  This is not hypothetical: pyannote 3.x against a modern torchaudio raises
+  AttributeError at import time, and a torch/torchaudio ABI mismatch raises
+  OSError on a .dylib -- neither is an ImportError.
+  """
+
+  def test_import_guard_catches_more_than_importerror(self):
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(tr.run_diarization))
+    caught = [
+      handler.type.id
+      for handler in ast.walk(tree)
+      if isinstance(handler, ast.ExceptHandler) and isinstance(handler.type, ast.Name)
+    ]
+    assert 'ImportError' not in caught, 'ImportError alone misses AttributeError/OSError'
+    assert 'Exception' in caught
+
+
 class TestRoundTripThroughTheRealParser:
   """The contract: what this script writes, setup_meeting_snapshots.py must read.
 

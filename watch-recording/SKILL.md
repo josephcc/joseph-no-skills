@@ -78,8 +78,14 @@ its dependencies are declared in the script's own PEP 723 header, so there is no
 get right.
 
 **Requirements.** `whisper-cli` (`brew install whisper-cpp`) and, for diarization, `uv` plus a
-HuggingFace token with the gated [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)
-conditions accepted. A Whisper model is found automatically if one is already on the machine
+HuggingFace token (`hf auth login`). The pyannote models are gated: loading one pipeline pulls
+**three** separately-gated repos, so accept the conditions on all of them —
+[`speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1),
+[`segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) and
+[`speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1)
+(the last is where pyannote 4.x reads its embedding transform). All free and instant. Accepting only
+some means the first run fails partway with a 403 naming a repo you have not accepted yet; the
+script prints whichever one it was. A Whisper model is found automatically if one is already on the machine
 (including the `large-v3-turbo` that OpenSuperWhisper ships) and downloaded only if none is.
 Transcription is not fast — budget a few minutes per hour of audio — so start it and say so.
 

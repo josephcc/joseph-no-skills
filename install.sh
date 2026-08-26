@@ -54,4 +54,6 @@ echo "  codex-audit      : OpenAI Codex CLI (brew install codex; codex login) + 
 echo "  write-like-joseph: populate the gitignored examples/ corpus locally (not distributed)."
 echo "  watch-recording  : ffmpeg + ffprobe on PATH (brew install ffmpeg)."
 echo "                     no-captions fallback also wants: brew install whisper-cpp, uv,"
-echo "                     and a HF token with the gated pyannote models accepted."
+echo "                     and a HF token with all three gated pyannote repos accepted"
+echo "                     (speaker-diarization-3.1, segmentation-3.0,"
+echo "                      speaker-diarization-community-1)."
