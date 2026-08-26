@@ -205,6 +205,57 @@ class TestRenderVtt:
     assert '<v ' not in out.split('NOTE')[-1].split('\n\n', 1)[-1]
 
 
+class TestExtractTurns:
+  """Unwrapping the pipeline result, which changed shape between pyannote majors.
+
+  Testable without the model because the only thing that matters is the shape:
+  4.x returns a DiarizeOutput wrapping two Annotations, 3.x returned a bare one.
+  """
+
+  class FakeSegment:
+    def __init__(self, start, end):
+      self.start, self.end = start, end
+
+  class FakeAnnotation:
+    def __init__(self, tracks):
+      self._tracks = tracks
+
+    def itertracks(self, yield_label=False):
+      for start, end, label in self._tracks:
+        yield TestExtractTurns.FakeSegment(start, end), None, label
+
+  def test_reads_a_bare_annotation(self):
+    """pyannote 3.x handed back the Annotation itself."""
+    out = tr.extract_turns(self.FakeAnnotation([(0.0, 1.0, 'S0')]))
+    assert [(t.start, t.end, t.speaker) for t in out] == [(0.0, 1.0, 'S0')]
+
+  def test_prefers_the_exclusive_annotation(self):
+    """A word gets exactly one speaker, so overlapping turns make it arbitrary."""
+
+    class FakeOutput:
+      exclusive_speaker_diarization = TestExtractTurns.FakeAnnotation([(0.0, 1.0, 'EXCLUSIVE')])
+      speaker_diarization = TestExtractTurns.FakeAnnotation([(0.0, 1.0, 'OVERLAPPING')])
+
+    assert tr.extract_turns(FakeOutput()).pop().speaker == 'EXCLUSIVE'
+
+  def test_falls_back_to_the_plain_annotation(self):
+    class FakeOutput:
+      exclusive_speaker_diarization = None
+      speaker_diarization = TestExtractTurns.FakeAnnotation([(2.0, 3.0, 'S1')])
+
+    assert tr.extract_turns(FakeOutput()).pop().speaker == 'S1'
+
+  def test_sorts_turns_chronologically(self):
+    """Attribution scans this timeline, and pyannote does not promise an order."""
+    out = tr.extract_turns(self.FakeAnnotation([(5.0, 6.0, 'S1'), (0.0, 1.0, 'S0')]))
+    assert [t.start for t in out] == [0.0, 5.0]
+
+  def test_an_unrecognized_shape_exits_with_advice(self):
+    """Better a clear message than an AttributeError deep in the call stack."""
+    with pytest.raises(SystemExit):
+      tr.extract_turns(object())
+
+
 class TestGateHelp:
   """The gated-model message, which is the most likely thing a user ever sees.
 

@@ -403,6 +403,34 @@ def gate_help(message: str = '') -> str:
   )
 
 
+def extract_turns(output) -> list[SpeakerTurn]:
+  """Pull speaker turns out of whatever shape the pipeline returned.
+
+  pyannote 4.x returns a `DiarizeOutput` holding two Annotations; 3.x returned a
+  bare Annotation. Prefer `exclusive_speaker_diarization`, which pyannote
+  documents as "adapted to downstream transcription" because it has no
+  overlapping turns -- and a word can only be given to one speaker, so a
+  timeline where two turns cover the same instant makes the choice arbitrary.
+  """
+  annotation = getattr(output, 'exclusive_speaker_diarization', None)
+  if annotation is None:
+    annotation = getattr(output, 'speaker_diarization', None)
+  if annotation is None:
+    annotation = output
+  if not hasattr(annotation, 'itertracks'):
+    sys.exit(
+      f'error: unexpected diarization result of type {type(output).__name__}.\n'
+      '  This usually means pyannote changed its return shape. Re-run under uv so\n'
+      "  the version pinned in this script's PEP 723 header is used."
+    )
+  turns = [
+    SpeakerTurn(start=segment.start, end=segment.end, speaker=label)
+    for segment, _, label in annotation.itertracks(yield_label=True)
+  ]
+  turns.sort(key=lambda t: t.start)
+  return turns
+
+
 def run_diarization(
   wav: Path,
   *,
@@ -482,13 +510,7 @@ def run_diarization(
       constraints['max_speakers'] = max_speakers
 
   waveform, rate = load_waveform(wav)
-  annotation = pipeline({'waveform': waveform, 'sample_rate': rate}, **constraints)
-  turns = [
-    SpeakerTurn(start=segment.start, end=segment.end, speaker=label)
-    for segment, _, label in annotation.itertracks(yield_label=True)
-  ]
-  turns.sort(key=lambda t: t.start)
-  return turns
+  return extract_turns(pipeline({'waveform': waveform, 'sample_rate': rate}, **constraints))
 
 
 def attribute_words(words: list[Word], turns: list[SpeakerTurn]) -> None:
