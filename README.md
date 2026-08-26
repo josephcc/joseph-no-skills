@@ -3,7 +3,7 @@
 > Personal [Claude Code](https://claude.com/claude-code) skills, each built to kill a specific bit
 > of friction in how I actually work with coding agents.
 
-Three skills today, in a layout that lets me drop in more. Each top-level directory is one
+Four skills today, in a layout that lets me drop in more. Each top-level directory is one
 self-contained skill; install once and Claude Code auto-loads them in any repo.
 
 | Skill | One-liner |
@@ -11,6 +11,7 @@ self-contained skill; install once and Claude Code auto-loads them in any repo.
 | [**`interactive-plan`**](#-interactive-plan--read--comment-on-plans-like-a-google-doc) | Turn long planning docs into an interactive web page — answer questions, pick options, and comment Google-Docs-style; feedback round-trips into the same `.md`. |
 | [**`codex-audit`**](#-codex-audit--a-second-pair-of-eyes-on-your-diff-triaged-with-judgment) | Have the OpenAI Codex CLI audit your diff, then triage its report with independent judgment — verify each finding, reject false positives, fix what's real. |
 | [**`write-like-joseph`**](#-write-like-joseph--paper-prose-in-my-voice-not-an-llms) | Draft and revise academic-paper sections in my writing voice, grounded in section-by-section examples from my published papers (the examples themselves are local-only, not in the repo). |
+| [**`watch-recording`**](#-watch-recording--read-an-hour-long-meeting-you-cant-load) | "Watch" a recording that is far too large to load — read its transcript, and open only the handful of timestamp-named frames where the screen is the point. |
 
 ---
 
@@ -104,6 +105,45 @@ by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qual
 
 ---
 
+## 🎬 `watch-recording` — read an hour-long meeting you can't load
+
+**Why I built it.** I record partner meetings and user sessions, and the useful ones are an hour
+of someone driving our tool while talking. The video is 400 MB — no agent is loading that — and the
+transcript, which *is* cheap to read, is **blind to the screen**. Half of what matters is in the
+gap: the number read off a panel, the thing actually clicked, the filter already engaged before the
+call started. I kept hand-scrubbing the video to check single moments against single lines.
+
+`watch-recording` turns the recording into something readable. One ffmpeg frame every 10 seconds,
+each **named after its own timestamp**, plus the captions rendered as a speaker-attributed
+transcript — so the transcript becomes an index into the video. Read a line, take its `[HH:MM:SS]`,
+floor it to the interval, open `video-snapshots/HH-MM-SS.jpg`. You read the whole meeting as text
+and spend pixels where the screen carries the argument — a frame is ~1.8k tokens, so the skill
+pushes the agent to open **tens** of them and to log every one.
+
+**Highlights**
+- **Derivable mapping, by design** — uniform sampling and input-side `-ss` seeking mean a frame's
+  filename *is* its seek target; no index arithmetic to drift, and you can floor a timestamp to a
+  filename in your head. `--at HH:MM:SS` is the escape hatch for a full-resolution exact moment.
+- **The analysis rules are the skill.** Modal verbs aren't actions ("I *would* start by…" is not a
+  thing someone did); check who raised a topic before crediting discovery; a room-mic label is
+  several people; presence isn't participation. Each one is a correction a real first pass made —
+  all of them in the subject's favour, which is the direction this work drifts.
+- **Cheap triage** — JPEG file size tracks visual complexity, so `ls -l` alone localizes the
+  screen-share stretches (~9 KB blank room, ~46 KB faces, 90–200 KB busy screen) without loading a
+  single image.
+- **Self-documenting folders** — it seeds a `README.md` explaining the lookup rule, so a session
+  handed only the directory can work it out; re-runs skip existing frames and never eat your notes.
+- **Notices dead air** — recordings keep rolling on empty rooms (one ran 21 min past the last
+  word); the generated docs say so, so blank frames don't read as a broken extraction.
+- **Ends in a report, not a chat message** — it hands off to [`interactive-plan`](#-interactive-plan--read--comment-on-plans-like-a-google-doc):
+  the meeting's contested claims become findings, open questions and decisions you can answer in
+  the viewer, with frames **cropped and inlined at their use sites** (quote → image → what the
+  image proves) rather than dumped in an appendix.
+- **A frame ledger closes every report** — every frame the agent opened, why, and what it showed,
+  *including the duds*. You get to audit the sampling, not just the conclusions.
+
+---
+
 ## Install
 
 ```bash
@@ -121,6 +161,7 @@ directory (so it won't clobber a skill you've edited in place). To install a sub
 - `interactive-plan` — [Bun](https://bun.sh) (the viewer is a Vite/React app + a small Node daemon; first launch runs `bun install` + build automatically). Optional: an editor CLI for click-to-open refs (defaults to Zed; see `interactive-plan/config.json`).
 - `codex-audit` — the [OpenAI Codex CLI](https://github.com/openai/codex) (`brew install codex`, then `codex login`) and a git repo.
 - `write-like-joseph` — no tooling, but the gitignored `examples/` corpus must be populated locally from your own papers before it can imitate anyone.
+- `watch-recording` — [ffmpeg](https://ffmpeg.org) on PATH (`brew install ffmpeg`), plus a recording folder holding a video and its `.vtt` captions. Optional: ImageMagick, to crop a frame for use as a figure.
 
 ## Wire the skills into a repo
 

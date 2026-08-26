@@ -2,6 +2,10 @@
 node_modules/
 dist/
 
+# python test cruft (watch-recording ships a pytest suite)
+__pycache__/
+.pytest_cache/
+
 # logs & OS cruft
 *.log
 .DS_Store
@@ -9,3 +13,4 @@ dist/
 # write-like-joseph: personal writing exemplars, not for distribution
 write-like-joseph/examples/
 write-like-joseph-workspace/
+watch-recording-workspace/

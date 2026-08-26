@@ -12,6 +12,7 @@ SKILLS=(
   interactive-plan
   codex-audit
   write-like-joseph
+  watch-recording
 )
 
 mkdir -p "${DEST_DIR}"
@@ -51,3 +52,4 @@ echo "Per-skill requirements:"
 echo "  interactive-plan : bun (https://bun.sh); first launch installs deps + builds the viewer."
 echo "  codex-audit      : OpenAI Codex CLI (brew install codex; codex login) + a git repo."
 echo "  write-like-joseph: populate the gitignored examples/ corpus locally (not distributed)."
+echo "  watch-recording  : ffmpeg + ffprobe on PATH (brew install ffmpeg)."
