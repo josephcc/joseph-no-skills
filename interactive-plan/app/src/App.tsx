@@ -282,10 +282,27 @@ export function App() {
     }
     const hl = target.closest('.ip-hl') as HTMLElement | null;
     if (hl?.dataset.comment) {
+      // Clicking the already-selected highlight deselects; otherwise select and bring its card into view.
+      if (activeComment === hl.dataset.comment) {
+        setActiveComment(null);
+        return;
+      }
       setActiveComment(hl.dataset.comment);
       document.getElementById(`comment-${hl.dataset.comment}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
+
+  // Keep the selected highlight(s) and their card in one visible "selected" state. A comment
+  // may have several anchors (a span plus a ◆ target), so mark every mark that carries its id.
+  // Re-run after every content change too: the prose is re-rendered from HTML and loses classes.
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    root.querySelectorAll('.ip-hl.ip-hl-active').forEach((el) => el.classList.remove('ip-hl-active'));
+    if (activeComment) {
+      root.querySelectorAll(`.ip-hl[data-comment="${activeComment}"]`).forEach((el) => el.classList.add('ip-hl-active'));
+    }
+  }, [activeComment, content]);
 
   function activateComment(id: string) {
     setActiveComment(id);

@@ -255,6 +255,22 @@ body {
   background: transparent;
   border-bottom: 1px dotted var(--asta-gray-40);
 }
+/* Selected: the highlight and its comment card share one teal "selected" state, distinct from
+   the amber of unselected highlights, so the pair reads as one thing across the page and the rail. */
+.ip-hl.ip-hl-active,
+.ip-hl.ip-hl-active[data-kind='error'],
+.ip-hl.ip-hl-active.ip-hl-resolved {
+  background: #cfe7e5;
+  border-bottom: 2px solid var(--asta-teal);
+  box-shadow: 0 0 0 2px rgba(16, 82, 87, 0.18);
+  color: var(--asta-dark-teal);
+}
+.ip-hl-target.ip-hl-active {
+  background: none;
+  box-shadow: none;
+  color: var(--asta-teal);
+  text-shadow: 0 0 6px rgba(16, 82, 87, 0.45);
+}
 /* ◆ target marker — an anchor for content a span can't reliably wrap */
 .ip-hl-target {
   background: none;
@@ -722,9 +738,11 @@ body {
   cursor: pointer;
   font-size: 0.86rem;
 }
-.ip-comment-active {
-  border-left-color: var(--asta-green);
-  box-shadow: 0 0 0 2px var(--asta-green-20);
+.ip-comment-active,
+.ip-comment-active.ip-kind-error {
+  border-left-color: var(--asta-teal);
+  background: #eef6f5;
+  box-shadow: 0 0 0 2px var(--asta-teal-40), var(--shadow);
 }
 .ip-kind-error {
   border-left-color: var(--asta-error);
