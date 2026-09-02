@@ -14,3 +14,7 @@ __pycache__/
 write-like-joseph/examples/
 write-like-joseph-workspace/
 watch-recording-workspace/
+
+# thematic-analysis: Braun & Clarke (2006) PDF + extracted text are copyrighted; not distributed
+thematic-analysis/source/
+thematic-analysis-workspace/

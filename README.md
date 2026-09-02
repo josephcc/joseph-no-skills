@@ -3,7 +3,7 @@
 > Personal [Claude Code](https://claude.com/claude-code) skills, each built to kill a specific bit
 > of friction in how I actually work with coding agents.
 
-Four skills today, in a layout that lets me drop in more. Each top-level directory is one
+Five skills today, in a layout that lets me drop in more. Each top-level directory is one
 self-contained skill; install once and Claude Code auto-loads them in any repo.
 
 | Skill | One-liner |
@@ -12,6 +12,7 @@ self-contained skill; install once and Claude Code auto-loads them in any repo.
 | [**`codex-audit`**](#-codex-audit--a-second-pair-of-eyes-on-your-diff-triaged-with-judgment) | Have the OpenAI Codex CLI audit your diff, then triage its report with independent judgment — verify each finding, reject false positives, fix what's real. |
 | [**`write-like-joseph`**](#-write-like-joseph--paper-prose-in-my-voice-not-an-llms) | Draft and revise academic-paper sections in my writing voice, grounded in section-by-section examples from my published papers (the examples themselves are local-only, not in the repo). |
 | [**`watch-recording`**](#-watch-recording--read-an-hour-long-meeting-you-cant-load) | "Watch" a recording that is far too large to load — read its transcript, and open only the handful of timestamp-named frames where the screen is the point. |
+| [**`thematic-analysis`**](#-thematic-analysis--braun--clarke-coding-with-the-books-kept) | Code interview transcripts the Braun & Clarke way, interview by interview, negotiating every code, theme, and quote in the plan viewer; every quote is copied from the transcript by script and re-verified, and coverage is computed, not estimated. |
 
 ---
 
@@ -41,6 +42,7 @@ highlighted span — threads you and the agent can both reply to and resolve:
 - **Single `.md` source of truth** — no sidecar; the tags carry state (`status="open|locked"`, …) so both the renderer and any agent understand them.
 - **Five tags**: open questions (single/multi choice + Other + freeform), decisions (lockable, with rationale), Google-Docs comments anchored to highlighted spans, and audit findings (filterable severity matrix).
 - **Live round-trip**: the viewer watches the file and re-renders when the agent rewrites it, and warns on edit conflicts.
+- **Selected state**: click a highlighted span and both the span and its comment card switch to one teal "selected" style (click again to deselect), so a page with dozens of anchored threads stays legible.
 - **Clickable code refs**: `file.ts:123` opens in your editor (default [Zed](https://zed.dev), configurable), resolving shorthand paths against the repo.
 - **One shared server** for all plans, keyed by `?plan=<path>` — no swarm of localhost ports.
 - **Open straight from Zed**: a keybinding / command-palette task opens the focused `.md` in the viewer (reusing the shared server, never spawning a duplicate) — [setup + copy-paste configs](interactive-plan/docs/zed-integration.md).
@@ -102,6 +104,68 @@ by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qual
   The skill tells you to populate `examples/<section>/<corpus_id>.md` from your own papers
   (mine were extracted from the full texts of ten of my publications). Swap in your own corpus and
   it's `write-like-you`.
+
+---
+
+## 🧵 `thematic-analysis` — Braun & Clarke coding, with the books kept
+
+**Why I built it.** After a user study I have a dozen recordings and a paper deadline, and the
+qualitative analysis is the part an agent gets *plausibly* wrong: it paraphrases a quote and
+calls it verbatim, attributes a line to the wrong participant, builds a "theme" out of the three
+most quotable people, or hands me the interview protocol back as findings. I wanted the actual
+method (Braun & Clarke's six phases and their quality checklist, read in full at load time, not
+from memory), an iterative codebook that grows one interview at a time with me approving every
+code, and bookkeeping strict enough that I could *audit* the analysis rather than trust it.
+
+`thematic-analysis` is four negotiated operations over one analysis folder. **Codebook
+development**: read each new transcript whole (often straight out of `watch-recording`), apply
+existing codes, propose candidates with example extracts, and put every proposal to me as an
+`interactive-plan` question (accept / make it a child / merge / rewrite the definition). **Apply
+the codebook**: once no more interviews are scheduled, freeze it and code *every* transcript
+against it, so prevalence is computed from a complete pass. **Theme development**: collate the
+extracts per code, propose themes as claims (not topics), check them against every transcript,
+keep the counter-examples, and negotiate which ones the paper tells. **Quote selection**: pick
+the quotes per theme with alternatives, watching attribution spread, then hand a verified quote
+bank and codebook appendix to the writing step.
+
+**Highlights**
+- **Quotes are never typed.** `ta.py extract` copies the text out of the transcript at the line
+  you name, resolves the speaker to a participant from the roster, and refuses interviewer
+  speech or a span across two speakers. `verify` re-checks every stored extract; `verify-quotes`
+  checks every quote in any markdown file (a review doc, a paper draft) against the transcripts,
+  allowing only `[...]` and `[bracketed insertions]`, and flags misattribution.
+- **Coverage is computed.** Participants × codes × themes, `n/N` per code and theme, codes
+  nobody said, participants nobody coded, transcripts coded against a stale codebook. Counts in
+  the review docs and the paper come from the report, not from memory.
+- **Said / did / intent.** Every extract carries the distinction from `watch-recording`: a modal
+  verb is intent, not action, and a theme about behaviour cannot rest on "I would probably".
+- **Codes have at most two levels**, duplicates are flagged (name overlap, shared extracts,
+  strict subsets), merges are versioned, and a codebook change after a transcript was coded marks
+  that transcript stale.
+- **The method ships as a digest; the paper does not.** `source/` (the PDF and its extracted
+  text) is gitignored for copyright; `scripts/extract_source.sh` rebuilds the text from your own
+  copy, and the skill reads the full text before starting, falling back to
+  `references/braun-clarke-digest.md` and saying so.
+- **You review the coding on the transcript itself.** `ta.py annotate` renders each transcript
+  with every coded span highlighted as an `interactive-plan` page; click a span and its thread
+  lists the codes, kind, and context, and you dispute a code or a boundary right there.
+  `recode --highlight "why"` flags a paper-worthy moment while you're looking at it, and the
+  quote bank surfaces those ahead of theme selection.
+- **`codebook.yaml` is the source of truth**; everything under `reports/` is a rendering. Leave
+  comments on a rendered page and `report` archives that copy to `reviews/` before regenerating,
+  so feedback on a derived file is never lost.
+- **A cleanup review is a named step**: when a new interview adds extracts but no codes, look for
+  a parent carrying more than its children, a child that is a special case of a sibling, two
+  criteria pointing the same way under different names, or a family whose one child holds
+  everything. Propose the merges with the extracts that would move; the researcher decides.
+- **HCI write-up conventions** in `references/writing-up.md`: themes as claims tagged with RQs or
+  design goals, participant-level prevalence with the "frequency does not determine value"
+  caveat, inline vs block quote rules, a method paragraph that discloses the agent's role, and
+  why reflexive TA does not report inter-rater reliability.
+
+> Shaped by use: the first three exit interviews of a real field study went through it (four
+> codebook rounds, one cleanup review, 116 verified extracts). Most of the rules above, and the
+> `annotate`, `--highlight`, and archive-on-regenerate behaviours, came out of that run.
 
 ---
 

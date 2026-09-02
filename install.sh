@@ -13,6 +13,7 @@ SKILLS=(
   codex-audit
   write-like-joseph
   watch-recording
+  thematic-analysis
 )
 
 mkdir -p "${DEST_DIR}"
@@ -57,3 +58,6 @@ echo "                     no-captions fallback also wants: brew install whisper
 echo "                     and a HF token with all three gated pyannote repos accepted"
 echo "                     (speaker-diarization-3.1, segmentation-3.0,"
 echo "                      speaker-diarization-community-1)."
+echo "  thematic-analysis: uv (runs scripts/ta.py with pyyaml), pdftotext (brew install poppler),"
+echo "                     and the Braun & Clarke 2006 PDF dropped in thematic-analysis/source/"
+echo "                     (not distributed); bun/node for the interactive-plan review viewer."
