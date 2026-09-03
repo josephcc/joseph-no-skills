@@ -1,0 +1,3 @@
+{
+  "editorCommand": "zed {path}:{line}:{col}"
+}

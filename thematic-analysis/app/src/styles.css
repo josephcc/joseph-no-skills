@@ -1,0 +1,505 @@
+/* The workbench shares the plan viewer's visual language on purpose: the round document
+   and this page are two halves of one review, and a second look and feel would make them
+   read as two tools. Tokens are vendored (copied, not imported) so each skill installs
+   on its own. */
+:root {
+  --asta-dark-teal: #0a3235;
+  --asta-extra-dark-teal: #032629;
+  --asta-teal: #105257;
+  --asta-teal-20: #cbd2cc;
+  --asta-teal-40: #9cb2af;
+  --asta-teal-60: #6e9291;
+  --asta-cream: #faf2e9;
+  --asta-green: #0fcb8c;
+  --asta-green-60: #6ddbb1;
+  --asta-green-20: #cbead6;
+  --asta-gray: #343434;
+  --asta-gray-20: #d6d6d6;
+  --asta-gray-40: #aeaeae;
+  --asta-gray-60: #858585;
+  --asta-error: #fd4645;
+  --asta-amber: #d98b00;
+
+  --bg: #f7f3ec;
+  --surface: #ffffff;
+  --border: var(--asta-teal-20);
+  --text: #14211f;
+  --muted: var(--asta-gray-60);
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(10, 50, 53, 0.08), 0 4px 16px rgba(10, 50, 53, 0.06);
+  /* One hue per top-level code, stepped far enough apart to stay distinct at 11 families. */
+  --hue: 0;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; font-size: 14px; }
+code, .wb-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.wb-loading { padding: 3rem; text-align: center; color: var(--muted); }
+.wb-error { color: var(--asta-error); }
+.wb-muted { color: var(--muted); font-size: 0.82rem; }
+.wb-warn { color: #8a5b00; background: #fff5dd; border-left: 3px solid var(--asta-amber); padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.85rem; }
+.wb-warn-inline { color: #8a5b00; font-weight: 600; font-size: 0.75rem; margin-left: 0.3rem; }
+.wb-warn-row td { background: #fff5dd; }
+
+/* ---- header ---- */
+.wb-header {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;
+  padding: 0.6rem 1.1rem; background: var(--asta-dark-teal); color: var(--asta-cream); box-shadow: var(--shadow);
+}
+.wb-header h1 { margin: 0 0 0.25rem; font-size: 1.02rem; }
+.wb-chips { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.75rem; color: var(--asta-teal-20); }
+.wb-chip b { color: var(--asta-green-60); font-weight: 600; }
+.wb-chip-warn b { color: #ffd24d; }
+.wb-header-side { display: flex; align-items: center; gap: 0.6rem; }
+.wb-threadcount { font-size: 0.72rem; color: var(--asta-teal-20); }
+.wb-pending {
+  font: inherit; font-size: 0.78rem; font-weight: 700; border: 1px solid var(--asta-teal-60);
+  background: transparent; color: var(--asta-teal-20); border-radius: 999px; padding: 0.25rem 0.7rem; cursor: pointer;
+}
+.wb-pending-on { background: var(--asta-green); color: var(--asta-extra-dark-teal); border-color: var(--asta-green); }
+
+/* ---- view switcher ---- */
+.wb-nav {
+  position: sticky; top: 3.4rem; z-index: 25;
+  display: flex; align-items: center; gap: 0.2rem; padding: 0.3rem 1.1rem;
+  background: var(--asta-extra-dark-teal); border-bottom: 1px solid var(--asta-teal);
+}
+.wb-tab {
+  font: inherit; font-size: 0.8rem; background: transparent; color: var(--asta-teal-40);
+  border: none; border-bottom: 2px solid transparent; padding: 0.3rem 0.7rem; cursor: pointer;
+}
+.wb-tab:hover { color: var(--asta-cream); }
+.wb-tab-on { color: var(--asta-cream); border-bottom-color: var(--asta-green); font-weight: 600; }
+.wb-nav-phase { margin-left: auto; font-size: 0.72rem; color: var(--asta-teal-60); font-style: italic; }
+
+/* ---- layout ---- */
+.wb-layout { display: grid; gap: 0.9rem; padding: 0.9rem 1.1rem; align-items: start; }
+.wb-layout-3 { grid-template-columns: 290px minmax(0, 1fr) 390px; }
+.wb-layout-2 { grid-template-columns: minmax(0, 1fr) 390px; }
+.wb-layout-1 { grid-template-columns: minmax(0, 1fr); }
+.wb-main { min-width: 0; }
+.wb-scroll-x { overflow-x: auto; }
+.wb-rail, .wb-inspector-pane {
+  position: sticky; top: 6.2rem; max-height: calc(100vh - 7rem); overflow-y: auto;
+}
+.wb-rail h3, .wb-rail h4 { margin: 0.6rem 0 0.3rem; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.wb-empty { color: var(--muted); }
+.wb-empty p { font-size: 0.86rem; }
+kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 0.25rem; font-size: 0.78em; font-family: ui-monospace, monospace; }
+
+/* ---- buttons / forms ---- */
+.wb-btn { font: inherit; font-size: 0.78rem; font-weight: 600; border-radius: 7px; padding: 0.28rem 0.62rem; cursor: pointer; border: 1px solid transparent; }
+.wb-btn-primary { background: var(--asta-green); color: var(--asta-extra-dark-teal); }
+.wb-btn-primary:hover { background: var(--asta-green-60); }
+.wb-btn-primary:disabled, .wb-btn-ghost:disabled { background: var(--asta-gray-20); color: var(--asta-gray-40); cursor: not-allowed; border-color: transparent; }
+.wb-btn-ghost { background: var(--surface); border-color: var(--border); color: var(--asta-teal); }
+.wb-btn-ghost:hover { background: var(--asta-cream); }
+.wb-btn-danger { background: var(--asta-error); color: #fff; }
+.wb-tiny { padding: 0.1rem 0.35rem; font-size: 0.7rem; }
+.wb-actions { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.4rem; }
+.wb-wrap { flex-wrap: wrap; }
+.wb-row { display: flex; gap: 0.4rem; align-items: center; }
+.wb-input, .wb-select, .wb-textarea {
+  font: inherit; font-size: 0.82rem; padding: 0.28rem 0.4rem; border-radius: 6px;
+  border: 1px solid var(--border); background: #fff; color: var(--text); max-width: 100%;
+}
+.wb-textarea { width: 100%; min-height: 52px; resize: vertical; }
+.wb-textarea.wb-small { min-height: 38px; }
+.wb-textarea.wb-tall { min-height: 130px; }
+.wb-input:focus, .wb-textarea:focus, .wb-select:focus { outline: 2px solid var(--asta-green); border-color: var(--asta-green); }
+.wb-field { margin: 0.6rem 0; }
+.wb-field > label {
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.15rem;
+}
+.wb-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: #fff; }
+.wb-seg-btn { font: inherit; font-size: 0.76rem; background: #fff; border: none; border-right: 1px solid var(--border); padding: 0.22rem 0.5rem; cursor: pointer; color: var(--asta-teal); }
+.wb-seg-btn:last-child { border-right: none; }
+.wb-seg-on { background: var(--asta-teal); color: var(--asta-cream); font-weight: 700; }
+.wb-inline-form { display: inline-flex; gap: 0.3rem; align-items: center; }
+.wb-inline-edit { font: inherit; font-size: 0.82rem; background: none; border: none; border-bottom: 1px dashed var(--asta-teal-40); cursor: text; padding: 0; color: inherit; text-align: left; }
+
+/* ---- shared bits ---- */
+.wb-op-id { font-family: ui-monospace, monospace; font-size: 0.7rem; font-weight: 700; color: var(--asta-teal); background: none; border: none; padding: 0; cursor: pointer; }
+.wb-new { color: #0a6b48; background: var(--asta-green-20); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; padding: 0.05rem 0.3rem; border-radius: 999px; }
+.wb-staged { color: #8a5b00; background: #fff2cc; font-size: 0.65rem; font-weight: 700; padding: 0.05rem 0.3rem; border-radius: 999px; }
+.wb-cand { color: var(--asta-amber); font-weight: 700; }
+.wb-newdot { width: 6px; height: 6px; border-radius: 50%; background: var(--asta-green); display: inline-block; }
+.wb-dupe { color: var(--asta-amber); }
+.wb-swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; background: hsl(calc(var(--hue) * 47deg) 62% 52%); }
+.wb-status { font-size: 0.65rem; text-transform: uppercase; font-weight: 700; padding: 0.08rem 0.35rem; border-radius: 999px; background: var(--asta-gray-20); color: var(--asta-gray); }
+.wb-status-accepted { background: var(--asta-green-20); color: #0a6b48; }
+.wb-status-candidate { background: #fff2cc; color: #8a6d00; }
+.wb-status-retired, .wb-status-merged, .wb-status-dropped { background: var(--asta-gray-20); color: var(--asta-gray-60); }
+.wb-md { font-size: 0.85rem; }
+.wb-md p { margin: 0.25rem 0; }
+.wb-md code { background: var(--asta-cream); border: 1px solid var(--border); border-radius: 4px; padding: 0 0.25em; font-size: 0.9em; }
+.wb-toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--asta-dark-teal); color: var(--asta-cream); padding: 0.5rem 0.9rem; border-radius: 8px; z-index: 60; font-size: 0.82rem; box-shadow: var(--shadow); }
+.wb-table { border-collapse: collapse; width: 100%; font-size: 0.82rem; margin: 0.5rem 0 1rem; }
+.wb-table th, .wb-table td { border: 1px solid var(--border); padding: 0.25rem 0.45rem; text-align: left; vertical-align: top; }
+.wb-table th { background: var(--asta-cream); font-size: 0.75rem; }
+.wb-detail-head { display: flex; align-items: baseline; gap: 0.7rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-bottom: 0.6rem; }
+.wb-detail-head h2 { margin: 0; font-size: 1.05rem; color: var(--asta-dark-teal); }
+.wb-main h3 { font-size: 0.92rem; color: var(--asta-dark-teal); margin: 1rem 0 0.4rem; }
+.wb-main h4 { font-size: 0.8rem; margin: 0.6rem 0 0.2rem; color: var(--asta-teal); }
+
+/* ---- toolbar ---- */
+.wb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 0.6rem; }
+.wb-tool-title { font-size: 0.82rem; margin-right: auto; }
+.wb-toolbar .wb-select { max-width: 230px; }
+
+/* ---- transcript rail ---- */
+.wb-tlist, .wb-rereads, .wb-tree { list-style: none; margin: 0; padding: 0; }
+.wb-tbtn { display: grid; grid-template-columns: auto 1fr; gap: 0 0.4rem; width: 100%; text-align: left; font: inherit; font-size: 0.8rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.45rem; margin-bottom: 0.25rem; cursor: pointer; }
+.wb-tbtn:hover { background: var(--asta-cream); }
+.wb-tbtn-on { border-color: var(--asta-teal); box-shadow: 0 0 0 2px var(--asta-teal-40); }
+.wb-tid { font-family: ui-monospace, monospace; font-weight: 700; color: var(--asta-teal); }
+.wb-tp { color: var(--text); }
+.wb-tmeta, .wb-tstate { grid-column: 1 / -1; font-size: 0.7rem; color: var(--muted); }
+.wb-tstate { color: #8a5b00; }
+.wb-rereads li { font-size: 0.75rem; color: var(--muted); border-left: 2px solid var(--asta-amber); padding-left: 0.4rem; margin-bottom: 0.3rem; }
+
+/* ---- turns ---- */
+.wb-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.7rem; color: var(--muted); margin-bottom: 0.4rem; }
+.wb-legend-item { display: inline-flex; align-items: center; gap: 0.2rem; }
+.wb-turns { display: flex; flex-direction: column; gap: 0.5rem; }
+.wb-turn { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.4rem 0.6rem; }
+.wb-turn-context { background: transparent; border-color: transparent; border-left: 2px solid var(--asta-gray-20); border-radius: 0; padding-top: 0.1rem; padding-bottom: 0.1rem; }
+.wb-turn-context .wb-turn-text { color: var(--asta-gray-60); font-size: 0.82rem; }
+.wb-turn-head { display: flex; align-items: center; gap: 0.45rem; font-size: 0.72rem; color: var(--muted); }
+.wb-who { font-weight: 700; color: var(--asta-teal); }
+.wb-role { font-style: italic; }
+.wb-line { font: inherit; font-size: 0.68rem; font-family: ui-monospace, monospace; background: none; border: none; color: var(--asta-teal-40); cursor: pointer; margin-left: auto; }
+.wb-line:hover { color: var(--asta-teal); text-decoration: underline; }
+.wb-turn-text { margin: 0.15rem 0 0.2rem; font-size: 0.9rem; }
+
+/* Coded spans, tinted by family. Delta reviewing lives in the two shades: what is new
+   since the last review is vivid, what was reviewed is present but quiet. */
+.wb-hl { background: hsl(calc(var(--hue) * 47deg) 78% 89%); border-bottom: 2px solid hsl(calc(var(--hue) * 47deg) 62% 48%); border-radius: 2px; padding: 0 1px; color: inherit; cursor: pointer; }
+.wb-hl-old { background: hsl(calc(var(--hue) * 47deg) 30% 95%); border-bottom-color: hsl(calc(var(--hue) * 47deg) 25% 72%); }
+.wb-hl-multi { box-shadow: inset 0 -5px 0 -3px hsl(calc(var(--hue) * 47deg) 62% 72%); }
+.wb-hl-on { background: #cfe7e5; border-bottom-color: var(--asta-teal); box-shadow: 0 0 0 2px rgba(16, 82, 87, 0.18); }
+/* ①②③ on the span and the matching number on its chip. Hovering either lights the other.
+   Without this, a turn with three extracts under it gives no clue which chip is which. */
+.wb-hl-n {
+  font-size: 0.58rem;
+  font-family: ui-monospace, monospace;
+  vertical-align: super;
+  color: hsl(calc(var(--hue) * 47deg) 55% 32%);
+  margin-right: 1px;
+  user-select: none;
+}
+.wb-echip-n {
+  font-size: 0.62rem;
+  font-family: ui-monospace, monospace;
+  color: hsl(calc(var(--hue) * 47deg) 55% 32%);
+  background: hsl(calc(var(--hue) * 47deg) 55% 90%);
+  border-radius: 3px;
+  padding: 0 0.22rem;
+}
+.wb-hl-linked { box-shadow: 0 0 0 2px hsl(calc(var(--hue) * 47deg) 62% 62%); border-radius: 3px; }
+.wb-echip-linked { box-shadow: 0 0 0 2px hsl(calc(var(--hue) * 47deg) 62% 62%); }
+.wb-chips-row { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.wb-echip {
+  display: inline-flex; align-items: baseline; gap: 0.3rem; font: inherit; font-size: 0.72rem;
+  background: hsl(calc(var(--hue) * 47deg) 45% 97%); border: 1px solid hsl(calc(var(--hue) * 47deg) 40% 82%);
+  border-left: 3px solid hsl(calc(var(--hue) * 47deg) 62% 52%); border-radius: 6px; padding: 0.12rem 0.4rem; cursor: pointer; text-align: left;
+}
+.wb-echip:hover { background: hsl(calc(var(--hue) * 47deg) 55% 94%); }
+.wb-echip-on { box-shadow: 0 0 0 2px var(--asta-teal-40); border-color: var(--asta-teal); }
+.wb-echip-new { border-top: 1px solid var(--asta-green); }
+.wb-echip-pending { border-style: dashed; }
+.wb-echip-dropped { opacity: 0.5; text-decoration: line-through; }
+.wb-echip-unplaced { border-left-color: var(--asta-error); background: #fff3f3; }
+/* Staged, not applied: dashed all round, so it reads as a proposal rather than a record. */
+.wb-echip-staged { border-style: dashed; border-left-style: solid; background: #fffdf4; }
+.wb-echip-staged .wb-echip-id { color: #8a5b00; font-weight: 700; }
+.wb-inspector-staged { border-left: 3px solid var(--asta-amber); }
+.wb-insp-quote-staged { border-left-color: var(--asta-amber); background: #fffdf4; }
+.wb-staged-value { font-size: 0.86rem; margin: 0.1rem 0; }
+.wb-hl-staged {
+  background: hsl(calc(var(--hue) * 47deg) 70% 93%);
+  border-bottom: 2px dashed hsl(calc(var(--hue) * 47deg) 62% 48%);
+}
+.wb-echip-id { font-family: ui-monospace, monospace; font-weight: 700; color: var(--asta-teal); white-space: nowrap; }
+.wb-echip-codes { font-family: ui-monospace, monospace; }
+/* The context is the part that may be long, so it is the part that gives way — an id that
+   wraps mid-token reads as a broken chip. */
+.wb-echip-ctx { color: var(--muted); font-style: italic; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+.wb-echip-star { color: var(--asta-amber); }
+.wb-echip-hint { color: #8a5b00; }
+
+/* ---- frames: hover a timestamp, see the screen ---- */
+.wb-ts {
+  position: relative;
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: zoom-in;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.wb-ts-plain { cursor: default; }
+/* The marker is the whole affordance: without it nobody discovers that the recording is
+   one hover away, and a feature nobody can find is not a feature. */
+.wb-ts-mark { color: var(--asta-teal-60); font-size: 1.05em; line-height: 1; }
+.wb-ts:hover .wb-ts-mark, .wb-ts:focus-visible .wb-ts-mark { color: var(--asta-green); }
+.wb-ts:hover, .wb-ts:focus-visible { color: var(--asta-teal); }
+.wb-tool-frames { color: var(--muted); font-size: 0.78rem; }
+.wb-peek { display: none; }
+.wb-peek-inline { display: block; position: static; }
+.wb-peek-inline img { width: 100%; max-width: 100%; }
+.wb-ts:hover .wb-peek, .wb-ts:focus-visible .wb-peek { display: block; position: absolute; z-index: 40; top: 1.2rem; left: 0; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px; }
+.wb-peek img { display: block; width: 420px; max-width: 46vw; border-radius: 4px; cursor: zoom-in; }
+.wb-peek-meta { display: block; font-size: 0.66rem; color: var(--muted); padding: 2px 2px 0; }
+.wb-lightbox { position: fixed; inset: 0; background: rgba(3, 38, 41, 0.86); z-index: 70; display: flex; align-items: center; justify-content: center; }
+.wb-lightbox-inner { background: var(--asta-extra-dark-teal); border-radius: 10px; padding: 0.5rem; max-width: 94vw; max-height: 94vh; display: flex; flex-direction: column; gap: 0.4rem; }
+.wb-lightbox-inner header { display: flex; align-items: center; gap: 0.5rem; color: var(--asta-cream); font-size: 0.78rem; }
+.wb-lightbox-ts { font-family: ui-monospace, monospace; }
+.wb-lightbox-close { margin-left: auto; }
+.wb-lightbox-inner img { max-width: 92vw; max-height: 84vh; border-radius: 6px; }
+
+/* ---- selection bar / modal ---- */
+.wb-turn-retrim { box-shadow: 0 0 0 2px var(--asta-green); }
+.wb-selbar-mode { background: var(--asta-teal); }
+.wb-selbar { position: fixed; bottom: 0.8rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0.5rem; background: var(--asta-dark-teal); color: var(--asta-cream); padding: 0.45rem 0.7rem; border-radius: 10px; box-shadow: var(--shadow); z-index: 55; max-width: 90vw; }
+.wb-selquote { font-size: 0.78rem; font-style: italic; max-width: 44vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-modal { position: fixed; inset: 0; background: rgba(3, 38, 41, 0.5); z-index: 65; display: flex; align-items: center; justify-content: center; }
+.wb-modal-inner { background: var(--surface); border-radius: var(--radius); padding: 1rem; width: 620px; max-width: 92vw; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow); }
+.wb-modal-inner h3 { margin-top: 0; }
+
+/* ---- inspector ---- */
+.wb-inspector { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.75rem; box-shadow: var(--shadow); }
+.wb-inspector.wb-dropped { opacity: 0.7; }
+.wb-insp-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+.wb-insp-id { font-weight: 700; color: var(--asta-dark-teal); }
+.wb-insp-who { font-size: 0.75rem; color: var(--muted); }
+.wb-insp-num { font-size: 0.76rem; color: var(--muted); margin: 0.3rem 0; }
+.wb-why-new { color: #0a6b48; }
+.wb-insp-quote { margin: 0.4rem 0; padding: 0.35rem 0.6rem; border-left: 3px solid var(--asta-green); background: var(--asta-cream); font-size: 0.86rem; border-radius: 0 6px 6px 0; }
+.wb-kind-note { margin-top: -0.3rem; }
+.wb-tokens { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.wb-token { display: inline-flex; align-items: center; gap: 0.15rem; background: hsl(calc(var(--hue) * 47deg) 45% 96%); border: 1px solid hsl(calc(var(--hue) * 47deg) 40% 80%); border-radius: 999px; padding: 0.05rem 0.15rem 0.05rem 0.45rem; font-size: 0.75rem; }
+.wb-token-id { font: inherit; font-family: ui-monospace, monospace; background: none; border: none; cursor: pointer; color: var(--asta-teal); padding: 0; }
+.wb-token-x { font: inherit; background: none; border: none; cursor: pointer; color: var(--muted); padding: 0 0.2rem; }
+.wb-token-x:hover { color: var(--asta-error); }
+.wb-mini-token { font-family: ui-monospace, monospace; font-size: 0.68rem; background: hsl(calc(var(--hue) * 47deg) 45% 96%); border: 1px solid hsl(calc(var(--hue) * 47deg) 40% 84%); border-radius: 4px; padding: 0 0.25rem; margin-right: 0.2rem; cursor: pointer; }
+.wb-def { margin: 0.3rem 0; font-size: 0.82rem; }
+.wb-def summary { cursor: pointer; display: flex; align-items: center; gap: 0.3rem; }
+.wb-hints { list-style: none; margin: 0.4rem 0; padding: 0; }
+.wb-hint { font-size: 0.75rem; color: #8a5b00; background: #fff8e6; border-radius: 5px; padding: 0.15rem 0.35rem; margin-bottom: 0.15rem; }
+.wb-star-on { color: var(--asta-amber); font-size: 0.82rem; }
+.wb-proposal { background: var(--asta-cream); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.6rem; margin: 0.5rem 0; }
+.wb-proposal h4 { margin: 0 0 0.2rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--asta-teal); }
+.wb-neighbours { list-style: none; margin: 0; padding: 0; font-size: 0.8rem; }
+.wb-neighbours li { display: flex; align-items: center; gap: 0.3rem; margin-bottom: 0.2rem; }
+.wb-provenance { border-top: 1px solid var(--border); padding-top: 0.3rem; margin-top: 0.6rem; }
+.wb-picker { border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 0.35rem; margin-top: 0.3rem; }
+.wb-picker .wb-input { width: 100%; }
+.wb-picker-list { list-style: none; margin: 0.25rem 0; padding: 0; max-height: 190px; overflow-y: auto; }
+.wb-picker-row { display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; padding: 0.15rem 0.25rem; border-radius: 5px; cursor: pointer; }
+.wb-picker-on { background: var(--asta-green-20); }
+.wb-picker-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-picker-n { margin-left: auto; font-size: 0.68rem; color: var(--muted); font-family: ui-monospace, monospace; }
+.wb-picker-def {
+  border-top: 1px solid var(--border);
+  padding-top: 0.3rem;
+  font-size: 0.78rem;
+  /* Fixed, not fluid: a panel that resizes per code shifts the list under the cursor,
+     which lands the pointer on the next row and loops. */
+  height: 8.4rem;
+  overflow-y: auto;
+}
+.wb-picker-def p { margin: 0.2rem 0; }
+
+/* ---- codebook tree ---- */
+.wb-health { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-bottom: 0.4rem; }
+.wb-hbtn { font: inherit; font-size: 0.68rem; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.4rem; cursor: pointer; color: var(--asta-teal); }
+.wb-hbtn b { color: var(--asta-dark-teal); }
+.wb-hbtn-on { background: var(--asta-teal); color: var(--asta-cream); border-color: var(--asta-teal); }
+.wb-hbtn-on b { color: var(--asta-green-60); }
+.wb-hbtn-zero { opacity: 0.45; }
+.wb-droproot { font-size: 0.7rem; color: var(--muted); border: 1px dashed var(--border); border-radius: 6px; padding: 0.2rem 0.4rem; margin-bottom: 0.3rem; text-align: center; }
+.wb-droproot-live { border-color: var(--asta-green); background: var(--asta-green-20); color: #0a6b48; }
+.wb-tnode { display: flex; align-items: center; gap: 0.2rem; }
+.wb-tnode-btn { display: flex; flex-direction: column; gap: 0; flex: 1; min-width: 0; font: inherit; font-size: 0.76rem; background: none; border: none; border-radius: 5px; padding: 0.1rem 0.2rem; cursor: pointer; text-align: left; }
+.wb-tnode-line1, .wb-tnode-line2 { display: flex; align-items: center; gap: 0.3rem; width: 100%; min-width: 0; }
+.wb-tnode-line2 { padding-left: 0.75rem; }
+.wb-tnode-btn:hover { background: var(--asta-cream); }
+.wb-tnode-on > .wb-tnode-btn { background: var(--asta-green-20); font-weight: 700; }
+.wb-tnode-pending > .wb-tnode-btn { outline: 1px dashed var(--asta-amber); }
+.wb-depth-1 .wb-tnode-btn { padding-left: 0.9rem; }
+.wb-tnode-id { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-tnode-going { text-decoration: line-through; opacity: 0.65; }
+.wb-tnode-into { font-size: 0.62rem; font-weight: 700; color: #8a5b00; background: #fff2cc; border-radius: 999px; padding: 0 0.3rem; white-space: nowrap; }
+.wb-bar { flex: none; width: 34px; height: 5px; background: var(--asta-gray-20); border-radius: 3px; overflow: hidden; }
+.wb-bar-fill { display: block; height: 100%; background: var(--asta-teal-60); }
+.wb-tnode-n, .wb-tnode-ex { font-size: 0.66rem; color: var(--muted); font-family: ui-monospace, monospace; }
+.wb-kindbar { font-size: 0.5rem; color: var(--asta-teal-60); letter-spacing: -1px; }
+.wb-tpick { flex: none; }
+.wb-collate { margin-top: 0.8rem; }
+.wb-collate-group ul, .wb-cov-list, .wb-theme-extracts, .wb-tension-list, .wb-split-list, .wb-changelog, .wb-rqs { list-style: none; margin: 0; padding: 0; }
+.wb-cl-row { display: grid; grid-template-columns: auto auto 1fr auto auto auto; gap: 0.35rem; align-items: baseline; font-size: 0.8rem; padding: 0.15rem 0.2rem; border-bottom: 1px solid var(--asta-cream); }
+.wb-cl-row.wb-dropped { opacity: 0.5; text-decoration: line-through; }
+.wb-cl-text { min-width: 0; }
+.wb-cl-p { font-weight: 700; color: var(--asta-teal); font-size: 0.72rem; }
+.wb-cl-kind { color: var(--asta-teal-60); }
+.wb-split { background: var(--asta-cream); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; margin-bottom: 0.6rem; }
+.wb-split-list { max-height: 260px; overflow-y: auto; font-size: 0.78rem; }
+.wb-split-list label { display: flex; gap: 0.3rem; align-items: baseline; padding: 0.1rem 0; }
+
+/* ---- compare ---- */
+.wb-compare { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem; }
+.wb-cmp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.wb-cmp-head h3 { margin: 0 auto 0 0; }
+.wb-cmp-defs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin: 0.5rem 0; font-size: 0.82rem; }
+.wb-cmp-cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+.wb-cmp-cols section { border: 1px solid var(--border); border-radius: 8px; padding: 0.35rem; min-width: 0; }
+.wb-cmp-both { background: var(--asta-cream); }
+.wb-cmp-cols h4 { margin: 0 0 0.2rem; font-size: 0.76rem; }
+.wb-cmp-cols ul { list-style: none; margin: 0; padding: 0; }
+.wb-cmp-row { font-size: 0.74rem; border-bottom: 1px solid var(--asta-cream); padding: 0.15rem 0; display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; }
+.wb-cmp-text { flex: 1 1 100%; }
+.wb-cmp-p { font-weight: 700; color: var(--asta-teal); }
+
+/* ---- coverage heatmap ----
+   Sticky headers need border-collapse: separate (collapsed borders and sticky cells
+   fight each other), so the grid lines are per-cell right/bottom borders. The code
+   column sticks left as well, because a twelve-participant study scrolls sideways. */
+.wb-heat { border-collapse: separate; border-spacing: 0; font-size: 0.76rem; background: var(--surface); }
+.wb-heat th, .wb-heat td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 0.15rem 0.3rem; }
+.wb-heat thead th { border-top: 1px solid var(--border); }
+.wb-heat tr > *:first-child { border-left: 1px solid var(--border); }
+/* The matrix scrolls inside its own box, so the participant row and the code column can
+   stay put. Sticky positions resolve against the nearest scrollport, which is this div —
+   on the page itself the header scrolled away and the columns became unlabelled. */
+.wb-heat-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 13rem);
+  /* Shrink to the matrix when there are few participants: a bordered box holding 4 columns and
+     600px of nothing reads as a rendering bug rather than as a small study. */
+  width: max-content;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 1rem;
+}
+.wb-heat thead th { background: var(--asta-cream); position: sticky; top: 0; z-index: 5; }
+.wb-heat tbody th.wb-heat-code { position: sticky; left: 0; z-index: 4; background: var(--surface); }
+.wb-heat thead th.wb-heat-code { left: 0; z-index: 6; }
+.wb-heat-p { font-family: ui-monospace, monospace; font-weight: 700; color: var(--asta-teal); }
+.wb-heat-code { text-align: left; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.wb-heat-child .wb-heat-code { padding-left: 1.1rem; font-size: 0.72rem; }
+.wb-heat-link { font: inherit; font-family: ui-monospace, monospace; background: none; border: none; cursor: pointer; color: var(--asta-teal); padding: 0; }
+.wb-heat-link:hover { text-decoration: underline; }
+.wb-heat-n, .wb-heat-kinds { font-family: ui-monospace, monospace; color: var(--muted); white-space: nowrap; }
+.wb-heat-cell { text-align: center; cursor: pointer; min-width: 42px; }
+.wb-heat-zero { color: var(--asta-gray-40); }
+.wb-heat-low { background: hsl(165 45% 94%); }
+.wb-heat-mid { background: hsl(165 50% 86%); }
+.wb-heat-high { background: hsl(165 55% 76%); }
+.wb-heat-on { outline: 2px solid var(--asta-teal); outline-offset: -2px; background: var(--asta-green-20); }
+.wb-heat-glyphs { display: block; font-size: 0.5rem; color: var(--asta-teal-60); letter-spacing: -1px; }
+.wb-fold { font: inherit; background: none; border: none; cursor: pointer; color: var(--muted); padding: 0 0.15rem; }
+.wb-cov-flags { margin-bottom: 0.5rem; }
+.wb-cov-flags code { margin: 0 0.15rem; }
+.wb-cov-list li { font-size: 0.78rem; border-bottom: 1px solid var(--asta-cream); padding: 0.2rem 0; }
+.wb-missing .wb-mini-token { background: #fff5dd; border-color: #f0d9a8; }
+
+/* ---- themes board ---- */
+.wb-board { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.5rem; align-items: flex-start; }
+.wb-col { flex: 0 0 220px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.4rem; min-height: 120px; }
+.wb-col-live { border-color: var(--asta-green); }
+.wb-col-on { box-shadow: 0 0 0 2px var(--asta-teal-40); }
+.wb-col header { display: flex; flex-direction: column; gap: 0.1rem; cursor: pointer; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; margin-bottom: 0.3rem; }
+.wb-col header b { font-size: 0.82rem; }
+.wb-col-meta { font-size: 0.68rem; color: var(--muted); }
+.wb-col-misc, .wb-col-unplaced { background: var(--asta-cream); }
+.wb-col-ghost { background: #fffdf4; border-style: dashed; border-color: var(--asta-amber); }
+.wb-col-ghost .wb-col-meta { color: #8a5b00; }
+.wb-card { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem; font-size: 0.74rem; background: hsl(calc(var(--hue) * 47deg) 45% 96%); border: 1px solid hsl(calc(var(--hue) * 47deg) 40% 82%); border-left: 3px solid hsl(calc(var(--hue) * 47deg) 62% 52%); border-radius: 6px; padding: 0.2rem 0.35rem; margin-bottom: 0.25rem; cursor: grab; }
+.wb-card b { font-family: ui-monospace, monospace; }
+.wb-card-child { margin-left: 0.8rem; border-left-style: dashed; }
+.wb-card-n { margin-left: auto; color: var(--muted); font-family: ui-monospace, monospace; }
+.wb-selnote { font-size: 0.78rem; color: #ffd24d; }
+.wb-card-kinds { flex: 1 1 100%; font-size: 0.55rem; color: var(--asta-teal-60); letter-spacing: -1px; }
+.wb-card-kids { flex: 1 1 100%; font-size: 0.65rem; color: var(--muted); }
+.wb-mermaid { background: var(--asta-extra-dark-teal); color: #d8ece4; border-radius: 8px; padding: 0.5rem; margin-bottom: 0.6rem; }
+.wb-mermaid header { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; }
+.wb-mermaid header b { color: var(--asta-cream); flex: 1; }
+.wb-mermaid pre { margin: 0; font-size: 0.72rem; overflow-x: auto; }
+.wb-theme-extracts li, .wb-tension-list li { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; font-size: 0.76rem; border-bottom: 1px solid var(--asta-cream); padding: 0.15rem 0; }
+.wb-theme-extracts .wb-cl-text { flex: 1 1 100%; }
+.wb-is-tension { background: #fff8e6; }
+
+/* ---- quotes ---- */
+.wb-quotes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+.wb-bank, .wb-selected { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem; }
+.wb-bank ul, .wb-sel-list { list-style: none; margin: 0; padding: 0; }
+.wb-bank ul li, .wb-sel-list li { border-bottom: 1px solid var(--asta-cream); padding: 0.35rem 0; }
+.wb-bank-chosen { background: var(--asta-green-20); border-radius: 6px; padding-left: 0.3rem; }
+.wb-bank-meta { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; font-size: 0.72rem; color: var(--muted); }
+.wb-bank blockquote, .wb-sel-list blockquote { margin: 0.2rem 0; font-size: 0.82rem; border-left: 2px solid var(--asta-teal-40); padding-left: 0.5rem; }
+.wb-inline-ok { color: #0a6b48; }
+.wb-block-only { color: var(--asta-amber); }
+.wb-trimmed, .wb-tension-tag { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #fff2cc; color: #8a6d00; border-radius: 999px; padding: 0.05rem 0.3rem; }
+.wb-trim-preview { background: var(--asta-green-20); border-left-color: var(--asta-green); }
+.wb-sel-list { counter-reset: q; }
+.wb-spreadtable .wb-over td { background: #fff5dd; }
+.wb-spreadtable .wb-none td { color: var(--muted); }
+
+/* ---- pending drawer ---- */
+.wb-drawer { position: fixed; top: 5.6rem; right: 0.8rem; width: 420px; max-height: calc(100vh - 7rem); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 0.6rem 0.75rem; z-index: 45; }
+.wb-drawer header { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-bottom: 0.4rem; }
+.wb-drawer header b { flex: 1; }
+.wb-drawer-list { list-style: none; margin: 0; padding: 0; }
+.wb-drawer-list li { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: baseline; font-size: 0.78rem; border-bottom: 1px solid var(--asta-cream); padding: 0.25rem 0; }
+.wb-op-text { flex: 1; min-width: 0; }
+.wb-op-by { font-size: 0.62rem; text-transform: uppercase; font-weight: 700; color: var(--asta-teal); }
+.wb-by-agent { color: var(--asta-amber); }
+.wb-op-error { flex: 1 1 100%; color: var(--asta-error); font-size: 0.72rem; }
+.wb-op-failed { background: #fff3f3; }
+.wb-apply-hint code { display: block; margin-top: 0.2rem; font-size: 0.7rem; background: var(--asta-cream); border: 1px solid var(--border); border-radius: 5px; padding: 0.2rem 0.3rem; overflow-x: auto; white-space: nowrap; }
+
+/* ---- threads ---- */
+.wb-thread { border: 1px solid var(--border); border-left: 3px solid var(--asta-amber); border-radius: 8px; padding: 0.4rem 0.5rem; margin-bottom: 0.4rem; background: #fffdf8; }
+.wb-thread-resolved { border-left-color: var(--asta-gray-40); opacity: 0.75; }
+.wb-thread header { display: flex; gap: 0.4rem; align-items: center; font-size: 0.7rem; color: var(--muted); }
+.wb-thread-del {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.78rem;
+  opacity: 0.45;
+  padding: 0.05rem 0.25rem;
+  border-radius: 5px;
+}
+.wb-thread:hover .wb-thread-del, .wb-thread-del:focus-visible { opacity: 1; }
+.wb-thread-del:hover { background: #ffd9d8; }
+.wb-del-confirm { margin-left: auto; display: flex; align-items: center; gap: 0.3rem; color: var(--asta-error); font-weight: 600; }
+.wb-thread-target { font-family: ui-monospace, monospace; }
+.wb-thread-tag { color: #0a6b48; font-weight: 600; }
+.wb-note { border-top: 1px solid var(--asta-cream); padding-top: 0.25rem; margin-top: 0.25rem; }
+.wb-note:first-of-type { border-top: none; }
+.wb-note-meta { font-size: 0.66rem; color: var(--muted); text-transform: capitalize; }
+.wb-thread-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-start; margin-top: 0.3rem; }
+.wb-thread-actions .wb-textarea { min-height: 34px; }
+.wb-composer { border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem; background: #fff; }
+
+@media (max-width: 1400px) {
+  .wb-layout-3 { grid-template-columns: 210px minmax(0, 1fr) 340px; }
+  .wb-quotes { grid-template-columns: 1fr; }
+}
+@media (max-width: 1080px) {
+  .wb-layout-3, .wb-layout-2 { grid-template-columns: minmax(0, 1fr); }
+  .wb-rail, .wb-inspector-pane { position: static; max-height: none; }
+}

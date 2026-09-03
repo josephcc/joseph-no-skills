@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import sys
 from collections import Counter, OrderedDict, defaultdict
@@ -114,6 +115,14 @@ class Analysis:
             self._themes.setdefault("themes", [])
         return self._themes
 
+    def reload(self) -> None:
+        """Drop every cached file, so state read before a lock was held is not written back."""
+        self._study = None
+        self._codebook = None
+        self._extracts = None
+        self._themes = None
+        self._transcript_cache.clear()
+
     # ---- saving
     def save_study(self):
         dump_yaml(self.study_path, self.study)
@@ -124,7 +133,7 @@ class Analysis:
     def save_extracts(self):
         with self.extracts_path.open("w", encoding="utf-8") as fh:
             for ex in self.extracts:
-                fh.write(json.dumps(ex, ensure_ascii=False) + "\n")
+                fh.write(json.dumps(ex, ensure_ascii=False, default=json_safe) + "\n")
 
     def save_themes(self):
         dump_yaml(self.themes_path, self.themes)
@@ -212,6 +221,20 @@ def dump_yaml(path: Path, data) -> None:
 
 def today() -> str:
     return dt.date.today().isoformat()
+
+
+def json_safe(o):
+    """Serialise what YAML hands back but JSON does not know.
+
+    An unquoted `date: 2026-09-01` in a hand-edited codebook loads as a `datetime.date`, and
+    every payload the workbench reads is JSON — so without this, hand-editing the file the
+    skill tells you to hand-edit takes the whole page down.
+    """
+    if isinstance(o, (dt.date, dt.datetime, dt.time)):
+        return o.isoformat()
+    if isinstance(o, set):
+        return sorted(o)
+    return str(o)
 
 
 # ------------------------------------------------------------------ text utils
@@ -358,7 +381,11 @@ def cmd_init(an: Analysis, args) -> int:
             "level": "semantic",
             "epistemology": "realist",
             "prevalence_unit": "participant",
-            "notes": "Record the stance in words the method section can reuse; change these if the study is deductive/latent/constructionist.",
+            "notes": "The skill's default stance for an HCI user study: the research questions and design "
+                     "goals shape what is attended to, the codes come from the transcripts, and prevalence is "
+                     "reported per participant as n/N. Replace this with wording the method section can reuse, "
+                     "and change the fields above only if this study is really deductive, latent, or "
+                     "constructionist.",
         },
         "research_questions": [{"id": "RQ1", "text": "TODO"}],
         "participants": list(participants.values()),
@@ -515,18 +542,46 @@ def validate(an: Analysis) -> tuple[list[str], list[str]]:
             if c is None:
                 errors.append(f"themes: {tid} gathers unknown code {cid}")
             else:
-                theme_codes.add(an.resolve_code(cid))
+                # A theme that gathers a parent gathers its children too, so a quote coded
+                # only to a child still belongs to the theme.
+                theme_codes |= code_family(an, an.resolve_code(cid))
         for eid in (th.get("selected_extracts") or []) + (th.get("tensions") or []):
             ex = an.extract(eid)
             if ex is None:
                 errors.append(f"themes: {tid} references missing extract {eid}")
             elif theme_codes and not (theme_codes & {an.resolve_code(x) for x in ex.get("codes", [])}):
                 warnings.append(f"themes: {tid} selects {eid}, which carries none of the theme's codes")
+
+    # spans the workbench (and `annotate`) cannot place on the transcript itself
+    for e in an.extracts:
+        t = an.transcript(e.get("transcript", ""))
+        if t is None:
+            continue
+        try:
+            lines = an.transcript_lines(t)
+        except SystemExit:
+            continue
+        turns = parse_turns(lines)
+        a, b = int(e.get("line_start") or 0), int(e.get("line_end") or 0)
+        covered = [tr for tr in turns if tr["line"] <= b and tr["end_line"] >= a] if a and b else []
+        if covered and locate_span(" ".join(tr["text"] for tr in covered), e.get("text", "")) is None:
+            warnings.append(f"extracts: {e.get('id')} text cannot be located inside its turn at "
+                            f"{e.get('transcript')}:{a}-{b}; re-trim it so the span can be highlighted")
+
+    # the inbox is hand-editable too, so lint it here rather than only in `apply`
+    for o in read_inbox(an):
+        if o.get("status") == "malformed":
+            errors.append(f"inbox: {o.get('id')} is not valid JSON ({o.get('error')})")
+        elif o.get("status") in (None, "pending"):
+            warnings += [f"inbox: {p}" for p in validate_op(an, o)]
     return errors, warnings
 
 
 def cmd_validate(an: Analysis, args) -> int:
     errors, warnings = validate(an)
+    if getattr(args, "json", False):
+        print(json.dumps({"errors": errors, "warnings": warnings}, ensure_ascii=False, indent=2, default=json_safe))
+        return 1 if errors else 0
     for w in warnings:
         print(f"warning: {w}")
     for e in errors:
@@ -539,7 +594,7 @@ def cmd_validate(an: Analysis, args) -> int:
 def build_extract(an: Analysis, transcript_id: str, line_start: int, line_end: int, codes: list[str],
                   kind: str = "said", frm: str | None = None, to: str | None = None,
                   participant: str | None = None, context: str | None = None, note: str | None = None,
-                  allow_non_participant: bool = False) -> dict:
+                  allow_non_participant: bool = False, offsets: tuple[int, int] | None = None) -> dict:
     t = an.transcript(transcript_id)
     if t is None:
         raise SystemExit(f"unknown transcript {transcript_id}")
@@ -558,7 +613,14 @@ def build_extract(an: Analysis, transcript_id: str, line_start: int, line_end: i
         )
     speaker = covered[0]["speaker"]
     text = norm(" ".join(tr["text"] for tr in covered))
-    if frm or to:
+    if offsets is not None:
+        # The workbench selects inside the normalised turn text it was given, so the
+        # boundary arrives as offsets and the words are still cut from the transcript here.
+        a, b = offsets
+        if not (0 <= a < b <= len(text)):
+            raise SystemExit(f"offsets {a}-{b} fall outside the turn ({len(text)} characters) at {transcript_id}:{line_start}-{line_end}")
+        text = text[a:b].strip()
+    elif frm or to:
         low = text.lower()
         i = low.find(fold(frm)) if frm else 0
         if i < 0:
@@ -769,6 +831,9 @@ def verify(an: Analysis) -> tuple[list[str], list[str]]:
 
 def cmd_verify(an: Analysis, args) -> int:
     errors, warnings = verify(an)
+    if getattr(args, "json", False):
+        print(json.dumps({"checked": len(an.extracts), "errors": errors, "warnings": warnings}, ensure_ascii=False, indent=2, default=json_safe))
+        return 1 if errors else 0
     for w in warnings:
         print(f"warning: {w}")
     for e in errors:
@@ -993,6 +1058,9 @@ def coverage_report(an: Analysis) -> str:
 
 
 def cmd_coverage(an: Analysis, args) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(coverage_json(an), ensure_ascii=False, indent=2, default=json_safe))
+        return 0
     print(coverage_report(an))
     return 0
 
@@ -1029,6 +1097,9 @@ def find_dupes(an: Analysis, name_threshold: float = 0.5, overlap_threshold: flo
 
 
 def cmd_dupes(an: Analysis, args) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(dupes_json(an), ensure_ascii=False, indent=2, default=json_safe))
+        return 0
     notes = find_dupes(an)
     for n in notes:
         print(f"- {n}")
@@ -1037,8 +1108,13 @@ def cmd_dupes(an: Analysis, args) -> int:
 
 
 # ---------------------------------------------------------------- code admin
-def cmd_merge_code(an: Analysis, args) -> int:
-    src, dst = args.source, args.target
+def do_merge_code(an: Analysis, src: str, dst: str, why: str | None = None, bump: bool = True) -> int:
+    """Fold SOURCE into TARGET everywhere. Mutates; does not save.
+
+    `bump=False` when this runs inside a pass of staged operations: the pass bumps the
+    codebook once at the end and owns the changelog entry, so two merges in one review do
+    not move the version twice and leave a later code's `added.version` ahead of it.
+    """
     a, b = an.code(src), an.code(dst)
     if a is None or b is None:
         raise SystemExit(f"both codes must exist: {src} -> {dst}")
@@ -1064,10 +1140,16 @@ def cmd_merge_code(an: Analysis, args) -> int:
     b["examples"] = sorted(set(b.get("examples") or []) | set(a.get("examples") or []))
     a["status"] = "merged"
     a["merged_into"] = dst
-    an.codebook["version"] = int(an.codebook.get("version", 1)) + 1
-    an.codebook["changelog"].append({"version": an.codebook["version"], "date": today(), "change": f"merged {src} into {dst} ({n} extracts recoded){': ' + args.why if args.why else ''}"})
+    if bump:
+        an.codebook["version"] = int(an.codebook.get("version", 1)) + 1
+        an.codebook["changelog"].append({"version": an.codebook["version"], "date": today(), "change": f"merged {src} into {dst} ({n} extracts recoded){': ' + why if why else ''}"})
+    return n
+
+
+def cmd_merge_code(an: Analysis, args) -> int:
+    n = do_merge_code(an, args.source, args.target, args.why)
     an.save_codebook(); an.save_extracts(); an.save_themes()
-    print(f"merged {src} -> {dst}; {n} extract(s) recoded; codebook now v{an.codebook['version']}")
+    print(f"merged {args.source} -> {args.target}; {n} extract(s) recoded; codebook now v{an.codebook['version']}")
     return 0
 
 
@@ -1088,22 +1170,28 @@ def rename_everywhere(an: Analysis, old: str, new: str) -> int:
     return n
 
 
-def cmd_rename_code(an: Analysis, args) -> int:
-    c = an.code(args.old)
+def do_rename_code(an: Analysis, old: str, new: str) -> int:
+    """Rename a code id everywhere, carrying its children's ids with it. Mutates; does not save."""
+    c = an.code(old)
     if c is None:
-        raise SystemExit(f"no code {args.old}")
-    if an.code(args.new) is not None:
-        raise SystemExit(f"{args.new} already exists; use merge-code")
-    if not CODE_ID_RE.match(args.new):
+        raise SystemExit(f"no code {old}")
+    if an.code(new) is not None:
+        raise SystemExit(f"{new} already exists; use merge-code")
+    if not CODE_ID_RE.match(new):
         raise SystemExit("new id must be kebab-case, optionally parent.child")
-    n = rename_everywhere(an, args.old, args.new)
-    c["id"] = args.new
+    n = rename_everywhere(an, old, new)
+    c["id"] = new
     for child in an.codebook["codes"]:
-        if child.get("parent") == args.new and "." in child["id"] and not child["id"].startswith(args.new + "."):
-            new_child = args.new + "." + child["id"].split(".", 1)[1]
+        if child.get("parent") == new and "." in child["id"] and not child["id"].startswith(new + "."):
+            new_child = new + "." + child["id"].split(".", 1)[1]
             rename_everywhere(an, child["id"], new_child)
             child["id"] = new_child
-    an.codebook["changelog"].append({"version": an.codebook.get("version", 1), "date": today(), "change": f"renamed {args.old} -> {args.new} ({n} extracts)"})
+    an.codebook["changelog"].append({"version": an.codebook.get("version", 1), "date": today(), "change": f"renamed {old} -> {new} ({n} extracts)"})
+    return n
+
+
+def cmd_rename_code(an: Analysis, args) -> int:
+    n = do_rename_code(an, args.old, args.new)
     an.save_codebook(); an.save_extracts(); an.save_themes()
     print(f"renamed {args.old} -> {args.new}; {n} extract(s) updated")
     return 0
@@ -1130,6 +1218,9 @@ def cmd_mark_coded(an: Analysis, args) -> int:
 
 
 def cmd_stale(an: Analysis, args) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(stale_json(an), ensure_ascii=False, indent=2, default=json_safe))
+        return 0
     v = int(an.codebook.get("version", 1))
     stale = []
     for t in an.study.get("transcripts", []):
@@ -1185,7 +1276,37 @@ def collate(an: Analysis, target: str) -> str:
 
 
 def cmd_collate(an: Analysis, args) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(collate_json(an, args.target), ensure_ascii=False, indent=2, default=json_safe))
+        return 0
     print(collate(an, args.target))
+    return 0
+
+
+def cmd_bundle(an: Analysis, args) -> int:
+    """Everything a workbench tab needs, in one process (the daemon calls this)."""
+    print(json.dumps(bundle_json(an), ensure_ascii=False, default=json_safe))
+    return 0
+
+
+def cmd_transcript(an: Analysis, args) -> int:
+    """One transcript as the review surface: turns, resolved speakers, coded spans."""
+    if getattr(args, "json", False):
+        print(json.dumps(transcript_json(an, args.transcript), ensure_ascii=False, default=json_safe))
+        return 0
+    d = transcript_json(an, args.transcript)
+    t = d["transcript"]
+    print(f"{t['id']} · {', '.join(t['participants'])} · {t['turns']} turns · {d['stats']['extracts']} extracts "
+          f"({d['stats']['new']} new) · codebook v{t['coded_with_version']} ({t['state']})")
+    for turn in d["turns"]:
+        who = turn["participant"] or turn["speaker"]
+        mark = "" if turn["role"] == "participant" else f"  ({turn['role']})"
+        print(f"[{turn['timestamp'] or '-'}] {who}{mark}: {turn['text'][:120]}{'...' if len(turn['text']) > 120 else ''}")
+        for sp in turn["spans"]:
+            e = next((x for x in d["extracts"] if x["id"] == sp["extract"]), {})
+            loc = f"{sp['start']}-{sp['end']}" if sp["start"] is not None else "unlocated"
+            print(f"    {sp['extract']} [{e.get('kind')}] {', '.join(e.get('codes') or [])} · {loc}"
+                  + ("  ← new" if e.get("new") else ""))
     return 0
 
 
@@ -1356,7 +1477,10 @@ def theme_block(an: Analysis, th: dict, pids: list[str], N: int, level: int) -> 
         for eid in th["selected_extracts"]:
             e = an.extract(eid)
             if e:
-                out.append(f"- {e['id']} ({e['participant']}, [{e.get('timestamp') or '-'}]): \"{e['text']}\"")
+                span = (th.get("quote_spans") or {}).get(eid) or None
+                shown = span["text"] if span else e["text"]
+                trim = f" _(trimmed from {len(norm(e['text']).split())} words)_" if span else ""
+                out.append(f"- {e['id']} ({e['participant']}, [{e.get('timestamp') or '-'}]): \"{shown}\"{trim}")
     if th.get("tensions"):
         out += ["", "*Tensions / accounts that complicate the theme:*"]
         for eid in th["tensions"]:
@@ -1388,8 +1512,13 @@ def quote_bank(an: Analysis) -> str:
             if not e:
                 continue
             kind = "" if e.get("kind") == "said" else f" _[{e['kind']}]_"
-            out.append(f"- **{e['participant']}**{kind}: \"{e['text']}\"")
-            out.append(f"  `{e['id']}` {e['transcript']}:{e.get('line_start')} [{e.get('timestamp') or '-'}]{(' · ' + e['context']) if e.get('context') else ''}")
+            span = (th.get("quote_spans") or {}).get(eid) or None
+            shown = span["text"] if span else e["text"]
+            out.append(f"- **{e['participant']}**{kind}: \"{shown}\"")
+            trail = f"  `{e['id']}` {e['transcript']}:{e.get('line_start')} [{e.get('timestamp') or '-'}]{(' · ' + e['context']) if e.get('context') else ''}"
+            if span:
+                trail += f" · trimmed to {span['words']} of {len(norm(e['text']).split())} words for inline use"
+            out.append(trail)
         if not th.get("selected_extracts"):
             out.append("- (no quotes selected yet)")
         out.append("")
@@ -1426,6 +1555,9 @@ def cmd_report(an: Analysis, args) -> int:
         audit.append(f"- ERROR: {e}")
     for w in warnings + vwarnings:
         audit.append(f"- warning: {w}")
+    spread = spread_json(an)
+    if spread["warnings"]:
+        audit += ["", "## Quote selection and attribution spread", ""] + [f"- {w['text']}" for w in spread["warnings"]]
     dupes = find_dupes(an)
     if dupes:
         audit += ["", "## Possible duplicate codes", ""] + [f"- {d}" for d in dupes]
@@ -1435,7 +1567,2181 @@ def cmd_report(an: Analysis, args) -> int:
     return 1 if (errors or verrors) else 0
 
 
+
+# ==================================================================== payloads
+# One computation, two renderings: every table the terminal prints has a --json
+# twin the workbench reads, so a number never gets derived twice (principle 6).
+def code_change_version(an: Analysis, cid: str) -> int:
+    """The codebook version at which this code last changed meaning."""
+    c = an.code(an.resolve_code(cid)) or {}
+    added = int((c.get("added") or {}).get("version") or 0)
+    redefined = int(c.get("redefined_version") or 0)
+    return max(added, redefined)
+
+
+def extract_state(an: Analysis, e: dict) -> dict:
+    """Whether an extract is new since the researcher last reviewed it, and why.
+
+    Delta reviewing (principle 2) rests on three facts: it was never reviewed, the agent
+    changed it since (which clears the stamp), or one of its codes was added or redefined
+    after the review — the same reason `stale` sends you back to a transcript. Nothing
+    here compares two clock strings, so two changes in the same second cannot hide one.
+    """
+    rev = e.get("reviewed") or None
+    if not rev:
+        return {"new": True, "reason": "changed since you reviewed it" if e.get("updated") else "not reviewed yet"}
+    rver = int(rev.get("version") or 0)
+    late = sorted({c for c in e.get("codes", []) if code_change_version(an, c) > rver})
+    if late:
+        return {"new": True, "reason": "code(s) added or redefined since: " + ", ".join(late)}
+    return {"new": False, "reason": None}
+
+
+def code_public(an: Analysis, c: dict, pids: list[str]) -> dict:
+    """One code, with the numbers the views need beside it."""
+    cid = c["id"]
+    fam = sorted(code_family(an, cid)) if not c.get("parent") else [cid]
+    pmap = participants_for_codes(an, set(fam))
+    direct = participants_for_codes(an, {cid})
+    kinds = Counter()
+    n_ex = 0
+    for e in an.extracts:
+        if {an.resolve_code(x) for x in e.get("codes", [])} & set(fam) and e["participant"] in pids:
+            kinds[e.get("kind", "said")] += 1
+            n_ex += 1
+    child_only = 0
+    for e in an.extracts:
+        ecodes = {an.resolve_code(x) for x in e.get("codes", [])}
+        if ecodes & set(fam) and cid not in ecodes and e["participant"] in pids:
+            child_only += 1
+    return {
+        "id": cid,
+        "name": c.get("name") or "",
+        "parent": c.get("parent"),
+        "status": c.get("status"),
+        "definition": c.get("definition") or "",
+        "include": c.get("include") or "",
+        "exclude": c.get("exclude") or "",
+        "tags": c.get("tags") or [],
+        "examples": c.get("examples") or [],
+        "merged_into": c.get("merged_into"),
+        "added": c.get("added") or {},
+        "proposal": c.get("proposal") or None,
+        "reviewed": c.get("reviewed") or None,
+        "redefined_version": c.get("redefined_version"),
+        "family": fam,
+        "participants": [p for p in pids if p in pmap],
+        "n": len([p for p in pids if p in pmap]),
+        "extracts": n_ex,
+        "direct_extracts": sum(len(v) for k, v in direct.items() if k in pids),
+        # `extracts` counts distinct extracts in the family; these two partition it, so a
+        # parent carrying more than its children is a comparison of like with like.
+        "child_extracts": child_only,
+        "kinds": {"said": kinds["said"], "did": kinds["did"], "intent": kinds["intent"]},
+    }
+
+
+def extract_public(an: Analysis, e: dict) -> dict:
+    out = dict(e)
+    out.update(extract_state(an, e))
+    out["words"] = len(norm(e.get("text", "")).split())
+    return out
+
+
+def transcript_state(an: Analysis, t: dict) -> str:
+    v = int(an.codebook.get("version", 1))
+    cv = t.get("coded_with_version")
+    if cv is None:
+        return "uncoded"
+    return "stale" if int(cv) < v else "current"
+
+
+def coverage_json(an: Analysis) -> dict:
+    parts = an.participants()
+    pids = [p["id"] for p in parts]
+    N = len(pids)
+    codes = [code_public(an, c, pids) for c in sorted(an.live_codes(), key=lambda c: (c.get("parent") or c["id"], 0 if not c.get("parent") else 1, c["id"]))]
+    # heatmap cells: code -> participant -> {extracts, kinds}
+    cells: dict[str, dict[str, dict]] = {}
+    for c in codes:
+        fam = set(c["family"])
+        row: dict[str, dict] = {}
+        for e in an.extracts:
+            if e["participant"] not in pids:
+                continue
+            if {an.resolve_code(x) for x in e.get("codes", [])} & fam:
+                cell = row.setdefault(e["participant"], {"extracts": [], "kinds": {"said": 0, "did": 0, "intent": 0}})
+                cell["extracts"].append(e["id"])
+                cell["kinds"][e.get("kind", "said")] = cell["kinds"].get(e.get("kind", "said"), 0) + 1
+        cells[c["id"]] = row
+    all_top = sorted({an.resolve_code(c["id"]) for c in an.live_codes() if not c.get("parent")})
+    participants = []
+    for p in parts:
+        exs = [e for e in an.extracts if e["participant"] == p["id"]]
+        pcodes = set()
+        for e in exs:
+            for cid in e.get("codes", []):
+                r = an.resolve_code(cid)
+                cc = an.code(r)
+                pcodes.add((cc.get("parent") or r) if cc else r)
+        participants.append({
+            "id": p["id"], "role": p.get("role"), "group": p.get("group"), "notes": p.get("notes"),
+            "speakers": p.get("speakers") or [],
+            "transcripts": [t["id"] for t in an.study.get("transcripts", []) if p["id"] in (t.get("participants") or [])],
+            "extracts": len(exs), "distinct_codes": len(pcodes),
+            "missing_top": [c for c in all_top if c not in pcodes],
+        })
+    transcripts = []
+    for t in an.study.get("transcripts", []):
+        exs = [e for e in an.extracts if e.get("transcript") == t["id"]]
+        transcripts.append({
+            "id": t["id"], "path": str(t.get("path") or ""), "participants": t.get("participants") or [],
+            "kind": t.get("kind"), "extracts": len(exs),
+            "new_extracts": sum(1 for e in exs if extract_state(an, e)["new"]),
+            "coded_with_version": t.get("coded_with_version"), "state": transcript_state(an, t),
+        })
+    themes = []
+    for th in an.themes["themes"]:
+        fam = theme_family(an, th)
+        pmap = participants_for_codes(an, fam)
+        ps = [p for p in pids if p in pmap]
+        themes.append({
+            "id": th.get("id"), "name": th.get("name") or "", "parent": th.get("parent"),
+            "status": th.get("status"), "in_paper": th.get("in_paper", "undecided"),
+            "rq": th.get("rq"), "essence": th.get("essence") or "", "story": th.get("story") or "",
+            "codes": th.get("codes") or [], "family": sorted(fam),
+            "tensions": th.get("tensions") or [], "selected_extracts": th.get("selected_extracts") or [],
+            "quote_spans": th.get("quote_spans") or {}, "reviewed": th.get("reviewed") or None,
+            "participants": ps, "n": len(ps), "N": N,
+            "extracts": sum(len(v) for k, v in pmap.items() if k in pids),
+        })
+    return {
+        "study": an.study.get("study") or "",
+        "approach": an.study.get("approach") or {},
+        "research_questions": an.study.get("research_questions") or [],
+        "codebook_version": int(an.codebook.get("version", 1)),
+        "frozen": bool(an.codebook.get("frozen")),
+        "N": N,
+        "total_extracts": len(an.extracts),
+        "codes": codes,
+        "cells": cells,
+        "participants": participants,
+        "roster": an.study.get("participants", []),
+        "transcripts": transcripts,
+        "themes": themes,
+        "zero_codes": [c["id"] for c in codes if c["n"] == 0],
+        "silent_participants": [p["id"] for p in participants if p["extracts"] == 0],
+    }
+
+
+def theme_family(an: Analysis, th: dict) -> set[str]:
+    """Every code a theme gathers, including its sub-themes' codes and children."""
+    fam: set[str] = set()
+    for c in th.get("codes") or []:
+        fam |= code_family(an, an.resolve_code(c))
+    for sub in an.themes["themes"]:
+        if sub.get("parent") == th.get("id"):
+            for c in sub.get("codes") or []:
+                fam |= code_family(an, an.resolve_code(c))
+    return fam
+
+
+def dupes_json(an: Analysis) -> dict:
+    """The same suspicions `dupes` prints, as structured pairs the tree can badge."""
+    codes = an.live_codes()
+    ex_by_code: dict[str, set[str]] = defaultdict(set)
+    for e in an.extracts:
+        for c in e.get("codes", []):
+            ex_by_code[an.resolve_code(c)].add(e["id"])
+    out = []
+    for i, a in enumerate(codes):
+        for b in codes[i + 1:]:
+            if a.get("parent") == b["id"] or b.get("parent") == a["id"]:
+                continue
+            ta_, tb_ = token_set(f"{a['id']} {a.get('name','')}"), token_set(f"{b['id']} {b.get('name','')}")
+            js = jaccard(ta_, tb_)
+            if js >= 0.5 and (ta_ & tb_):
+                out.append({"kind": "names", "a": a["id"], "b": b["id"], "score": round(js, 2), "shared": 0,
+                            "text": f"names overlap ({js:.2f})"})
+            ea, eb = ex_by_code.get(a["id"], set()), ex_by_code.get(b["id"], set())
+            if ea and eb:
+                jo = jaccard(ea, eb)
+                if jo >= 0.5:
+                    out.append({"kind": "extracts", "a": a["id"], "b": b["id"], "score": round(jo, 2),
+                                "shared": len(ea & eb), "text": f"{len(ea & eb)} of {len(ea | eb)} extracts shared"})
+                elif len(ea) >= 3 and ea <= eb:
+                    out.append({"kind": "subset", "a": a["id"], "b": b["id"], "score": 1.0, "shared": len(ea),
+                                "text": f"`{a['id']}` ({len(ea)}) is a strict subset of `{b['id']}` ({len(eb)})"})
+                elif len(eb) >= 3 and eb <= ea:
+                    out.append({"kind": "subset", "a": b["id"], "b": a["id"], "score": 1.0, "shared": len(eb),
+                                "text": f"`{b['id']}` ({len(eb)}) is a strict subset of `{a['id']}` ({len(ea)})"})
+            da, db = fold(a.get("definition") or ""), fold(b.get("definition") or "")
+            if da and da == db:
+                out.append({"kind": "identical-definition", "a": a["id"], "b": b["id"], "score": 1.0, "shared": 0,
+                            "text": "identical definitions"})
+    return {"suspicions": out, "live_codes": len(codes)}
+
+
+def stale_rows(an: Analysis) -> list[dict]:
+    v = int(an.codebook.get("version", 1))
+    rows = []
+    for t in an.study.get("transcripts", []):
+        cv = t.get("coded_with_version")
+        if cv is None:
+            rows.append({"transcript": t["id"], "coded_with_version": None, "reason": "never coded",
+                         "codes_since": [], "severity": "recode"})
+        elif int(cv) < v:
+            since = sorted({c["id"] for c in an.live_codes() if code_change_version(an, c["id"]) > int(cv)})
+            rows.append({"transcript": t["id"], "coded_with_version": int(cv),
+                         "reason": f"coded with v{cv}, codebook is v{v}", "codes_since": since,
+                         "severity": "recode" if since else "version-only"})
+    return rows
+
+
+def stale_json(an: Analysis) -> dict:
+    return {"codebook_version": int(an.codebook.get("version", 1)),
+            "transcripts": len(an.study.get("transcripts", [])),
+            "stale": stale_rows(an),
+            "reread_requests": [r for r in (an.study.get("reread_requests") or []) if r.get("status") != "done"]}
+
+
+def collate_json(an: Analysis, target: str) -> dict:
+    th = an.theme(target)
+    if th:
+        fam = theme_family(an, th)
+        kind, title = "theme", f"{th['id']} {th.get('name','')}"
+    else:
+        if an.code(target) is None:
+            raise SystemExit(f"{target} is neither a code nor a theme id")
+        fam = code_family(an, an.resolve_code(target))
+        kind, title = "code", target
+    by_p: dict[str, list[dict]] = defaultdict(list)
+    for e in an.extracts:
+        if {an.resolve_code(c) for c in e.get("codes", [])} & fam:
+            by_p[e["participant"]].append(e)
+    groups = []
+    for p in an.participants(None):
+        pid = p["id"]
+        if pid not in by_p:
+            continue
+        rows = sorted(by_p[pid], key=lambda e: (e.get("transcript") or "", int(e.get("line_start") or 0)))
+        groups.append({"participant": pid, "role": p.get("role"), "extracts": [extract_public(an, e) for e in rows]})
+    return {"target": target, "kind": kind, "title": title, "family": sorted(fam),
+            "N": len(an.participants()), "participants": len([g for g in groups if g["role"] == "participant"]),
+            "total": sum(len(g["extracts"]) for g in groups), "groups": groups}
+
+
+def locate_span(turn_text: str, extract_text: str) -> tuple[int, int] | None:
+    """Character offsets of an extract inside its turn, in normalised coordinates.
+
+    The workbench highlights spans by offset rather than by re-searching in the
+    browser, so this is the one place the match is computed — the same
+    normalisation `annotate` uses, minus its regex escaping.
+    """
+    hay, needle = norm(turn_text), norm(extract_text)
+    if not needle:
+        return None
+    i = hay.lower().find(needle.lower())
+    if i < 0:
+        return None
+    return i, i + len(needle)
+
+
+def transcript_json(an: Analysis, tid: str) -> dict:
+    """One transcript as the review surface: turns, resolved speakers, coded spans."""
+    t = an.transcript(tid)
+    if t is None:
+        raise SystemExit(f"unknown transcript {tid}")
+    lines = an.transcript_lines(t)
+    turns = parse_turns(lines)
+    mine = [e for e in an.extracts if e.get("transcript") == tid]
+    by_first_line: dict[int, list[dict]] = defaultdict(list)
+    for e in mine:
+        by_first_line[int(e.get("line_start") or 0)].append(e)
+    dupe_codes = set()
+    for s in dupes_json(an)["suspicions"]:
+        dupe_codes.add(s["a"])
+        dupe_codes.add(s["b"])
+    out_turns = []
+    unlocated: list[str] = []
+    for idx, tr in enumerate(turns):
+        text = norm(" ".join([tr["text"]]))
+        p = an.participant_for_speaker(tr["speaker"])
+        spans = []
+        for e in sorted(by_first_line.get(tr["line"], []), key=lambda e: e["id"]):
+            loc = locate_span(tr["text"], e.get("text", ""))
+            if loc is None:
+                unlocated.append(e["id"])
+                spans.append({"extract": e["id"], "start": None, "end": None})
+            else:
+                spans.append({"extract": e["id"], "start": loc[0], "end": loc[1]})
+        out_turns.append({
+            "index": idx, "line": tr["line"], "end_line": tr["end_line"], "timestamp": tr["timestamp"],
+            "speaker": tr["speaker"], "participant": (p or {}).get("id"), "role": (p or {}).get("role") or "unknown",
+            "text": text, "spans": spans,
+        })
+    # consistency hints, so the eye lands where the coding was least certain
+    line_of = {e["id"]: int(e.get("line_start") or 0) for e in mine}
+    fam_of: dict[str, set[str]] = {}
+    for e in mine:
+        tops = set()
+        for cid in e.get("codes", []):
+            c = an.code(an.resolve_code(cid)) or {}
+            tops.add(c.get("parent") or an.resolve_code(cid))
+        fam_of[e["id"]] = tops
+    turn_index = {tr["line"]: i for i, tr in enumerate(turns)}
+    extracts = []
+    for e in mine:
+        hints = []
+        for cid in e.get("codes", []):
+            c = an.code(cid)
+            if c is None:
+                hints.append({"kind": "unknown-code", "text": f"`{cid}` is not in the codebook"})
+            elif c.get("status") == "candidate":
+                hints.append({"kind": "candidate-code", "text": f"`{cid}` is still a candidate"})
+            elif c.get("status") == "merged":
+                hints.append({"kind": "merged-code", "text": f"`{cid}` was merged into `{c.get('merged_into')}`"})
+            elif c.get("status") == "retired":
+                hints.append({"kind": "retired-code", "text": f"`{cid}` is retired"})
+            if cid in dupe_codes:
+                hints.append({"kind": "dupe", "text": f"`{cid}` is in a duplicate suspicion"})
+        if e["id"] in unlocated:
+            hints.append({"kind": "unlocated", "text": "text not found in its turn; fix the locator or re-trim"})
+        mi = turn_index.get(line_of.get(e["id"], -1))
+        if mi is not None:
+            for other in mine:
+                if other["id"] == e["id"]:
+                    continue
+                oi = turn_index.get(line_of.get(other["id"], -1))
+                if oi is None or abs(oi - mi) != 1:
+                    continue
+                if fam_of[e["id"]] & fam_of[other["id"]] and set(e.get("codes", [])) != set(other.get("codes", [])):
+                    hints.append({"kind": "family-adjacent",
+                                  "text": f"{other['id']} on the neighbouring turn shares a family with different codes"})
+                    break
+        pub = extract_public(an, e)
+        pub["hints"] = hints
+        extracts.append(pub)
+    pids = [p["id"] for p in an.participants()]
+    codes = {c["id"]: code_public(an, c, pids) for c in an.codebook["codes"]}
+    frames = frame_index(an, t)
+    return {
+        "transcript": {
+            "id": t["id"], "path": str(t.get("path") or ""), "abs_path": str(an.transcript_path(t)),
+            "participants": t.get("participants") or [], "kind": t.get("kind"),
+            "coded_with_version": t.get("coded_with_version"), "state": transcript_state(an, t),
+            "lines": len(lines), "turns": len(turns),
+        },
+        "turns": out_turns,
+        "extracts": extracts,
+        "codes": codes,
+        "frames": frames,
+        "stats": {
+            "extracts": len(mine),
+            "new": sum(1 for e in extracts if e["new"]),
+            "kinds": {k: sum(1 for e in mine if e.get("kind") == k) for k in ("said", "did", "intent")},
+            "unlocated": sorted(set(unlocated)),
+        },
+    }
+
+
+def frame_index(an: Analysis, t: dict) -> dict:
+    """The `watch-recording` frame grid beside a transcript, if there is one.
+
+    Frames are named HH-MM-SS.jpg one folder up from the transcript; the workbench
+    hovers a timestamp and asks for the nearest frame at or before it.
+    """
+    d = an.transcript_path(t).parent / "video-snapshots"
+    if not d.is_dir():
+        return {"dir": None, "frames": []}
+    rows = []
+    for f in sorted(d.iterdir()):
+        m = re.match(r"^(?:exact-)?(\d{2})-(\d{2})-(\d{2})\.(jpg|jpeg|png|webp)$", f.name, flags=re.I)
+        if not m:
+            continue
+        secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        rows.append({"file": f.name, "timestamp": f"{m.group(1)}:{m.group(2)}:{m.group(3)}", "seconds": secs,
+                     "exact": f.name.lower().startswith("exact-")})
+    rows.sort(key=lambda r: (r["seconds"], r["exact"]))
+    return {"dir": str(d), "frames": rows}
+
+
+def transcript_files(an: Analysis, t: dict) -> dict:
+    """Where a transcript and its frame grid live, for the daemon to serve them from."""
+    try:
+        path = an.transcript_path(t)
+    except Exception:  # a bad path is validate's problem, not the viewer's
+        return {"abs_path": None, "frames_dir": None}
+    frames = path.parent / "video-snapshots"
+    return {"abs_path": str(path), "frames_dir": str(frames) if frames.is_dir() else None}
+
+
+def spread_json(an: Analysis) -> dict:
+    """Attribution spread over the quotes chosen for the paper, with the skill's warnings."""
+    pids = [p["id"] for p in an.participants()]
+    per_participant: dict[str, list[dict]] = {p: [] for p in pids}
+    rows = []
+    warnings = []
+    for th in an.themes["themes"]:
+        if th.get("in_paper") == "no" or th.get("status") in ("dropped", "merged"):
+            continue
+        sel = th.get("selected_extracts") or []
+        kinds = Counter()
+        for eid in sel:
+            e = an.extract(eid)
+            if not e:
+                warnings.append({"kind": "missing-extract", "text": f"{th.get('id')} selects {eid}, which no longer exists"})
+                continue
+            kinds[e.get("kind", "said")] += 1
+            per_participant.setdefault(e["participant"], []).append({"theme": th.get("id"), "extract": eid})
+        fam = theme_family(an, th)
+        available = Counter()
+        for e in an.extracts:
+            if {an.resolve_code(c) for c in e.get("codes", [])} & fam:
+                available[e.get("kind", "said")] += 1
+        rows.append({"theme": th.get("id"), "name": th.get("name") or "", "in_paper": th.get("in_paper", "undecided"),
+                     "selected": len(sel), "kinds": dict(kinds), "available_kinds": dict(available),
+                     "tensions": len(th.get("tensions") or [])})
+        if available["did"] and not kinds["did"]:
+            warnings.append({"kind": "no-did-quote", "theme": th.get("id"),
+                             "text": f"{th.get('id')} has {available['did']} `did` extract(s) but no `did` quote selected"})
+        if sel and not (th.get("tensions") or []):
+            warnings.append({"kind": "no-tension", "theme": th.get("id"),
+                             "text": f"{th.get('id')} has quotes but no tension recorded"})
+    for pid, qs in per_participant.items():
+        if len(qs) > 3:
+            warnings.append({"kind": "over-quoted", "participant": pid,
+                             "text": f"{pid} is quoted {len(qs)} times across the paper"})
+    unquoted = [p for p in pids if not per_participant.get(p)]
+    if unquoted:
+        warnings.append({"kind": "unquoted", "text": "quoted nowhere: " + ", ".join(unquoted)})
+    return {"themes": rows, "per_participant": {k: v for k, v in per_participant.items()},
+            "unquoted": unquoted, "warnings": warnings}
+
+
+def bundle_json(an: Analysis) -> dict:
+    """Everything a workbench tab needs on load, in one process."""
+    cov = coverage_json(an)
+    memos = (an.root / "memos.md")
+    applied = sorted((an.root / "reviews").glob("*-applied.jsonl")) if (an.root / "reviews").is_dir() else []
+    return {
+        **cov,
+        "root": str(an.root.resolve()),
+        "dupes": dupes_json(an)["suspicions"],
+        "stale": stale_json(an),
+        "extracts_all": [extract_public(an, e) for e in an.extracts],
+        "changelog": an.codebook.get("changelog") or [],
+        "inbox": annotate_claims(read_inbox(an)),
+        "spread": spread_json(an),
+        "memos": memos.read_text(encoding="utf-8") if memos.exists() else "",
+        "transcript_files": {t["id"]: transcript_files(an, t) for t in an.study.get("transcripts", [])},
+        "applied_logs": [p.name for p in applied],
+        "frozen": bool(an.codebook.get("frozen")),
+        "generated": dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+# ======================================================================= inbox
+# The workbench never writes a data file. Every gesture it makes lands here as one
+# typed operation, and `apply` is the only thing that touches the analysis: the
+# script stays the single writer, the cascades run in one place, and the applied
+# log is the audit trail of the review itself.
+INBOX_NAME = "inbox.jsonl"
+LOCK_NAME = ".inbox.lock"
+APPLY_LOCK_NAME = ".apply.lock"
+LOCK_STALE_SECONDS = 10.0
+# A claim (or an apply lock) left behind by a killed run is released after this, so a crash
+# cannot strand the researcher's feedback in a state nothing will pick up again.
+CLAIM_STALE_MINUTES = 15
+
+
+class OpError(Exception):
+    """A staged operation that cannot be applied as written."""
+
+
+def inbox_path(an: Analysis) -> Path:
+    return an.root / INBOX_NAME
+
+
+def _lock_path(an: Analysis, name: str = LOCK_NAME) -> Path:
+    return an.root / name
+
+
+def _lock_holder(path: Path) -> dict:
+    """Who holds this lock, tolerating a file written by an older version of the script.
+
+    The current format is `{"pid": N, "token": "...", "at": "..."}`. A file holding just a
+    pid (the first version) still identifies its owner, which is what the liveness check
+    needs; anything unreadable leaves the pid unknown and falls back to the age rule.
+    """
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return {}
+    try:
+        parsed = json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return {"pid": int(text)} if text.isdigit() else {}
+    if isinstance(parsed, int):
+        return {"pid": parsed}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _alive(pid: int) -> bool:
+    """Is that process still running? (Signal 0 asks without sending anything.)"""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # someone else's process, but it exists
+
+
+_HELD: dict[str, str] = {}   # lock name -> the token this process wrote
+
+
+def take_lock(an: Analysis, name: str = LOCK_NAME, stale_seconds: float = LOCK_STALE_SECONDS,
+              timeout: float = 5.0, whose: str = "another process") -> Path:
+    """A cross-process advisory lock, so the daemon and the script never interleave.
+
+    A create-exclusive file holding the owner's pid and a token. Two rules keep it honest:
+    a lock is only stolen when it is older than `stale_seconds` **and** its owning process
+    is gone (so a writer that is merely slow, paused, or resuming from sleep keeps its
+    lock), and it is only released by the process whose token is in the file (so a writer
+    whose lock *was* stolen cannot delete its successor's).
+    """
+    import secrets
+    import time
+
+    path = _lock_path(an, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.write(fd, json.dumps({"pid": os.getpid(), "token": token,
+                                     "at": dt.datetime.now().isoformat(timespec="seconds")}).encode())
+            os.close(fd)
+            _HELD[name] = token
+            return path
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            holder = _lock_holder(path)
+            pid = int(holder.get("pid") or 0)
+            if age > stale_seconds and not _alive(pid):
+                # Take the stale file out of the way by *renaming* it, which is atomic: if
+                # two contenders both saw it, only one rename succeeds, and the loser loops
+                # round to find either no lock or the winner's live one. Unlinking here
+                # instead would let the loser delete the winner's fresh lock.
+                gone = path.with_name(f"{path.name}.stale-{token}")
+                try:
+                    path.replace(gone)
+                    gone.unlink()
+                except (FileNotFoundError, OSError):
+                    pass
+                continue
+            if time.time() > deadline:
+                who = f"{whose} (pid {pid})" if pid else whose
+                raise SystemExit(
+                    f"{path.name} is held by {who}. Wait for it to finish"
+                    + (f"; if that process is gone, delete {path}." if stale_seconds > 60 else ", then try again.")
+                )
+            time.sleep(0.05)
+
+
+def release_lock(an: Analysis, name: str = LOCK_NAME) -> None:
+    """Release only our own lock: if it was stolen, the file now belongs to someone else."""
+    path = _lock_path(an, name)
+    mine = _HELD.pop(name, None)
+    if not path.exists():
+        return
+    if mine is not None and _lock_holder(path).get("token") != mine:
+        return   # ours was stolen; this file belongs to whoever took it
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def inbox_lock(an: Analysis, timeout: float = 5.0):
+    return take_lock(an, LOCK_NAME, LOCK_STALE_SECONDS, timeout)
+
+
+def inbox_unlock(an: Analysis) -> None:
+    release_lock(an, LOCK_NAME)
+
+
+def apply_lock(an: Analysis):
+    """Held for a whole pass: two passes must not load, mutate and rewrite the same
+    analysis files from different snapshots, or the later save silently wins."""
+    return take_lock(an, APPLY_LOCK_NAME, CLAIM_STALE_MINUTES * 60.0, timeout=1.0,
+                     whose="another `apply` on this folder")
+
+
+def apply_unlock(an: Analysis) -> None:
+    release_lock(an, APPLY_LOCK_NAME)
+
+
+def stale_claim(o: dict) -> bool:
+    """An `applying` row whose claiming run is long gone."""
+    if o.get("status") != "applying":
+        return False
+    try:
+        claimed = dt.datetime.fromisoformat(str(o.get("claimed_at")))
+    except (TypeError, ValueError):
+        return True
+    return claimed < dt.datetime.now() - dt.timedelta(minutes=CLAIM_STALE_MINUTES)
+
+
+def annotate_claims(rows: list[dict]) -> list[dict]:
+    """For *display*: report a dead claim as stalled without writing anything.
+
+    `apply` is what persists this (`flag_stale_claims`), but `inbox` is the command the
+    agent runs first, and the workbench reads the same rows — neither should call a claim
+    from a run that died fifteen minutes ago "in flight".
+    """
+    out = []
+    for o in rows:
+        if stale_claim(o):
+            o = {**o, "status": "stalled",
+                 "error": o.get("error") or ("an earlier `apply` died holding this claim; it may or may not have "
+                                             "taken effect. Check the data, then apply it again by id, or drop it.")}
+        out.append(o)
+    return out
+
+
+def read_inbox(an: Analysis) -> list[dict]:
+    """Every line in the inbox. A line that will not parse comes back as `malformed`, so it
+    is reported rather than silently skipped, and is never selected for applying."""
+    path = inbox_path(an)
+    if not path.exists():
+        return []
+    ops = []
+    for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ops.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            # Keep the line whole: `write_inbox` re-emits it verbatim and the id counter
+            # scans it, so a truncated `{"id":"op-0042"...` neither vanishes on the next
+            # rewrite nor gets handed out again. Only the display truncates.
+            ops.append({"id": f"op-bad-{n}", "op": "?", "status": "malformed", "error": str(exc), "raw": line})
+    return ops
+
+
+def applied_log_paths(an: Analysis) -> list[Path]:
+    d = an.root / "reviews"
+    return sorted(d.glob("*-applied.jsonl")) if d.is_dir() else []
+
+
+OP_ID_RE = re.compile(r"op-(\d+)")
+
+
+def next_op_id(an: Analysis, existing: list[dict] | None = None) -> str:
+    """The next free operation id. Ids are never reused, so this looks at the inbox *and*
+    every applied log — and at the raw text of a line that would not parse, since a
+    truncated `{"id":"op-0042"...` still spent that number."""
+    top = 0
+    raw_texts: list[str] = []
+    rows = list(existing if existing is not None else read_inbox(an))
+    for path in applied_log_paths(an):
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    raw_texts.append(line)   # only an unparseable line needs a raw scan
+        except OSError:
+            continue
+    for o in rows:
+        m = re.fullmatch(r"op-(\d+)", str(o.get("id", "")))
+        if m:
+            top = max(top, int(m.group(1)))
+        if o.get("raw"):
+            raw_texts.append(str(o["raw"]))
+    for text in raw_texts:
+        for m in OP_ID_RE.finditer(text):
+            top = max(top, int(m.group(1)))
+    return f"op-{top + 1:04d}"
+
+
+def append_inbox(an: Analysis, op: dict) -> dict:
+    """Append one operation under the lock, assigning its id."""
+    inbox_lock(an)
+    try:
+        existing = read_inbox(an)
+        op = dict(op)
+        op.setdefault("at", dt.datetime.now().isoformat(timespec="minutes"))
+        op.setdefault("by", "agent")
+        op.setdefault("status", "pending")
+        op["id"] = op.get("id") or next_op_id(an, existing)
+        with inbox_path(an).open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(op, ensure_ascii=False, default=json_safe) + "\n")
+        return op
+    finally:
+        inbox_unlock(an)
+
+
+def _inbox_line(o: dict) -> str:
+    """A row as one line: a line that never parsed goes back exactly as it came."""
+    if o.get("status") == "malformed" and o.get("raw"):
+        return str(o["raw"])
+    return json.dumps(o, ensure_ascii=False, default=json_safe)
+
+
+def write_inbox(an: Analysis, rows: list[dict]) -> None:
+    """Replace the inbox with these rows, atomically.
+
+    Call it under the lock, having read the file inside the same lock: every writer (this
+    script and the daemon) does a full read-modify-write, so no writer has to reason about
+    byte offsets in a file another one may have rewritten underneath it.
+    """
+    path = inbox_path(an)
+    body = "".join(_inbox_line(o) + "\n" for o in rows)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    tmp.replace(path)
+
+
+def applied_ids(an: Analysis) -> set[str]:
+    """Every operation id that reached an applied log."""
+    out: set[str] = set()
+    for path in applied_log_paths(an):
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    out.add(str(json.loads(line).get("id")))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            continue
+    return out
+
+
+def flag_stale_claims(an: Analysis, rows: list[dict]) -> tuple[list[str], list[str]]:
+    """Deal with claims an earlier `apply` never finished — without guessing.
+
+    A claim whose id is already in an applied log completed; the run died before it could
+    tidy the inbox, so the row is dropped. Any other stale claim is marked `stalled` rather
+    than handed back as pending: whether it took effect is exactly the sort of question this
+    skill refuses to answer on the researcher's behalf, and re-running `new-theme` or
+    `new-extract` blind would duplicate it. `apply <id>` re-runs one deliberately.
+    """
+    cutoff = dt.datetime.now() - dt.timedelta(minutes=CLAIM_STALE_MINUTES)
+    done = applied_ids(an)
+    stalled, completed = [], []
+    for o in list(rows):
+        if o.get("status") != "applying":
+            continue
+        try:
+            claimed = dt.datetime.fromisoformat(str(o.get("claimed_at")))
+        except (TypeError, ValueError):
+            claimed = None
+        if claimed is not None and claimed >= cutoff:
+            continue  # another apply is running right now
+        oid = str(o.get("id"))
+        if oid in done:
+            rows.remove(o)
+            completed.append(oid)
+        else:
+            o["status"] = "stalled"
+            o["error"] = ("an earlier `apply` died holding this claim; it may or may not have taken effect. "
+                          f"Check the data, then `apply {oid}` to run it again or drop it in the workbench.")
+            stalled.append(oid)
+    return stalled, completed
+
+
+def archive_ops(an: Analysis, ops: list[dict]) -> Path:
+    d = an.root / "reviews"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{today()}-applied.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        for o in ops:
+            fh.write(json.dumps(o, ensure_ascii=False, default=json_safe) + "\n")
+    return path
+
+
+# ---------------------------------------------------------------- op schema
+# view -> what the gesture was; op -> what it does; every op names the ta.py path
+# that executes it, so the workbench cannot invent an operation the script has no
+# way to perform.
+OP_SPECS: dict[str, dict] = {
+    # transcript view
+    "recode":        {"view": "transcript", "target": "extract", "required": [], "optional": ["add", "remove", "set"]},
+    "set-kind":      {"view": "transcript", "target": "extract", "required": ["kind"], "optional": []},
+    "set-context":   {"view": "transcript", "target": "extract", "required": [], "optional": ["context"]},
+    "set-note":      {"view": "transcript", "target": "extract", "required": [], "optional": ["note"]},
+    "retrim":        {"view": "transcript", "target": "extract", "required": [], "optional": ["from", "to", "start", "end", "turn_line"]},
+    "drop":          {"view": "transcript", "target": "extract", "required": [], "optional": []},
+    "new-extract":   {"view": "transcript", "target": "none", "required": ["transcript", "codes"],
+                      "optional": ["line_start", "line_end", "lines", "from", "to", "start", "end", "kind", "context", "note"]},
+    "highlight":     {"view": "transcript", "target": "extract", "required": [], "optional": ["reason"]},
+    "mark-reviewed": {"view": "transcript", "target": "none", "required": [], "optional": ["transcript", "extracts", "codes", "themes"]},
+    # codebook view
+    "code-status":   {"view": "codebook", "target": "code", "required": ["status"], "optional": []},
+    "set-field":     {"view": "codebook", "target": "code", "required": ["field", "value"], "optional": ["old", "force"]},
+    "reparent":      {"view": "codebook", "target": "code", "required": [], "optional": ["parent"]},
+    "rename-code":   {"view": "codebook", "target": "code", "required": ["new_id"], "optional": []},
+    "merge-code":    {"view": "codebook", "target": "code", "required": ["into"], "optional": ["why"]},
+    "split-code":    {"view": "codebook", "target": "code", "required": ["new_id", "extracts"], "optional": ["name", "definition", "include", "exclude"]},
+    "new-code":      {"view": "codebook", "target": "none", "required": ["id", "definition"], "optional": ["name", "parent", "include", "exclude", "tags"]},
+    # coverage view
+    "reread-request": {"view": "coverage", "target": "none", "required": ["transcript"], "optional": ["code", "note"]},
+    # themes view
+    "new-theme":      {"view": "themes", "target": "none", "required": ["name"], "optional": ["parent", "rq", "essence", "id"]},
+    "assign-theme":   {"view": "themes", "target": "code", "required": [], "optional": ["theme"]},
+    "set-theme-field": {"view": "themes", "target": "theme", "required": ["field", "value"], "optional": ["old", "force"]},
+    "merge-theme":    {"view": "themes", "target": "theme", "required": ["into"], "optional": []},
+    "set-tension":    {"view": "themes", "target": "theme", "required": [], "optional": ["add", "remove"]},
+    # quotes view
+    "select-quote":   {"view": "quotes", "target": "theme", "required": ["extract"], "optional": ["at"]},
+    "deselect-quote": {"view": "quotes", "target": "theme", "required": ["extract"], "optional": []},
+    "quote-span":     {"view": "quotes", "target": "theme", "required": ["extract"], "optional": ["from", "to", "start", "end", "clear"]},
+    # study view
+    "set-participant": {"view": "study", "target": "participant", "required": [], "optional": ["id", "role", "group", "notes", "speakers"]},
+    "set-transcript":  {"view": "study", "target": "transcript", "required": [], "optional": ["participants", "kind"]},
+    "set-stance":      {"view": "study", "target": "none", "required": ["field", "value"], "optional": []},
+    "set-rq":          {"view": "study", "target": "none", "required": ["id", "text"], "optional": []},
+    # threads: a conversation, never "applied"
+    "comment":        {"view": "any", "target": "any", "required": ["text"], "optional": []},
+    # `about` is set by `apply` when a thread's target is re-pointed from an operation id to
+    # the id of the thing that operation created; it records what it used to point at.
+    "reply":          {"view": "any", "target": "thread", "required": ["text"], "optional": []},
+}
+THREAD_OPS = {"comment", "reply"}
+CODEBOOK_OPS = {"code-status", "set-field", "reparent", "rename-code", "merge-code", "split-code", "new-code"}
+
+
+def validate_op(an: Analysis, op: dict) -> list[str]:
+    """Structural check of one staged operation: the workbench's lint."""
+    problems = []
+    name = op.get("op")
+    spec = OP_SPECS.get(str(name))
+    if spec is None:
+        return [f"unknown op {name!r}"]
+    args = op.get("args") or {}
+    if not isinstance(args, dict):
+        return [f"{op.get('id')}: args must be an object"]
+    for key in spec["required"]:
+        if args.get(key) in (None, "", []):
+            problems.append(f"{op.get('id')} ({name}): missing arg {key}")
+    unknown = [k for k in args if k not in spec["required"] and k not in spec["optional"]]
+    if unknown:
+        problems.append(f"{op.get('id')} ({name}): unknown arg(s) {', '.join(sorted(unknown))}")
+    tgt, kind = op.get("target"), spec["target"]
+    if kind == "none":
+        pass
+    elif not tgt:
+        problems.append(f"{op.get('id')} ({name}): needs a target")
+    elif kind == "extract" and an.extract(tgt) is None:
+        problems.append(f"{op.get('id')} ({name}): no extract {tgt}")
+    elif kind == "code" and an.code(tgt) is None:
+        problems.append(f"{op.get('id')} ({name}): no code {tgt}")
+    elif kind == "theme" and an.theme(tgt) is None:
+        problems.append(f"{op.get('id')} ({name}): no theme {tgt}")
+    elif kind == "participant" and an.participant(tgt) is None:
+        problems.append(f"{op.get('id')} ({name}): no participant {tgt}")
+    elif kind == "transcript" and an.transcript(tgt) is None:
+        problems.append(f"{op.get('id')} ({name}): no transcript {tgt}")
+    return problems
+
+
+# ------------------------------------------------------------- op handlers
+def _need_extract(an: Analysis, op: dict) -> dict:
+    e = an.extract(op.get("target"))
+    if e is None:
+        raise OpError(f"no extract {op.get('target')}")
+    return e
+
+
+def _need_code(an: Analysis, cid: str) -> dict:
+    c = an.code(cid)
+    if c is None:
+        raise OpError(f"no code {cid}")
+    return c
+
+
+def _need_theme(an: Analysis, tid: str) -> dict:
+    th = an.theme(tid)
+    if th is None:
+        raise OpError(f"no theme {tid}")
+    return th
+
+
+def _as_list(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [x.strip() for x in v.split(",") if x.strip()]
+    return [str(x) for x in v]
+
+
+def _touch(an: Analysis, e: dict, op: dict, ctx: dict) -> None:
+    """Stamp an extract as changed, and as reviewed when the researcher changed it.
+
+    A correction the researcher made is a review of that extract. A change the agent made
+    is not, so it drops the stamp and the extract comes back as new in the next pass.
+    """
+    e["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    if op.get("by", "user") == "user":
+        e["reviewed"] = stamped(ctx, {"at": e["updated"], "version": ctx_version(an, ctx)})
+    else:
+        e.pop("reviewed", None)
+    ctx["extracts"] = True
+
+
+def _check_codes(an: Analysis, cids: list[str]) -> list[str]:
+    out = []
+    for cid in cids:
+        c = an.code(cid)
+        if c is None:
+            raise OpError(f"unknown code {cid}")
+        if c.get("status") == "retired":
+            raise OpError(f"code {cid} is retired")
+        out.append(an.resolve_code(cid))
+    return out
+
+
+def op_recode(an, op, ctx):
+    e = _need_extract(an, op)
+    a = op.get("args") or {}
+    codes = set(e.get("codes", []))
+    if a.get("set"):
+        codes = set(_check_codes(an, _as_list(a["set"])))
+    if a.get("add"):
+        codes |= set(_check_codes(an, _as_list(a["add"])))
+    if a.get("remove"):
+        codes -= set(_as_list(a["remove"]))
+    if not codes:
+        raise OpError("that would leave the extract with no codes; drop it instead, or say which code replaces them")
+    before = sorted(e.get("codes", []))
+    e["codes"] = sorted(codes)
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: codes {', '.join(before) or '(none)'} -> {', '.join(e['codes'])}"
+
+
+def op_set_kind(an, op, ctx):
+    e = _need_extract(an, op)
+    kind = (op.get("args") or {}).get("kind")
+    if kind not in EXTRACT_KINDS:
+        raise OpError("kind must be said | did | intent")
+    before = e.get("kind")
+    e["kind"] = kind
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: kind {before} -> {kind}"
+
+
+def op_set_context(an, op, ctx):
+    e = _need_extract(an, op)
+    e["context"] = (op.get("args") or {}).get("context") or None
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: context set"
+
+
+def op_set_note(an, op, ctx):
+    e = _need_extract(an, op)
+    e["note"] = (op.get("args") or {}).get("note") or None
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: note set"
+
+
+def op_retrim(an, op, ctx):
+    """Re-cut an extract's boundary inside its own turn, keeping its id.
+
+    The new text is sliced out of the transcript by this function, never sent in:
+    the workbench passes offsets into the same normalised turn text it was given.
+    """
+    e = _need_extract(an, op)
+    a = op.get("args") or {}
+    offsets = None
+    if a.get("start") is not None and a.get("end") is not None:
+        offsets = (int(a["start"]), int(a["end"]))
+    if offsets is None and not (a.get("from") or a.get("to")):
+        raise OpError("retrim needs either start/end offsets or from/to text")
+    # Offsets only mean something inside the turn they were measured in. The workbench
+    # sends the turn it took the selection from; if that is not this extract's own turn,
+    # the offsets would cut an unrelated (but perfectly verbatim) slice.
+    if a.get("turn_line") is not None:
+        tl = int(a["turn_line"])
+        if not (int(e["line_start"]) <= tl <= int(e["line_end"]) or tl == int(e["line_start"])):
+            raise OpError(
+                f"the selection came from line {tl}, but {e['id']} sits at "
+                f"{e['transcript']}:{e['line_start']}-{e['line_end']}; select inside the extract's own turn"
+            )
+    fresh = build_extract(
+        an, e["transcript"], int(e["line_start"]), int(e["line_end"]), list(e.get("codes") or []),
+        kind=e.get("kind") or "said", frm=a.get("from"), to=a.get("to"), participant=e.get("participant"),
+        allow_non_participant=True, offsets=offsets,
+    )
+    before = e["text"]
+    if fold(before) == fold(fresh["text"]):
+        return f"{e['id']}: boundary unchanged"
+    e["text"] = fresh["text"]
+    e["timestamp"] = fresh["timestamp"]
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: re-trimmed to {len(e['text'].split())} words"
+
+
+def op_drop(an, op, ctx):
+    e = _need_extract(an, op)
+    eid = e["id"]
+    an._extracts = [x for x in an.extracts if x.get("id") != eid]
+    for th in an.themes["themes"]:
+        for key in ("selected_extracts", "tensions"):
+            if th.get(key):
+                th[key] = [x for x in th[key] if x != eid]
+        if (th.get("quote_spans") or {}).pop(eid, None) is not None:
+            ctx["themes"] = True
+    for c in an.codebook["codes"]:
+        if c.get("examples"):
+            c["examples"] = [x for x in c["examples"] if x != eid]
+    ctx["extracts"] = ctx["themes"] = ctx["codebook_meta"] = True
+    return f"{eid}: dropped ({op.get('note') or 'no reason given'})"
+
+
+def op_new_extract(an, op, ctx):
+    a = op.get("args") or {}
+    if a.get("lines"):
+        ls, le = parse_lines_arg(str(a["lines"]))
+    else:
+        ls = int(a.get("line_start") or 0)
+        le = int(a.get("line_end") or ls)
+    offsets = None
+    if a.get("start") is not None and a.get("end") is not None:
+        offsets = (int(a["start"]), int(a["end"]))
+    ex = build_extract(
+        an, str(a["transcript"]), ls, le, _as_list(a["codes"]), kind=a.get("kind") or "said",
+        frm=a.get("from"), to=a.get("to"), context=a.get("context"), note=a.get("note"), offsets=offsets,
+    )
+    dup = next((e for e in an.extracts if e["participant"] == ex["participant"] and fold(e["text"]) == fold(ex["text"])), None)
+    if dup:
+        merged = sorted(set(dup["codes"]) | set(ex["codes"]))
+        dup["codes"] = merged
+        _touch(an, dup, op, ctx)
+        return f"{dup['id']}: identical extract already stored; codes now {', '.join(merged)}"
+    ex["reviewed"] = stamped(ctx, {"at": dt.datetime.now().isoformat(timespec="seconds"), "version": ctx_version(an, ctx)}) if op.get("by", "user") == "user" else None
+    if ex["reviewed"] is None:
+        ex.pop("reviewed", None)
+    an.extracts.append(ex)
+    ctx["extracts"] = True
+    op["created"] = ex["id"]
+    return f"{ex['id']}: new extract, {a['transcript']}:{ls} {', '.join(ex['codes'])} ({ex['kind']})"
+
+
+def op_highlight(an, op, ctx):
+    e = _need_extract(an, op)
+    reason = (op.get("args") or {}).get("reason")
+    if reason in (None, "", False) or str(reason).strip().lower() in ("no", "none", "off", "false"):
+        e.pop("highlight", None)
+        _touch(an, e, op, ctx)
+        return f"{e['id']}: highlight cleared"
+    e["highlight"] = str(reason)
+    _touch(an, e, op, ctx)
+    return f"{e['id']}: flagged paper-worthy ({e['highlight']})"
+
+
+def op_mark_reviewed(an, op, ctx):
+    a = op.get("args") or {}
+    stamp = {"at": op.get("at") or dt.datetime.now().isoformat(timespec="seconds"), "version": ctx_version(an, ctx)}
+    # every copy of it is registered below, so they all move together if the version does
+    n = 0
+    if a.get("transcript"):
+        for e in an.extracts:
+            if e.get("transcript") == a["transcript"]:
+                e["reviewed"] = stamped(ctx, dict(stamp))
+                n += 1
+        ctx["extracts"] = True
+    for eid in _as_list(a.get("extracts")):
+        e = an.extract(eid)
+        if e is not None:
+            e["reviewed"] = stamped(ctx, dict(stamp))
+            n += 1
+            ctx["extracts"] = True
+    for cid in _as_list(a.get("codes")):
+        c = an.code(cid)
+        if c is not None:
+            c["reviewed"] = stamped(ctx, dict(stamp))
+            n += 1
+            ctx["codebook_meta"] = True
+    for tid in _as_list(a.get("themes")):
+        th = an.theme(tid)
+        if th is not None:
+            th["reviewed"] = stamped(ctx, dict(stamp))
+            n += 1
+            ctx["themes"] = True
+    return f"marked {n} item(s) reviewed at codebook v{stamp['version']}"
+
+
+def op_code_status(an, op, ctx):
+    c = _need_code(an, op.get("target"))
+    status = (op.get("args") or {}).get("status")
+    if status not in ("candidate", "accepted", "retired"):
+        raise OpError("status must be candidate | accepted | retired")
+    if status == "retired":
+        users = [e["id"] for e in an.extracts if an.resolve_code(op["target"]) in {an.resolve_code(x) for x in e.get("codes", [])}]
+        if users:
+            raise OpError(f"{c['id']} still codes {len(users)} extract(s) ({', '.join(users[:4])}{'...' if len(users) > 4 else ''}); merge it or recode them first")
+        kids = [k["id"] for k in an.codebook["codes"] if k.get("parent") == c["id"] and k.get("status") in ("candidate", "accepted")]
+        if kids:
+            raise OpError(f"{c['id']} still has live child code(s) {', '.join(kids)}")
+    before = c.get("status")
+    if before == status:
+        return f"{c['id']} is already {status}; nothing changed"
+    c["status"] = status
+    if status == "accepted":
+        c["reviewed"] = stamped(ctx, {"at": dt.datetime.now().isoformat(timespec="seconds"), "version": ctx_version(an, ctx)})
+    ctx["codebook"] = True
+    ctx["changes"].append(f"{c['id']} {before} -> {status}")
+    return f"{c['id']}: {before} -> {status}"
+
+
+FIELD_NAMES = {"definition", "include", "exclude", "name"}
+
+
+def op_set_field(an, op, ctx):
+    c = _need_code(an, op.get("target"))
+    a = op.get("args") or {}
+    field = a.get("field")
+    if field not in FIELD_NAMES:
+        raise OpError(f"field must be one of {', '.join(sorted(FIELD_NAMES))}")
+    old, new = a.get("old"), str(a.get("value") or "")
+    current = str(c.get(field) or "")
+    if old is not None and not a.get("force") and fold(old) != fold(current):
+        raise OpError(
+            f"{c['id']}.{field} changed since you edited it. On disk now: {current[:120]!r}; "
+            f"your edit was against: {str(old)[:120]!r}. Re-read it in the workbench and edit again."
+        )
+    if fold(new) == fold(current):
+        return f"{c['id']}.{field} is already that wording; nothing changed"
+    c[field] = new
+    if field in ("definition", "include", "exclude"):
+        ctx["redefined"].add(c["id"])
+    ctx["codebook"] = True
+    ctx["changes"].append(f"{c['id']}.{field} reworded")
+    return f"{c['id']}: {field} updated ({len(new.split())} words)"
+
+
+def op_reparent(an, op, ctx):
+    c = _need_code(an, op.get("target"))
+    parent = (op.get("args") or {}).get("parent") or None
+    old_id = c["id"]
+    if parent:
+        p = _need_code(an, parent)
+        if p.get("parent"):
+            raise OpError(f"{parent} is itself a child; codes may have at most two levels")
+        if p["id"] == c["id"]:
+            raise OpError("a code cannot be its own parent")
+        kids = [k["id"] for k in an.codebook["codes"] if k.get("parent") == c["id"]]
+        if kids:
+            raise OpError(f"{c['id']} has child code(s) {', '.join(kids)}; moving it under {parent} would make three levels")
+        base = old_id.split(".", 1)[1] if "." in old_id else old_id
+        new_id = f"{parent}.{base}"
+    else:
+        new_id = old_id.split(".", 1)[1] if "." in old_id else old_id
+    if new_id != old_id and an.code(new_id) is not None:
+        raise OpError(f"{new_id} already exists; rename it first or merge instead")
+    c["parent"] = parent
+    if new_id != old_id:
+        rename_everywhere(an, old_id, new_id)
+        c["id"] = new_id
+        ctx["extracts"] = ctx["themes"] = True
+    ctx["codebook"] = True
+    ctx["changes"].append(f"{old_id} -> {'child of ' + parent if parent else 'top level'}{' as ' + new_id if new_id != old_id else ''}")
+    return f"{old_id}: now {'a child of ' + parent if parent else 'top level'}" + (f", renamed {new_id}" if new_id != old_id else "")
+
+
+def op_rename_code(an, op, ctx):
+    c = _need_code(an, op.get("target"))
+    new = str((op.get("args") or {}).get("new_id") or "")
+    if not CODE_ID_RE.match(new):
+        raise OpError("new id must be kebab-case, optionally parent.child")
+    if an.code(new) is not None:
+        raise OpError(f"{new} already exists; merge instead")
+    old = c["id"]
+    n = do_rename_code(an, old, new)
+    ctx["codebook"] = ctx["extracts"] = ctx["themes"] = True
+    ctx["changes"].append(f"renamed {old} -> {new}")
+    return f"renamed {old} -> {new} ({n} extract(s) updated)"
+
+
+def op_merge_code(an, op, ctx):
+    src = op.get("target")
+    dst = (op.get("args") or {}).get("into")
+    _need_code(an, src), _need_code(an, dst)
+    why = (op.get("args") or {}).get("why")
+    n = do_merge_code(an, src, dst, why, bump=False)
+    ctx["codebook"] = ctx["extracts"] = ctx["themes"] = True
+    ctx["changes"].append(f"merged {src} into {dst}" + (f" ({why})" if why else ""))
+    return f"merged {src} -> {dst} ({n} extract(s) recoded)"
+
+
+def op_split_code(an, op, ctx):
+    """Carve a child out of a code, moving the extracts that belong to it."""
+    parent = _need_code(an, op.get("target"))
+    a = op.get("args") or {}
+    if parent.get("parent"):
+        raise OpError(f"{parent['id']} is already a child; splitting it would make three levels")
+    raw = str(a.get("new_id") or "")
+    new_id = raw if raw.startswith(parent["id"] + ".") else f"{parent['id']}.{raw.split('.')[-1]}"
+    if not CODE_ID_RE.match(new_id):
+        raise OpError(f"{new_id!r} is not a valid code id")
+    if an.code(new_id) is not None:
+        raise OpError(f"{new_id} already exists")
+    moving = _as_list(a.get("extracts"))
+    missing = [eid for eid in moving if an.extract(eid) is None]
+    if missing:
+        raise OpError(f"unknown extract(s) {', '.join(missing)}")
+    child = {
+        "id": new_id, "name": a.get("name") or new_id.split(".")[-1].replace("-", " ").capitalize(),
+        "parent": parent["id"], "definition": a.get("definition") or "", "include": a.get("include") or "",
+        "exclude": a.get("exclude") or "", "status": "candidate", "merged_into": None, "tags": parent.get("tags") or [],
+        "examples": [], "added": stamped(ctx, {"version": ctx_version(an, ctx), "date": today(), "source": f"split from {parent['id']}"}),
+    }
+    an.codebook["codes"].append(child)
+    n = 0
+    for eid in moving:
+        e = an.extract(eid)
+        codes = set(e.get("codes", []))
+        if parent["id"] in codes:
+            codes.discard(parent["id"])
+        codes.add(new_id)
+        e["codes"] = sorted(codes)
+        _touch(an, e, op, ctx)
+        n += 1
+    ctx["codebook"] = ctx["extracts"] = True
+    ctx["changes"].append(f"split {new_id} out of {parent['id']} ({n} extracts)")
+    op["created"] = new_id
+    return f"{new_id}: new candidate child of {parent['id']} with {n} extract(s) moved"
+
+
+def op_new_code(an, op, ctx):
+    a = op.get("args") or {}
+    cid = str(a.get("id") or "")
+    if not CODE_ID_RE.match(cid):
+        raise OpError(f"{cid!r} must be kebab-case, optionally parent.child")
+    if an.code(cid) is not None:
+        raise OpError(f"{cid} already exists")
+    parent = a.get("parent") or (cid.split(".", 1)[0] if "." in cid else None)
+    if parent:
+        p = _need_code(an, parent)
+        if p.get("parent"):
+            raise OpError(f"{parent} is itself a child; codes may have at most two levels")
+    an.codebook["codes"].append({
+        "id": cid, "name": a.get("name") or cid.replace("-", " ").capitalize(), "parent": parent,
+        "definition": str(a.get("definition") or ""), "include": a.get("include") or "", "exclude": a.get("exclude") or "",
+        "status": "candidate", "merged_into": None, "tags": _as_list(a.get("tags")), "examples": [],
+        "added": stamped(ctx, {"version": ctx_version(an, ctx), "date": today(), "source": f"added by {op.get('by', 'user')} in the workbench"}),
+    })
+    ctx["codebook"] = True
+    ctx["changes"].append(f"added {cid}")
+    op["created"] = cid
+    return f"{cid}: added as a candidate code"
+
+
+def op_reread_request(an, op, ctx):
+    a = op.get("args") or {}
+    tid = str(a["transcript"])
+    if an.transcript(tid) is None:
+        raise OpError(f"no transcript {tid}")
+    if a.get("code") and an.code(a["code"]) is None:
+        raise OpError(f"no code {a['code']}")
+    reqs = an.study.setdefault("reread_requests", [])
+    reqs.append({"transcript": tid, "code": a.get("code"), "note": a.get("note"),
+                 "asked": op.get("at") or today(), "status": "open"})
+    ctx["study"] = True
+    ctx["memos"].append(f"re-read requested: {tid}" + (f" for `{a['code']}`" if a.get("code") else "") + (f" — {a['note']}" if a.get("note") else ""))
+    return f"re-read requested for {tid}" + (f" / {a['code']}" if a.get("code") else "")
+
+
+def op_new_theme(an, op, ctx):
+    a = op.get("args") or {}
+    tid = str(a.get("id") or next_theme_id(an))
+    if an.theme(tid) is not None:
+        raise OpError(f"{tid} already exists")
+    parent = a.get("parent") or None
+    if parent:
+        pt = _need_theme(an, parent)
+        if pt.get("parent"):
+            raise OpError(f"{parent} is itself a sub-theme; themes may have at most two levels")
+    an.themes["themes"].append({
+        "id": tid, "name": str(a["name"]), "parent": parent, "rq": a.get("rq"),
+        "essence": a.get("essence") or "", "story": "", "codes": [], "status": "candidate",
+        "merged_into": None, "in_paper": "undecided", "tensions": [], "selected_extracts": [],
+    })
+    ctx["themes"] = True
+    op["created"] = tid
+    return f"{tid}: new theme \"{a['name']}\""
+
+
+def next_theme_id(an: Analysis) -> str:
+    top = 0
+    for th in an.themes["themes"]:
+        m = re.match(r"^TH(\d+)$", str(th.get("id", "")))
+        if m:
+            top = max(top, int(m.group(1)))
+    return f"TH{top + 1}"
+
+
+MISC_THEME = "MISC"
+
+
+def op_assign_theme(an, op, ctx):
+    cid = op.get("target")
+    _need_code(an, cid)
+    dest = (op.get("args") or {}).get("theme") or None
+    if dest == MISC_THEME and an.theme(MISC_THEME) is None:
+        an.themes["themes"].append({
+            "id": MISC_THEME, "name": "miscellaneous", "parent": None, "rq": None,
+            "essence": "Temporary home for codes not yet placed in a theme (Braun & Clarke allow a miscellaneous pile in phase 3).",
+            "story": "", "codes": [], "status": "candidate", "merged_into": None, "in_paper": "no",
+            "tensions": [], "selected_extracts": [],
+        })
+    if dest:
+        _need_theme(an, dest)
+    was = []
+    for th in an.themes["themes"]:
+        if cid in (th.get("codes") or []):
+            was.append(th["id"])
+            th["codes"] = [c for c in th["codes"] if c != cid]
+    if dest:
+        th = an.theme(dest)
+        th["codes"] = sorted(set(th.get("codes") or []) | {cid})
+    ctx["themes"] = True
+    return f"{cid}: {' , '.join(was) or 'unplaced'} -> {dest or 'unplaced'}"
+
+
+THEME_FIELDS = {"name", "essence", "story", "rq", "in_paper", "status"}
+
+
+def op_set_theme_field(an, op, ctx):
+    th = _need_theme(an, op.get("target"))
+    a = op.get("args") or {}
+    field = a.get("field")
+    if field not in THEME_FIELDS:
+        raise OpError(f"field must be one of {', '.join(sorted(THEME_FIELDS))}")
+    value = str(a.get("value") or "")
+    if field == "in_paper" and value not in IN_PAPER:
+        raise OpError(f"in_paper must be one of {', '.join(sorted(IN_PAPER))}")
+    if field == "status" and value not in THEME_STATUSES:
+        raise OpError(f"status must be one of {', '.join(sorted(THEME_STATUSES))}")
+    old = a.get("old")
+    current = str(th.get(field) or "")
+    if old is not None and not a.get("force") and fold(old) != fold(current):
+        raise OpError(f"{th['id']}.{field} changed since you edited it; on disk now: {current[:120]!r}")
+    if value == current:
+        return f"{th['id']}.{field} is already that; nothing changed"
+    th[field] = value
+    ctx["themes"] = True
+    return f"{th['id']}: {field} updated"
+
+
+def op_merge_theme(an, op, ctx):
+    src = _need_theme(an, op.get("target"))
+    dst = _need_theme(an, (op.get("args") or {}).get("into"))
+    if src["id"] == dst["id"]:
+        raise OpError("a theme cannot be merged into itself")
+    for sub in an.themes["themes"]:
+        if sub.get("parent") == src["id"]:
+            sub["parent"] = dst["id"]
+    dst["codes"] = sorted(set(dst.get("codes") or []) | set(src.get("codes") or []))
+    dst["tensions"] = list(dict.fromkeys((dst.get("tensions") or []) + (src.get("tensions") or [])))
+    dst["selected_extracts"] = list(dict.fromkeys((dst.get("selected_extracts") or []) + (src.get("selected_extracts") or [])))
+    # The quotes moved, so their inline trims move with them; a trim the destination
+    # already had for the same extract wins, since that is the more recent decision.
+    moved_spans = {eid: span for eid, span in (src.get("quote_spans") or {}).items()
+                   if eid in dst["selected_extracts"]}
+    if moved_spans:
+        dst["quote_spans"] = {**moved_spans, **(dst.get("quote_spans") or {})}
+    src["codes"] = []
+    src["status"] = "merged"
+    src["merged_into"] = dst["id"]
+    ctx["themes"] = True
+    return f"merged {src['id']} into {dst['id']}"
+
+
+def op_set_tension(an, op, ctx):
+    th = _need_theme(an, op.get("target"))
+    a = op.get("args") or {}
+    tens = list(th.get("tensions") or [])
+    for eid in _as_list(a.get("add")):
+        if an.extract(eid) is None:
+            raise OpError(f"no extract {eid}")
+        if eid not in tens:
+            tens.append(eid)
+    for eid in _as_list(a.get("remove")):
+        tens = [x for x in tens if x != eid]
+    th["tensions"] = tens
+    ctx["themes"] = True
+    return f"{th['id']}: {len(tens)} tension(s)"
+
+
+def op_select_quote(an, op, ctx):
+    th = _need_theme(an, op.get("target"))
+    a = op.get("args") or {}
+    eid = str(a["extract"])
+    if an.extract(eid) is None:
+        raise OpError(f"no extract {eid}")
+    sel = [x for x in (th.get("selected_extracts") or []) if x != eid]
+    at = a.get("at")
+    if at is None or int(at) >= len(sel):
+        sel.append(eid)
+    else:
+        sel.insert(max(0, int(at)), eid)
+    th["selected_extracts"] = sel
+    ctx["themes"] = True
+    return f"{th['id']}: selected {eid} ({len(sel)} quote(s))"
+
+
+def op_deselect_quote(an, op, ctx):
+    th = _need_theme(an, op.get("target"))
+    eid = str((op.get("args") or {})["extract"])
+    th["selected_extracts"] = [x for x in (th.get("selected_extracts") or []) if x != eid]
+    (th.get("quote_spans") or {}).pop(eid, None)  # the trim belonged to the selection
+    ctx["themes"] = True
+    return f"{th['id']}: deselected {eid}"
+
+
+def op_quote_span(an, op, ctx):
+    """Record the inline trim of a selected quote, sliced out of the stored extract.
+
+    The paper's shorter quote is derived here from the extract's own text, so it is
+    still transcript text and `verify-quotes` still passes on the draft.
+    """
+    th = _need_theme(an, op.get("target"))
+    a = op.get("args") or {}
+    eid = str(a["extract"])
+    e = an.extract(eid)
+    if e is None:
+        raise OpError(f"no extract {eid}")
+    spans = th.setdefault("quote_spans", {})
+    if a.get("clear"):
+        spans.pop(eid, None)
+        ctx["themes"] = True
+        return f"{th['id']}: trim cleared for {eid}"
+    text = norm(e.get("text", ""))
+    if a.get("start") is not None and a.get("end") is not None:
+        s, t = int(a["start"]), int(a["end"])
+        if not (0 <= s < t <= len(text)):
+            raise OpError(f"offsets {s}-{t} fall outside the extract ({len(text)} characters)")
+        cut = text[s:t].strip()
+    else:
+        low = text.lower()
+        i = low.find(fold(a.get("from") or "")) if a.get("from") else 0
+        if i < 0:
+            raise OpError(f"--from text is not in {eid}")
+        if a.get("to"):
+            j = low.find(fold(a["to"]), i)
+            if j < 0:
+                raise OpError(f"--to text is not in {eid} after the start of the trim; nothing was changed")
+            cut = text[i: j + len(a["to"])].strip()
+        else:
+            cut = text[i:].strip()
+    if len(cut.split()) < 3:
+        raise OpError("a trimmed quote needs at least three words")
+    spans[eid] = {"text": cut, "words": len(cut.split()),
+                  "from": cut.split()[0], "to": cut.split()[-1]}
+    if eid not in (th.get("selected_extracts") or []):
+        th["selected_extracts"] = (th.get("selected_extracts") or []) + [eid]
+    ctx["themes"] = True
+    return f"{th['id']}: {eid} trimmed to {len(cut.split())} words"
+
+
+def op_set_participant(an, op, ctx):
+    p = an.participant(op.get("target"))
+    if p is None:
+        raise OpError(f"no participant {op.get('target')}")
+    a = op.get("args") or {}
+    old_id = p["id"]
+    if a.get("role"):
+        if a["role"] not in ROLES or a["role"] == "unknown":
+            raise OpError("role must be participant | interviewer | researcher | other")
+        p["role"] = a["role"]
+    for key in ("group", "notes"):
+        if key in a:
+            p[key] = a[key] or None
+    if a.get("speakers") is not None:
+        p["speakers"] = _as_list(a["speakers"])
+    if a.get("id") and a["id"] != old_id:
+        new_id = str(a["id"])
+        if an.participant(new_id) is not None:
+            raise OpError(f"participant {new_id} already exists")
+        p["id"] = new_id
+        for e in an.extracts:
+            if e.get("participant") == old_id:
+                e["participant"] = new_id
+        for t in an.study.get("transcripts", []):
+            t["participants"] = [new_id if x == old_id else x for x in (t.get("participants") or [])]
+        ctx["extracts"] = True
+    ctx["study"] = True
+    return f"{old_id}: roster updated" + (f" (now {p['id']})" if p["id"] != old_id else "")
+
+
+def op_set_transcript(an, op, ctx):
+    t = an.transcript(op.get("target"))
+    if t is None:
+        raise OpError(f"no transcript {op.get('target')}")
+    a = op.get("args") or {}
+    if a.get("participants") is not None:
+        pids = _as_list(a["participants"])
+        for pid in pids:
+            if an.participant(pid) is None:
+                raise OpError(f"no participant {pid}")
+        t["participants"] = pids
+    if a.get("kind"):
+        t["kind"] = a["kind"]
+    ctx["study"] = True
+    return f"{t['id']}: {', '.join(t.get('participants') or []) or 'no participants'}"
+
+
+STANCE_FIELDS = {"orientation", "level", "epistemology", "prevalence_unit", "notes"}
+
+
+def op_set_stance(an, op, ctx):
+    a = op.get("args") or {}
+    field = a.get("field")
+    if field not in STANCE_FIELDS:
+        raise OpError(f"field must be one of {', '.join(sorted(STANCE_FIELDS))}")
+    an.study.setdefault("approach", {})[field] = str(a.get("value") or "")
+    ctx["study"] = True
+    return f"approach.{field} = {a.get('value')}"
+
+
+def op_set_rq(an, op, ctx):
+    a = op.get("args") or {}
+    rqs = an.study.setdefault("research_questions", [])
+    rid = str(a["id"])
+    for rq in rqs:
+        if rq.get("id") == rid:
+            rq["text"] = str(a["text"])
+            ctx["study"] = True
+            return f"{rid} updated"
+    rqs.append({"id": rid, "text": str(a["text"])})
+    ctx["study"] = True
+    return f"{rid} added"
+
+
+HANDLERS = {
+    "recode": op_recode, "set-kind": op_set_kind, "set-context": op_set_context, "set-note": op_set_note,
+    "retrim": op_retrim, "drop": op_drop, "new-extract": op_new_extract, "highlight": op_highlight,
+    "mark-reviewed": op_mark_reviewed, "code-status": op_code_status, "set-field": op_set_field,
+    "reparent": op_reparent, "rename-code": op_rename_code, "merge-code": op_merge_code,
+    "split-code": op_split_code, "new-code": op_new_code, "reread-request": op_reread_request,
+    "new-theme": op_new_theme, "assign-theme": op_assign_theme, "set-theme-field": op_set_theme_field,
+    "merge-theme": op_merge_theme, "set-tension": op_set_tension, "select-quote": op_select_quote,
+    "deselect-quote": op_deselect_quote, "quote-span": op_quote_span, "set-participant": op_set_participant,
+    "set-transcript": op_set_transcript, "set-stance": op_set_stance, "set-rq": op_set_rq,
+}
+
+
+# ------------------------------------------------------------- inbox commands
+def op_one_line(an: Analysis, o: dict) -> str:
+    a = o.get("args") or {}
+    bits = [f"{o.get('id')}", f"[{o.get('by', '?')}]", str(o.get("op"))]
+    if o.get("target"):
+        bits.append(str(o["target"]))
+    detail = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v}" for k, v in a.items() if k != "text")
+    if detail:
+        bits.append(f"({detail})")
+    if a.get("text"):
+        bits.append(f"“{str(a['text'])[:80]}”")
+    if o.get("note"):
+        bits.append(f"— {o['note']}")
+    return " ".join(bits)
+
+
+def cmd_inbox(an: Analysis, args) -> int:
+    ops = annotate_claims(read_inbox(an))
+    pending = [o for o in ops if o.get("status") in (None, "pending")]
+    failed = [o for o in ops if o.get("status") == "failed"]
+    malformed = [o for o in ops if o.get("status") == "malformed"]
+    applying = [o for o in ops if o.get("status") == "applying"]
+    stalled = [o for o in ops if o.get("status") == "stalled"]
+    threads = [o for o in ops if o.get("op") in THREAD_OPS]
+    if getattr(args, "json", False):
+        print(json.dumps({"pending": pending, "failed": failed, "malformed": malformed,
+                          "applying": applying, "stalled": stalled,
+                          "problems": [p for o in pending for p in validate_op(an, o)]},
+                         ensure_ascii=False, indent=2, default=json_safe))
+        return 0
+    actionable = [o for o in pending if o.get("op") not in THREAD_OPS]
+    by_view: dict[str, list[dict]] = defaultdict(list)
+    for o in actionable:
+        by_view[str((OP_SPECS.get(str(o.get("op"))) or {}).get("view", "?"))].append(o)
+    for view in ("transcript", "codebook", "coverage", "themes", "quotes", "study", "any", "?"):
+        rows = by_view.get(view)
+        if not rows:
+            continue
+        print(f"## {view} ({len(rows)})")
+        for o in rows:
+            print("  " + op_one_line(an, o))
+        print()
+    open_threads = [o for o in threads if o.get("status") in (None, "pending") and o.get("op") == "comment"]
+    if open_threads:
+        print(f"## threads ({len(open_threads)} open — reply, do not apply)")
+        for o in open_threads:
+            print("  " + op_one_line(an, o))
+            for r in [x for x in ops if x.get("op") == "reply" and x.get("target") == o.get("id")]:
+                print(f"      ↳ [{r.get('by')}] {str((r.get('args') or {}).get('text'))[:100]}")
+        print()
+    if failed or malformed:
+        print(f"## needs attention ({len(failed) + len(malformed)})")
+        for o in failed + malformed:
+            print(f"  {o.get('id')} {o.get('op')}: {str(o.get('error'))[:200]}")
+        print("  fix the cause and apply again; these keep their place in the inbox until they succeed.")
+        print()
+    if stalled:
+        print(f"## stalled — needs your decision ({len(stalled)})")
+        for o in stalled:
+            print("  " + op_one_line(an, o))
+            print(f"      {o.get('error')}")
+        print()
+    if applying:
+        print(f"## in flight ({len(applying)})")
+        for o in applying:
+            print(f"  {o.get('id')} {o.get('op')} claimed at {o.get('claimed_at')}")
+        print(f"  another `apply` is running, or one died; a claim older than {CLAIM_STALE_MINUTES} minutes is released automatically.")
+        print()
+    problems = [p for o in actionable for p in validate_op(an, o)]
+    for p in problems:
+        print(f"warning: {p}")
+    print(f"inbox: {len(actionable)} operation(s) to apply, {len(open_threads)} open thread(s), "
+          f"{len(failed) + len(malformed) + len(stalled)} needing attention"
+          + (f", {len(applying)} in flight" if applying else ""))
+    if actionable:
+        print("apply with: apply --all   (or `apply op-0031 op-0032`)")
+    return 0
+
+
+def thread_rows(rows: list[dict], root_id: str) -> list[dict]:
+    """A comment and the replies that hang off it."""
+    return [o for o in rows if o.get("id") == root_id or (o.get("op") == "reply" and o.get("target") == root_id)]
+
+
+def cmd_apply(an: Analysis, args) -> int:
+    """Execute what the researcher staged, in the order they staged it.
+
+    Three steps, and the first and last hold the inbox lock: claim the operations this pass
+    will run (so a second `apply` cannot take them and the daemon cannot rewrite them out
+    from under us), then apply them, then settle the file against a fresh read. `main` holds
+    `.apply.lock` around the whole thing, so no other writer can interleave. The pass is
+    deliberately not atomic across operations — one that cannot be applied keeps its reason
+    and the rest still run, because a partial pass is recoverable and the applied log says
+    exactly what happened.
+    """
+    # ---- 1. claim, under the inbox lock
+    inbox_lock(an)
+    try:
+        rows = read_inbox(an)
+        stalled, completed = flag_stale_claims(an, rows)
+        wanted = set(args.op_ids or [])
+        # `--all` never picks up a stalled claim; naming its id is the deliberate act.
+        pending = [o for o in rows if o.get("status") in (None, "pending", "failed")
+                   or (o.get("status") == "stalled" and str(o.get("id")) in wanted)]
+        selectable = [o for o in pending if o.get("op") not in THREAD_OPS]
+        if wanted:
+            chosen = [o for o in selectable if o.get("id") in wanted]
+            unknown = wanted - {o.get("id") for o in chosen}
+            if unknown:
+                raise SystemExit(f"no pending operation(s) {', '.join(sorted(unknown))}")
+        elif args.all:
+            chosen = selectable
+        else:
+            print("nothing selected. `inbox` lists what is waiting; `apply --all` applies it, or name op ids.")
+            return 1
+        # A resolved thread is history: archive it with its replies. An open one stays. This
+        # is only a first look — step 3 recomputes it from a fresh read, because the
+        # researcher may reopen a thread or add a reply while the pass is working.
+        threads_done = [x for root in rows if root.get("op") == "comment" and root.get("status") == "resolved"
+                        for x in thread_rows(rows, str(root.get("id")))]
+        # A malformed operation fails on its own rather than blocking the researcher's
+        # other feedback; it keeps its reason in the inbox, like a handler failure.
+        invalid: dict[str, str] = {}
+        for o in chosen:
+            problems = validate_op(an, o)
+            if problems:
+                invalid[str(o.get("id"))] = "; ".join(problems)
+        chosen = [o for o in chosen if str(o.get("id")) not in invalid]
+        claimed_at = dt.datetime.now().isoformat(timespec="seconds")
+        claimed = {str(o.get("id")) for o in chosen}
+        if not args.dry_run:
+            for o in rows:
+                oid = str(o.get("id"))
+                if oid in invalid:
+                    o["status"], o["error"] = "failed", invalid[oid]
+                    o.pop("claimed_at", None)
+                elif oid in claimed:
+                    o["status"], o["claimed_at"] = "applying", claimed_at
+            if invalid or claimed or stalled or completed:
+                write_inbox(an, rows)
+        if not chosen and not threads_done:
+            for oid, why in invalid.items():
+                print(f"FAILED {oid}: {why}")
+            open_threads = [o for o in rows if o.get("op") == "comment" and o.get("status") in (None, "pending")]
+            print("apply: nothing to apply"
+                  + (f"; {len(open_threads)} open thread(s) are a conversation, not an edit — reply to them" if open_threads else ""))
+            return 1 if invalid else 0
+    finally:
+        inbox_unlock(an)
+    if completed:
+        print(f"cleared {len(completed)} claim(s) an earlier run had already applied: {', '.join(completed)}")
+    if stalled:
+        print(f"WARNING: {len(stalled)} claim(s) from a run that died: {', '.join(stalled)}. "
+              "They are marked `stalled`, not retried — check whether they took effect first.")
+    for oid, why in invalid.items():
+        print(f"FAILED {oid}: {why}")
+
+    # ---- 2. apply, outside the lock
+    # mark-reviewed last: it stamps whatever the other operations leave behind.
+    chosen.sort(key=lambda o: (1 if o.get("op") == "mark-reviewed" else 0, str(o.get("id"))))
+    version = int(an.codebook.get("version", 1))
+    if any(str(o.get("op")) in CODEBOOK_OPS for o in chosen):
+        version += 1
+    ctx = fresh_ctx(version)
+    applied, failed = [], []
+    for o in chosen:
+        name = str(o.get("op"))
+        handler = HANDLERS.get(name)
+        if handler is None:
+            o["status"], o["error"] = "failed", f"no handler for {name}"
+            failed.append(o)
+            continue
+        try:
+            summary = handler(an, o, ctx)
+        except (OpError, SystemExit) as exc:
+            o["status"], o["error"] = "failed", str(exc)
+            failed.append(o)
+            print(f"FAILED {o.get('id')} {name}: {exc}")
+            continue
+        o["status"], o["error"] = "applied", None
+        o["applied_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        o["result"] = summary
+        applied.append(o)
+        print(f"applied {o.get('id')} {name}: {summary}")
+    if args.dry_run:
+        # The handlers have mutated this process's in-memory copy; nothing was claimed and
+        # nothing is saved, and the process exits here, so the files on disk are untouched.
+        print(f"apply --dry-run: {len(applied)} would apply, {len(failed)} would fail. Nothing written.")
+        return 1 if (failed or invalid) else 0
+    change = "; ".join(ctx["changes"][:6]) + ("; ..." if len(ctx["changes"]) > 6 else "")
+    save_ctx(an, ctx, bump_message=f"applied {len(applied)} reviewed operation(s): {change}")
+
+    # ---- 3. settle the inbox against a fresh read, under the lock
+    applied_by_id = {str(o.get("id")): o for o in applied}
+    failed_by_id = {str(o.get("id")): o.get("error") for o in failed}
+    # A comment on something that did not exist yet (a staged extract, a proposed theme)
+    # targets the *operation*. Once the operation has run, the thing has an id, so the
+    # thread follows it — otherwise the researcher's question is left pointing at nothing.
+    retarget = {oid: str(o["created"]) for oid, o in applied_by_id.items() if o.get("created")}
+    repointed = []
+    inbox_lock(an)
+    try:
+        rows = read_inbox(an)
+        # Threads are re-read here, not taken from the snapshot: one the researcher reopened
+        # while this pass was working stays open, and a reply added meanwhile travels with it.
+        threads_done = [x for root in rows if root.get("op") == "comment" and root.get("status") == "resolved"
+                        for x in thread_rows(rows, str(root.get("id")))]
+        thread_ids = {str(o.get("id")) for o in threads_done}
+        keep, archive = [], []
+        for o in rows:
+            oid = str(o.get("id"))
+            if oid in applied_by_id:
+                archive.append(applied_by_id[oid])   # the row with its result and applied_at
+                continue
+            if oid in thread_ids:
+                archive.append(o)
+                continue
+            if oid in failed_by_id:
+                o["status"], o["error"] = "failed", failed_by_id[oid]
+                o.pop("claimed_at", None)
+            elif oid in claimed and o.get("status") == "applying":
+                o["status"] = "pending"  # claimed but never reached; hand it back
+                o.pop("claimed_at", None)
+            if o.get("op") == "comment" and str(o.get("target")) in retarget:
+                was = str(o["target"])
+                o["target"] = retarget[was]
+                o.setdefault("about", was)
+                repointed.append(f"{oid}: {was} -> {o['target']}")
+            keep.append(o)
+        # Archive before the inbox loses the ids, and while still holding the lock, so an
+        # operation id is always visible in one file or the other and can never be reused.
+        if archive:
+            log = archive_ops(an, archive)
+            print(f"archived {len(archive)} line(s) to {log.relative_to(an.root)}")
+        write_inbox(an, keep)
+        for line in repointed:
+            print(f"thread re-pointed {line}")
+    finally:
+        inbox_unlock(an)
+
+    print()
+    print(f"apply: {len(applied)} applied, {len(failed) + len(invalid)} failed; codebook v{an.codebook.get('version')}"
+          f"{' (frozen)' if an.codebook.get('frozen') else ''}")
+    if ctx["codebook"]:
+        rows_stale = stale_rows(an)
+        for r in rows_stale:
+            print(f"  stale: {r['transcript']} — {r['reason']}"
+                  + (f"; codes since: {', '.join(r['codes_since'][:6])}" if r["codes_since"] else " (no code changed; nothing to re-read)"))
+        if any(r["severity"] == "recode" for r in rows_stale):
+            print("  a code added or redefined after a transcript was coded means that transcript needs a pass for it.")
+    errors, warnings = validate(an)
+    verrors, vwarnings = verify(an)
+    for e in errors + verrors:
+        print(f"  ERROR: {e}")
+    print(f"  validate: {len(errors)} error(s), {len(warnings)} warning(s) · "
+          f"verify: {len(an.extracts)} extract(s), {len(verrors)} not verbatim/misattributed, {len(vwarnings)} warning(s)")
+    return 1 if (failed or invalid or errors or verrors) else 0
+
+
+def cmd_stage(an: Analysis, args) -> int:
+    """Stage an operation from the command line — how the agent proposes a change.
+
+    A structural proposal belongs where its evidence is, so the agent stages it as a
+    `by: agent` op the researcher accepts or rejects in the workbench.
+    """
+    try:
+        payload = json.loads(args.op)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--op must be JSON: {exc}")
+    if isinstance(payload, dict):
+        payload = [payload]
+    out = []
+    for raw in payload:
+        op = {"op": raw.get("op"), "target": raw.get("target"), "args": raw.get("args") or {},
+              "note": raw.get("note"), "by": raw.get("by") or "agent",
+              "view": (OP_SPECS.get(str(raw.get("op"))) or {}).get("view", "any"),
+              "status": "pending"}
+        problems = validate_op(an, op)
+        if problems:
+            raise SystemExit("; ".join(problems))
+        out.append(append_inbox(an, op))
+    for o in out:
+        print(f"staged {o['id']}: {op_one_line(an, o)}")
+    return 0
+
+
+def cmd_reply(an: Analysis, args) -> int:
+    ops = read_inbox(an)
+    thread = next((o for o in ops if o.get("id") == args.thread), None)
+    if thread is None:
+        raise SystemExit(f"no thread {args.thread} in the inbox")
+    if thread.get("op") != "comment":
+        raise SystemExit(f"{args.thread} is a {thread.get('op')} operation, not a comment thread")
+    o = append_inbox(an, {"op": "reply", "target": args.thread, "args": {"text": args.text},
+                          "by": "agent", "view": thread.get("view") or "any"})
+    print(f"replied on {args.thread} as {o['id']}")
+    return 0
+
+
+# ------------------------------------------------- one path for every operation
+# The CLI and the workbench must not be able to diverge: a command run here goes
+# through the same handler `apply` would use, so a fix typed in the terminal and a
+# fix clicked in the browser leave identical records.
+def fresh_ctx(version: int | None = None) -> dict:
+    return {"extracts": False, "codebook": False, "codebook_meta": False, "themes": False,
+            "study": False, "redefined": set(), "changes": [], "memos": [], "version": version,
+            "stamps": []}
+
+
+def stamped(ctx: dict | None, stamp: dict) -> dict:
+    """Register a `{at, version}` (or `added`) stamp so `save_ctx` can correct its version."""
+    if ctx is not None:
+        ctx.setdefault("stamps", []).append(stamp)
+    return stamp
+
+
+def ctx_version(an: Analysis, ctx: dict | None) -> int:
+    """The codebook version this pass will *end* at.
+
+    A pass bumps the codebook once, at the end, but handlers stamp things as they go —
+    `reviewed` on an extract, `added` on a new code. Stamping with the version the pass
+    started at would leave an extract the researcher just reviewed looking unreviewed (its
+    code changed at a version later than its own stamp), so every stamp reads this.
+    """
+    v = (ctx or {}).get("version")
+    return int(v) if v else int(an.codebook.get("version", 1))
+
+
+def save_ctx(an: Analysis, ctx: dict, bump_message: str | None = None) -> None:
+    if ctx["codebook"]:
+        an.codebook["version"] = ctx_version(an, ctx)
+        an.codebook.setdefault("changelog", []).append(
+            {"version": an.codebook["version"], "date": today(),
+             "change": bump_message or ("; ".join(ctx["changes"]) or "codebook edited")})
+    # Handlers stamp as they go, against the version the pass *expected* to end at. If the
+    # codebook did not move after all (every codebook op no-opped or failed), a stamp
+    # claiming the next version would make a future edit at that version invisible to the
+    # delta check, so every stamp is corrected to the version that actually holds.
+    final = int(an.codebook.get("version", 1))
+    for stamp in ctx.get("stamps") or []:
+        stamp["version"] = final
+    for cid in ctx["redefined"]:
+        c = an.code(cid)
+        if c is not None:
+            c["redefined_version"] = int(an.codebook.get("version", 1))
+    if ctx["extracts"]:
+        an.save_extracts()
+    if ctx["codebook"] or ctx["codebook_meta"] or ctx["redefined"]:
+        an.save_codebook()
+    if ctx["themes"]:
+        an.save_themes()
+    if ctx["study"]:
+        an.save_study()
+    if ctx["memos"]:
+        memo = an.root / "memos.md"
+        body = memo.read_text(encoding="utf-8") if memo.exists() else "# Analytic memos\n"
+        memo.write_text(body.rstrip("\n") + f"\n\n## {today()}\n\n" + "".join(f"- {m}\n" for m in ctx["memos"]),
+                        encoding="utf-8")
+
+
+def run_op_now(an: Analysis, op: dict, quiet: bool = False) -> int:
+    """Execute one operation immediately, as the agent's own hand on the data."""
+    op = {**op, "by": op.get("by") or "agent", "status": "applied"}
+    problems = validate_op(an, op)
+    if problems:
+        raise SystemExit("; ".join(problems))
+    v = int(an.codebook.get("version", 1))
+    ctx = fresh_ctx(v + 1 if str(op["op"]) in CODEBOOK_OPS else v)
+    try:
+        summary = HANDLERS[str(op["op"])](an, op, ctx)
+    except OpError as exc:
+        raise SystemExit(str(exc))
+    save_ctx(an, ctx)
+    if not quiet:
+        print(summary)
+        if ctx["codebook"]:
+            print(f"codebook now v{an.codebook.get('version')}; run `stale` to see which transcripts need a pass")
+    return 0
+
+
+def cmd_retrim(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "retrim", "target": args.extract_id,
+                           "args": {k: v for k, v in (("from", args.frm), ("to", args.to),
+                                                      ("start", args.start), ("end", args.end)) if v is not None}})
+
+
+def cmd_mark_reviewed(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "mark-reviewed", "args": {k: v for k, v in
+                                                           (("transcript", args.transcript), ("extracts", args.extracts),
+                                                            ("codes", args.codes), ("themes", args.themes)) if v}})
+
+
+def cmd_reparent(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "reparent", "target": args.code, "args": {"parent": None if args.root else args.to}})
+
+
+def cmd_split_code(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "split-code", "target": args.code, "args": {
+        "new_id": args.new_id, "extracts": args.extracts, "name": args.name,
+        "definition": args.definition, "include": args.include, "exclude": args.exclude}})
+
+
+def cmd_set_field(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "set-field", "target": args.code,
+                           "args": {"field": args.field, "value": args.value, "old": args.old, "force": args.force}})
+
+
+def cmd_code_status(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "code-status", "target": args.code, "args": {"status": args.status}})
+
+
+def cmd_new_code(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "new-code", "args": {
+        "id": args.id, "name": args.name, "definition": args.definition, "parent": args.parent,
+        "include": args.include, "exclude": args.exclude, "tags": args.tags}})
+
+
+def cmd_reread(an: Analysis, args) -> int:
+    reqs = an.study.setdefault("reread_requests", [])
+    if args.done:
+        n = 0
+        for r in reqs:
+            if r.get("status") == "open" and r.get("transcript") == args.transcript and (not args.code or r.get("code") == args.code):
+                r["status"] = "done"
+                r["closed"] = today()
+                n += 1
+        an.save_study()
+        print(f"closed {n} re-read request(s) for {args.transcript}")
+        return 0
+    if args.transcript:
+        return run_op_now(an, {"op": "reread-request", "args": {"transcript": args.transcript, "code": args.code, "note": args.note}})
+    open_reqs = [r for r in reqs if r.get("status") == "open"]
+    for r in open_reqs:
+        print(f"- {r['transcript']}" + (f" / `{r['code']}`" if r.get("code") else "") + (f": {r['note']}" if r.get("note") else "") + f"  (asked {r.get('asked')})")
+    print(f"reread: {len(open_reqs)} open request(s)")
+    return 0
+
+
+# ------------------------------------------------------------ theme commands
+def cmd_theme_new(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "new-theme", "args": {"name": args.name, "parent": args.parent, "rq": args.rq, "id": args.id}})
+
+
+def cmd_theme_assign(an: Analysis, args) -> int:
+    dest = MISC_THEME if args.misc else (None if args.unplaced else args.to)
+    return run_op_now(an, {"op": "assign-theme", "target": args.code, "args": {"theme": dest}})
+
+
+def cmd_theme_set(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "set-theme-field", "target": args.theme,
+                           "args": {"field": args.field, "value": args.value, "old": args.old, "force": args.force}})
+
+
+def cmd_theme_tension(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "set-tension", "target": args.theme, "args": {"add": args.add, "remove": args.remove}})
+
+
+def cmd_theme_select(an: Analysis, args) -> int:
+    if args.remove:
+        for eid in args.remove:
+            run_op_now(an, {"op": "deselect-quote", "target": args.theme, "args": {"extract": eid}}, quiet=True)
+            print(f"{args.theme}: deselected {eid}")
+    for eid in args.add or []:
+        run_op_now(an, {"op": "select-quote", "target": args.theme, "args": {"extract": eid, "at": args.at}}, quiet=True)
+        print(f"{args.theme}: selected {eid}")
+    th = an.theme(args.theme)
+    print(f"{args.theme}: {len(th.get('selected_extracts') or [])} quote(s) in order: {', '.join(th.get('selected_extracts') or []) or '-'}")
+    return 0
+
+
+def cmd_theme_trim(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "quote-span", "target": args.theme, "args": {
+        "extract": args.extract, "from": args.frm, "to": args.to, "start": args.start, "end": args.end, "clear": args.clear}})
+
+
+def cmd_theme_merge(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "merge-theme", "target": args.source, "args": {"into": args.target}})
+
+
+def theme_mermaid(an: Analysis) -> str:
+    """The thematic map, drawn from themes.yaml so the document and the board agree."""
+    lines = ["graph LR"]
+    placed: set[str] = set()
+    for th in an.themes["themes"]:
+        if th.get("status") in ("merged", "dropped"):
+            continue
+        tid = str(th.get("id"))
+        label = str(th.get("name") or tid).replace("[", "(").replace("]", ")").replace('"', "'")
+        lines.append(f'  {tid}["{label}"]')
+        if th.get("parent"):
+            lines.append(f"  {th['parent']} --> {tid}")
+        for cid in th.get("codes") or []:
+            node = re.sub(r"[^A-Za-z0-9]", "_", cid)
+            lines.append(f"  {tid} --> {node}({cid})")
+            placed.add(cid)
+    unplaced = [c["id"] for c in an.live_codes() if c["id"] not in placed and not c.get("parent")]
+    if unplaced:
+        lines.append('  UNPLACED["unplaced"]')
+        for cid in unplaced:
+            lines.append(f"  UNPLACED --> {re.sub(r'[^A-Za-z0-9]', '_', cid)}({cid})")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_theme_mermaid(an: Analysis, args) -> int:
+    print(theme_mermaid(an))
+    return 0
+
+
+# ------------------------------------------------------------ open the workbench
+def app_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "app"
+
+
+def preflight(an: Analysis) -> tuple[list[str], list[str]]:
+    """What `lint:plan` is to a hand-authored plan, this is to a data-driven page."""
+    # `validate` already lints the inbox, so this is only validate + verify; repeating the
+    # inbox checks here would report every bad line twice.
+    errors, warnings = validate(an)
+    verrors, vwarnings = verify(an)
+    return errors + verrors, warnings + vwarnings
+
+
+def resolve_open_target(an: Analysis, target: str | None) -> str:
+    views = {"transcript", "codebook", "coverage", "themes", "quotes", "study", "history"}
+    if not target:
+        return "view=transcript"
+    if target in views:
+        return f"view={target}"
+    if an.transcript(target) is not None:
+        return f"view=transcript&t={target}"
+    if an.extract(target) is not None:
+        e = an.extract(target)
+        return f"view=transcript&t={e['transcript']}&e={target}"
+    if an.code(target) is not None:
+        return f"view=codebook&c={target}"
+    if an.theme(target) is not None:
+        return f"view=themes&th={target}"
+    raise SystemExit(f"{target!r} is not a view, transcript, extract, code, or theme id")
+
+
+def cmd_open(an: Analysis, args) -> int:
+    import shutil as _shutil
+    import subprocess
+
+    if not (app_dir() / "server.mjs").exists():
+        raise SystemExit(f"the workbench app is missing at {app_dir()}")
+    if _shutil.which("node") is None:
+        raise SystemExit("node is not on PATH; the workbench needs it (the plan viewer does too)")
+    errors, warnings = preflight(an)
+    for w in warnings[:12]:
+        print(f"warning: {w}")
+    if len(warnings) > 12:
+        print(f"... and {len(warnings) - 12} more warning(s); run `validate` and `verify` for the full list")
+    for e in errors:
+        print(f"ERROR: {e}")
+    if errors and not args.force:
+        print(f"open: {len(errors)} error(s). Fix the data first, or pass --force to open anyway.")
+        return 1
+    params = resolve_open_target(an, args.target)
+    cmd = ["node", str(app_dir() / "server.mjs"), str(an.root.resolve()), "--params", params]
+    if args.no_open:
+        cmd.append("--no-open")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(res.stdout)
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        raise SystemExit(f"the workbench daemon did not start (exit {res.returncode})")
+    return 0
+
+
+def cmd_serve(an: Analysis, args) -> int:
+    import subprocess
+
+    cmd = ["node", str(app_dir() / "server.mjs")]
+    if args.stop:
+        cmd.append("--stop")
+    elif args.status:
+        cmd.append("--status")
+    else:
+        cmd += [str(an.root.resolve()), "--no-open"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(res.stdout)
+    sys.stderr.write(res.stderr)
+    return res.returncode
+
 # ------------------------------------------------------------------------ cli
+# Commands that rewrite study.yaml / codebook.yaml / extracts.jsonl / themes.yaml. `stage`
+# and `reply` are not here: they only append to the inbox, which has its own lock. `init`
+# is not here either: there is no existing state to protect, and no folder to lock in yet.
+WRITING_COMMANDS = {
+    "extract", "recode", "retrim", "drop", "mark-coded", "mark-reviewed", "bump",
+    "merge-code", "rename-code", "reparent", "split-code", "set-field", "code-status",
+    "new-code", "reread", "theme", "apply", "report",
+}
+
+
 def find_root(arg: str | None) -> Path:
     if arg:
         return Path(arg)
@@ -1456,8 +3762,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
 
-    sub.add_parser("validate", help="schema + referential integrity of all four files").set_defaults(fn=cmd_validate)
-    sub.add_parser("verify", help="every extract is verbatim at its locator and attributed to the right participant").set_defaults(fn=cmd_verify)
+    p = sub.add_parser("validate", help="schema + referential integrity of all four files (and the inbox)")
+    p.add_argument("--json", action="store_true", help="machine-readable, for the workbench")
+    p.set_defaults(fn=cmd_validate)
+
+    p = sub.add_parser("verify", help="every extract is verbatim at its locator and attributed to the right participant")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_verify)
 
     p = sub.add_parser("extract", help="add a coded extract by copying text out of the transcript (never by retyping it)")
     p.add_argument("transcript", nargs="?")
@@ -1488,9 +3799,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quiet", action="store_true", help="only print problems")
     p.set_defaults(fn=cmd_verify_quotes)
 
-    sub.add_parser("coverage", help="participants x codes x themes, zero-coverage warnings, stale transcripts").set_defaults(fn=cmd_coverage)
-    sub.add_parser("dupes", help="codes that may be the same code under two names").set_defaults(fn=cmd_dupes)
-    sub.add_parser("stale", help="transcripts not coded with the current codebook version").set_defaults(fn=cmd_stale)
+    p = sub.add_parser("coverage", help="participants x codes x themes, zero-coverage warnings, stale transcripts")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_coverage)
+
+    p = sub.add_parser("dupes", help="codes that may be the same code under two names")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_dupes)
+
+    p = sub.add_parser("stale", help="transcripts not coded with the current codebook version")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_stale)
 
     p = sub.add_parser("merge-code", help="fold SOURCE into TARGET everywhere; bumps the codebook version")
     p.add_argument("source"); p.add_argument("target"); p.add_argument("--why")
@@ -1510,6 +3829,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("collate", help="all extracts for a code (with children) or a theme, grouped by participant")
     p.add_argument("target")
+    p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_collate)
 
     p = sub.add_parser("annotate", help="the transcript with every coded span highlighted, as an interactive-plan page for review")
@@ -1521,10 +3841,146 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("codebook-table", help="markdown codebook for an appendix").set_defaults(fn=cmd_codebook_table)
     sub.add_parser("report", help="write reports/{coverage,codebook,themes,quote-bank,audit}.md").set_defaults(fn=cmd_report)
 
+    # ---- the review workbench: staged operations, applied in one pass
+    p = sub.add_parser("open", help="open the review workbench on this analysis (preflight, then the browser)")
+    p.add_argument("target", nargs="?", help="a transcript / extract / code / theme id, or a view name")
+    p.add_argument("--no-open", action="store_true", help="print the URL without opening a browser")
+    p.add_argument("--force", action="store_true", help="open even though the preflight found errors")
+    p.set_defaults(fn=cmd_open)
+
+    p = sub.add_parser("serve", help="start, inspect, or stop the workbench daemon")
+    p.add_argument("--status", action="store_true")
+    p.add_argument("--stop", action="store_true")
+    p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("inbox", help="the operations the researcher staged in the workbench, grouped by view")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_inbox)
+
+    p = sub.add_parser("apply", help="execute staged operations, run the cascades, archive them to reviews/")
+    p.add_argument("op_ids", nargs="*", help="specific op ids; default is none, use --all")
+    p.add_argument("--all", action="store_true", help="apply every pending operation")
+    p.add_argument("--dry-run", action="store_true", help="say what would happen; write nothing")
+    p.set_defaults(fn=cmd_apply)
+
+    p = sub.add_parser("stage", help="stage an operation as a proposal for the researcher (JSON, as the workbench writes it)")
+    p.add_argument("--op", required=True, help='{"op": "merge-code", "target": "a", "args": {"into": "b"}, "note": "why"} or a JSON list')
+    p.set_defaults(fn=cmd_stage)
+
+    p = sub.add_parser("reply", help="reply to a comment thread the researcher left in the workbench")
+    p.add_argument("thread"); p.add_argument("text")
+    p.set_defaults(fn=cmd_reply)
+
+    p = sub.add_parser("bundle", help="everything a workbench tab needs, as JSON (used by the daemon)")
+    p.set_defaults(fn=cmd_bundle)
+
+    p = sub.add_parser("transcript", help="one transcript with its coded spans, resolved speakers, and hints")
+    p.add_argument("transcript")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_transcript)
+
+    # ---- edits the workbench stages and the CLI can also make directly
+    p = sub.add_parser("retrim", help="re-cut an extract's boundary inside its own turn, keeping its id")
+    p.add_argument("extract_id")
+    p.add_argument("--from", dest="frm"); p.add_argument("--to")
+    p.add_argument("--start", type=int, help="character offset into the normalised turn text")
+    p.add_argument("--end", type=int)
+    p.set_defaults(fn=cmd_retrim)
+
+    p = sub.add_parser("mark-reviewed", help="stamp extracts/codes/themes as reviewed at this codebook version")
+    p.add_argument("--transcript", help="every extract in this transcript")
+    p.add_argument("--extracts", nargs="*"); p.add_argument("--codes", nargs="*"); p.add_argument("--themes", nargs="*")
+    p.set_defaults(fn=cmd_mark_reviewed)
+
+    p = sub.add_parser("reparent", help="make a code a child of another, or promote it to top level")
+    p.add_argument("code")
+    p.add_argument("--to", help="new parent code id")
+    p.add_argument("--root", action="store_true", help="promote to top level")
+    p.set_defaults(fn=cmd_reparent)
+
+    p = sub.add_parser("split-code", help="carve a child out of a code, moving the extracts that belong to it")
+    p.add_argument("code"); p.add_argument("new_id")
+    p.add_argument("--extracts", nargs="+", required=True)
+    p.add_argument("--name"); p.add_argument("--definition"); p.add_argument("--include"); p.add_argument("--exclude")
+    p.set_defaults(fn=cmd_split_code)
+
+    p = sub.add_parser("set-field", help="reword a code's definition / include / exclude / name")
+    p.add_argument("code"); p.add_argument("field", choices=sorted(FIELD_NAMES)); p.add_argument("value")
+    p.add_argument("--old", help="the text you edited against; refuses if it changed since")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_set_field)
+
+    p = sub.add_parser("code-status", help="accept, retire, or re-open a code")
+    p.add_argument("code"); p.add_argument("status", choices=["candidate", "accepted", "retired"])
+    p.set_defaults(fn=cmd_code_status)
+
+    p = sub.add_parser("new-code", help="add a code (status candidate) without going through a review round")
+    p.add_argument("id"); p.add_argument("definition")
+    p.add_argument("--name"); p.add_argument("--parent"); p.add_argument("--include"); p.add_argument("--exclude")
+    p.add_argument("--tags", nargs="*")
+    p.set_defaults(fn=cmd_new_code)
+
+    p = sub.add_parser("reread", help="record or close a request to re-read a transcript for a code")
+    p.add_argument("transcript", nargs="?")
+    p.add_argument("--code"); p.add_argument("--note")
+    p.add_argument("--done", action="store_true", help="close the open request(s) for this transcript")
+    p.set_defaults(fn=cmd_reread)
+
+    # ---- themes
+    p = sub.add_parser("theme", help="theme development: assign codes, edit fields, tensions, quotes, the map")
+    tsub = p.add_subparsers(dest="theme_cmd", required=True)
+
+    q = tsub.add_parser("new", help="create a theme (a claim, not a topic)")
+    q.add_argument("name"); q.add_argument("--parent"); q.add_argument("--rq"); q.add_argument("--id")
+    q.set_defaults(fn=cmd_theme_new)
+
+    q = tsub.add_parser("assign", help="place a code in a theme, in the miscellaneous pile, or nowhere")
+    q.add_argument("code")
+    q.add_argument("--to"); q.add_argument("--misc", action="store_true"); q.add_argument("--unplaced", action="store_true")
+    q.set_defaults(fn=cmd_theme_assign)
+
+    q = tsub.add_parser("set", help="edit name / essence / story / rq / in_paper / status")
+    q.add_argument("theme"); q.add_argument("field", choices=sorted(THEME_FIELDS)); q.add_argument("value")
+    q.add_argument("--old"); q.add_argument("--force", action="store_true")
+    q.set_defaults(fn=cmd_theme_set)
+
+    q = tsub.add_parser("tension", help="keep the accounts that complicate the theme")
+    q.add_argument("theme"); q.add_argument("--add", nargs="*"); q.add_argument("--remove", nargs="*")
+    q.set_defaults(fn=cmd_theme_tension)
+
+    q = tsub.add_parser("select", help="the quotes that go in the paper, in order")
+    q.add_argument("theme"); q.add_argument("--add", nargs="*"); q.add_argument("--remove", nargs="*"); q.add_argument("--at", type=int)
+    q.set_defaults(fn=cmd_theme_select)
+
+    q = tsub.add_parser("trim", help="cut a selected quote to its inline form (from the extract's own text)")
+    q.add_argument("theme"); q.add_argument("extract")
+    q.add_argument("--from", dest="frm"); q.add_argument("--to")
+    q.add_argument("--start", type=int); q.add_argument("--end", type=int)
+    q.add_argument("--clear", action="store_true")
+    q.set_defaults(fn=cmd_theme_trim)
+
+    q = tsub.add_parser("merge", help="fold one theme into another")
+    q.add_argument("source"); q.add_argument("target")
+    q.set_defaults(fn=cmd_theme_merge)
+
+    q = tsub.add_parser("mermaid", help="the thematic map, drawn from themes.yaml")
+    q.set_defaults(fn=cmd_theme_mermaid)
+
     args = ap.parse_args(argv)
     an = Analysis(find_root(args.dir))
     if args.cmd != "init" and not an.study_path.exists():
         raise SystemExit(f"no study.yaml in {an.root.resolve()}; run `ta.py init` there or pass --dir")
+    if args.cmd in WRITING_COMMANDS or (args.cmd == "init" and an.study_path.exists()):
+        # Every command that rewrites a data file holds the pass lock, and re-reads the files
+        # after taking it: two writers loading, mutating and saving whole files from two
+        # snapshots would silently keep only the second one's work. Deciding this here, once,
+        # is the only way it stays true as commands are added.
+        apply_lock(an)
+        an.reload()
+        try:
+            return args.fn(an, args)
+        finally:
+            apply_unlock(an)
     return args.fn(an, args)
 
 

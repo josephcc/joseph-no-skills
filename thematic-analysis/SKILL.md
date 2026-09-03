@@ -1,6 +1,6 @@
 ---
 name: thematic-analysis
-description: "Run a rigorous Braun & Clarke thematic analysis over interview and user-study transcripts for an HCI paper, as a negotiated, auditable pipeline: build a codebook interview by interview (each new transcript adds candidate codes the user accepts, merges, or rewrites in an interactive review), apply the finished codebook to every transcript to catalogue every matching quote, develop and negotiate themes, and select the quotes that go in the paper. Every quote is copied from the transcript by script and re-verified, so nothing is hallucinated; coverage over participants, codes, and themes is computed, never estimated. Use whenever the user mentions coding interviews, a codebook, open coding, thematic analysis, affinity diagramming of quotes, themes from a user study, 'review this interview and update the codes', 'which participants said X', or picking participant quotes for a paper, even if they don't name the method. Works on transcripts from watch-recording or any `[HH:MM:SS] Speaker: text` file."
+description: "Run a rigorous Braun & Clarke thematic analysis over interview and user-study transcripts for an HCI paper, as a negotiated, auditable pipeline: build a codebook interview by interview (each new transcript adds candidate codes the user accepts, merges, or rewrites in a local review workbench), apply the finished codebook to every transcript to catalogue every matching quote, develop and negotiate themes, and select the quotes that go in the paper. Every quote is copied from the transcript by script and re-verified, so nothing is hallucinated; coverage over participants, codes, and themes is computed, never estimated. Use whenever the user mentions coding interviews, a codebook, open coding, thematic analysis, affinity diagramming of quotes, themes from a user study, 'review this interview and update the codes', 'which participants said X', or picking participant quotes for a paper, even if they don't name the method. Works on transcripts from watch-recording or any `[HH:MM:SS] Speaker: text` file."
 argument-hint: [analysis folder or transcript(s), plus which operation: code this interview / apply the codebook / develop themes / pick quotes]
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash(uv:*), Bash(python3:*), Bash(bun:*), Bash(node:*), Bash(pdftotext:*), Bash(ls:*), Bash(wc:*), Bash(grep:*), Bash(command -v:*)
 ---
@@ -27,10 +27,11 @@ Files, all under `~/.claude/skills/thematic-analysis/`:
 |---|---|
 | `source/braun-clarke-2006.txt` | The method, full text. Not distributed (copyright); `scripts/extract_source.sh` makes it from the PDF. |
 | `references/braun-clarke-digest.md` | Our summary of the paper. Fallback when the full text is absent. |
-| `references/data-model.md` | The four data files, field by field. Read before touching `analysis/`. |
-| `references/review-templates.md` | The shape of the three negotiation documents (codebook, themes, quotes). |
+| `references/data-model.md` | The data files and the operation inbox, field by field. Read before touching `analysis/`. |
+| `references/review-templates.md` | What the workbench carries and what a round document carries, with a template for each round. |
 | `references/writing-up.md` | HCI results-section conventions: claims as headings, n/N, quote hygiene, the method paragraph. |
-| `scripts/ta.py` | Bookkeeping and audit CLI. `uv run ~/.claude/skills/thematic-analysis/scripts/ta.py --help`. |
+| `scripts/ta.py` | Bookkeeping, audit, and the staged-operation CLI. `uv run ~/.claude/skills/thematic-analysis/scripts/ta.py --help`. |
+| `app/` | The review workbench: seven views over one analysis folder, served by a local daemon. `ta.py open` builds it on first run and prints the URL. |
 
 ---
 
@@ -48,16 +49,22 @@ If there is no PDF in `source/` either, tell the user the paper is not distribut
 and ask them to drop it there; meanwhile read `references/braun-clarke-digest.md` and say
 plainly that you are working from the digest.
 
-Then, before coding a line, make the decisions Braun and Clarke say are usually left unspoken,
-and write them into `study.yaml` under `approach`:
+Then write the analytic stance into `study.yaml` under `approach`. Braun and Clarke say these
+decisions are usually left unspoken; this skill has already made them, so **do not ask** — state
+them, and change one only if the user says otherwise or the study is plainly not an HCI user
+study:
 
-- **inductive, deductive, or hybrid** (most HCI studies are hybrid: the research questions and
-  design goals shape what you look for, but codes come from the data);
-- **semantic or latent** (HCI results sections are almost always semantic: what participants said
-  and did, then interpreted);
-- **the epistemology** (realist, unless the user says otherwise);
-- **the prevalence unit**: the participant. Report `n/N`, never extract counts, and carry the
-  caveat that frequency does not determine value.
+- **orientation: hybrid.** The research questions and design goals shape what you attend to; the
+  codes come from the transcripts.
+- **level: semantic.** What participants said they did and valued, then interpreted.
+- **epistemology: realist.**
+- **prevalence_unit: participant.** Report `n/N`, never extract counts, and carry the caveat that
+  frequency does not determine value.
+
+`init` seeds exactly this. The kind convention that goes with it: a criterion or action the
+participant applied during the study is `did`; `said` is for views and standing attitudes; a modal
+verb governing the participant's own hypothetical action is `intent`. Say all of this in the method
+paragraph.
 
 Also fix the distance between three sets of questions: the research questions, the interview
 questions, and the questions guiding coding. If the codebook starts looking like the interview
@@ -87,7 +94,10 @@ because deciding who counts as a participant is analytic work, not clerical: a r
 several people, a colleague who joined for ten minutes is context, and (from `watch-recording`)
 presence is not participation.
 
-Read `references/data-model.md` for every field. The rule that matters most: **`extracts.jsonl`
+Read `references/data-model.md` for every field. Two files have exactly one writer, and that is
+the safety story: `extracts.jsonl` is written only by `ta.py`, and `inbox.jsonl` — the operations
+the researcher stages in the workbench — is written only by the browser. `ta.py apply` is where
+they meet. The rule that matters most: **`extracts.jsonl`
 is written only by `ta.py extract`**, which copies the quote out of the transcript at the lines
 you name. You never type a quote into any file. You read the transcript with line numbers,
 decide the span and the codes, and let the script copy the text, resolve the speaker to a
@@ -160,55 +170,91 @@ one extract after five interviews is a candidate to retire, or the seed of a ten
 keeping; say which. Never let the list grow past what a reader could hold in mind: forty
 top-level codes is a sign of coding topics instead of meanings.
 
-**4. Render the coded transcript.** Before or alongside the review document, write the transcript
-with every coded span highlighted:
+**4. Write the argument, then hand over the workbench.** Two surfaces, and the split matters:
+the **workbench** carries operations over data (dispute a coding, accept a code, move a card), the
+**round document** carries arguments and judgements (what changed, why this code and not an
+existing one, the coding policies). See `references/review-templates.md`.
+
+Write the code's argument into its `proposal` field in `codebook.yaml`
+(`why`, `alternatives`, `borderline`, `round`) as well as into the document, so it sits beside the
+definition in the inspector where the decision is actually made. **Stage your own structural
+proposals as operations** rather than asking about them in prose — a merge belongs where its
+evidence is:
 
 ```bash
-uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> annotate T-07 -o reviews/annotated/T-07-P7.plan.md
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> stage \
+    --op '{"op": "merge-code", "target": "agent-steering", "args": {"into": "control"}, "note": "0.75 extract overlap; see dupes"}'
 ```
 
-It is the transcript itself, turn by turn, with each extract wrapped in a highlight whose thread lists
-the codes, kind, context, and note. This is how the user checks the *coding*, as opposed to the
-codebook: they read the interview they remember, click a span, and dispute a code, a boundary, or a
-kind on the spot, or highlight an uncoded passage that should carry one. Regenerate it after every
-recoding pass so it never drifts from `extracts.jsonl`. `--plain` gives the same view as flat
-markdown with code lines under each turn.
+Then author `analysis/reviews/YYYY-MM-DD-codebook-N.plan.md` following Round A (load
+`interactive-plan` for the tag syntax): the narrative table, the argument per candidate code with
+two or three extracts and a link into the workbench, the definitions you want discussed as
+highlights, the coding-policy questions that are *not* operations, and the coverage tables pasted
+from `ta.py coverage`. Lint it, run `ta.py verify-quotes` on it.
 
-**5. Negotiate (the review document).** Author `analysis/reviews/YYYY-MM-DD-codebook-N.plan.md`
-following Round A in `references/review-templates.md`, using the `interactive-plan` skill (load it
-for the tag syntax). For every new candidate code: the definition (highlightable), two or three
-extracts with ids and participants, why it is not an existing code, and an `<open-question>`
-with real options (accept / accept as child of X / accept with edits / merge into Y / reject).
-For every suspected duplicate: a `<finding>` and a question. For every definition you want to
-change: the current and proposed text and the extract that forced it. Then the coverage tables,
-pasted from `ta.py coverage`. Lint, run `ta.py verify-quotes` on the document, launch the viewer.
+Finally open both, and say which is which:
 
-**6. Apply the answers.** When the user says *"review my feedback"*: read every `<answer>` and
-open `<comment>`; edit `codebook.yaml` (status → `accepted`, definitions as revised); use
-`merge-code`, `rename-code`, `recode`, `drop`; record the round with `ta.py bump "<what changed>"`;
-convert answered questions into `<decision from=…>` for the next round; reply to comments (the
-user resolves them). Then run `ta.py stale`. A code added or redefined after a transcript was coded
-means that transcript gets a pass for that code before the next interview, because Braun and
-Clarke's phase 2 is systematic across the *entire* data set, not across the interviews that
-happened to come after the code existed.
+```bash
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> open T-07
+node ~/.claude/skills/interactive-plan/app/server.mjs <abs-path-to-the-round-document>.plan.md
+```
 
-When the user's answer reveals a passage that belongs in the paper (the system predicting an
-unpublished result, a sceptic being convinced), flag the extract then and there:
-`recode E-0042 --highlight "<why>"`. Highlights are not selections; they surface at the top of the
-quote bank so the theme round starts from the moments that struck the researcher while coding.
+`open` runs a preflight first (`validate`, `verify`, the inbox lint, and whether every extract's
+text can still be located in its turn) and refuses to launch on an error, because a page built on
+broken data is worse than no page. The transcript view is where the coding is reviewed: spans
+tinted by code family, one chip per extract with its id, kind and codes, the definitions beside
+the passage, delta mode so only what changed since the last review is vivid, and every timestamp
+hovering to the `watch-recording` frame so a `did` can be checked against the screen.
 
-Comments the user leaves on a *generated* file (`reports/codebook.md`, an annotated transcript) are
-feedback on the data files, not edits to them. `report` and `annotate` overwrite their outputs, so
-`report` archives any commented file to `reviews/` first and says so; read the comments, apply them
-to `codebook.yaml` or the extracts, then regenerate. Say plainly, when asked, that `codebook.yaml` is
-the source of truth and everything under `reports/` is a rendering of it.
+**5. Read the feedback and apply it.** When the user says *"review my feedback"*:
+
+```bash
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> inbox
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> apply --all
+```
+
+`inbox` groups what they staged by view, with the comment threads beside it. `apply` executes the
+operations in the order they were staged, bumps the codebook **once** for the pass, stamps the
+codes whose meaning moved, archives every line to `reviews/<date>-applied.jsonl`, and prints
+`stale`, `validate` and `verify`. An operation that cannot be applied — a definition edit written
+against wording you have since changed, a retire on a code that still holds extracts, an op naming
+an extract that has since been dropped — stays in the inbox with its reason while every other
+operation still runs, so one stale line never holds up the rest of the researcher's feedback. Fix
+the cause and apply again, or discuss it in the thread. Read the answers in the round document too, convert them to `<decision from=…>` for the next
+round, and reply to threads with `ta.py reply op-0031 "..."` (the user resolves them, never you).
+
+Then look at `stale`. A code added or redefined after a transcript was coded means that transcript
+gets a pass for that code before the next interview, because Braun and Clarke's phase 2 is
+systematic across the *entire* data set, not across the interviews that happened to come after the
+code existed. `stale --json` says which codes changed, so the re-read is targeted; a bump with no
+code change is marked `version-only` and needs nothing.
+
+**6. Keep the flagged moments.** When a passage turns out to belong in the paper (the system
+predicting an unpublished result, a sceptic being convinced), flag it:
+`recode E-0042 --highlight "<why>"` — or the user presses ★ in the transcript view. Highlights are
+not selections; they surface at the top of the quote bank and of the Quotes view's bank, so the
+theme round starts from the moments that struck the researcher while coding.
+
+`codebook.yaml` is the source of truth and everything under `reports/` is a rendering of it. A
+comment the user leaves on a *generated* file (`reports/codebook.md`, an annotated transcript) is
+feedback on the data files, not an edit to them: `report` archives any commented file to `reviews/`
+before regenerating and says so; read it, apply it, regenerate.
 
 Repeat per interview. The codebook converges when a new transcript adds extracts but no codes. At
-that point, and again before freezing, do a **cleanup review**: read every parent's parent-only
-extracts (a parent carrying more than its children is hiding a child), look for a child that is a
-special case of a sibling, for two criteria that point the same direction under different names,
-and for a family whose one child holds everything (that is one code, not a family). Propose each
-merge with the extracts that would move, and let the user decide.
+that point, and again before freezing, do a **cleanup review** in the Codebook view, whose health
+strip is exactly this checklist: read every parent's parent-only extracts (a parent carrying more
+than its children is hiding a child), look for a child that is a special case of a sibling, for two
+criteria that point the same direction under different names, and for a family whose one child
+holds everything (that is one code, not a family). The Compare pane puts two codes side by side
+with their extracts in three columns (only A, both, only B), which is the surface for every `dupes`
+flag. Stage each merge as a proposal with the extracts that would move, and let the user decide.
+
+Do a **code-consistency review** in the same pass: pick a code and read every extract under it,
+grouped by participant, with the definition on top (the Codebook view's detail pane, or
+`ta.py collate <code>`). That read is the check on whether the definition was applied the same way
+in interview nine as in interview two — the reflexive-TA answer to the question inter-rater
+reliability is usually asked to settle. Where it was not, `recode` the strays or sharpen the
+`include`/`exclude` clause and let `stale` send you back.
 
 ---
 
@@ -245,6 +291,16 @@ behaviour: you have been coding opinions. Fix what the report shows, re-run, and
 tables into `memos.md` with the date. Codebook changes are still possible here, but each one
 un-freezes the count and sends you back through `stale`.
 
+The Coverage view is that report as a map: participants × codes, each cell clickable to the
+extracts behind it, and an **empty** cell clickable to stage a re-read request ("re-read T-04 for
+`trust.stakes`"). Those arrive in the inbox, are recorded in `study.yaml`, and `stale` reports them
+until `ta.py reread <T> --done` closes them.
+
+Then hand back a **delta review**, not the whole corpus again: the only thing worth the
+researcher's time after this pass is what it added. `ta.py open T-04` with the transcript view's
+"new only" filter shows exactly that, because every extract they have already seen carries a
+`reviewed` stamp.
+
 ---
 
 ## Operation C. Theme development and selection
@@ -273,23 +329,39 @@ this framing and not another, what it implies for the design or the research que
 it gathers, and the `rq` it answers. Participants per theme are derived from the extracts, never
 typed; `ta.py coverage` prints the n/N.
 
-**Negotiate.** Author `reviews/YYYY-MM-DD-themes-N.plan.md` following Round B: per theme, the
-essence (highlightable), the story, codes with n/N, three representative extracts, the tension,
-the level-2 result, and questions: headline / secondary / merge with / split / drop, plus a
-naming question. End with the overall story: how the themes together answer the research
-questions, and in what order. That paragraph is the one most worth the user's edits. Apply the
-answers to `themes.yaml` (`status`, `in_paper`, `name`, `essence`).
+**Negotiate.** The Themes view (`ta.py open themes`) is the board: columns are themes, cards are
+codes with their n/N and kind mix, and dragging a card stages an `assign-theme`. Each theme's
+inspector holds the essence (with the two-sentence counter), the story, the RQ, `in_paper`, and the
+tensions list you drag extracts into — phases 4 and 5 in one pane. `ta.py theme mermaid` exports
+the map from `themes.yaml`, so the picture in a document can never disagree with the board.
+
+Then author `reviews/YYYY-MM-DD-themes-N.plan.md` following Round B for what the board cannot
+carry: per theme the story paragraph, three representative extracts, the tension and what it does
+to the claim, the level-2 result, and the naming question. End with the overall story — how the
+themes together answer the research questions, and in what order. That paragraph is the one most
+worth the user's edits. Include / merge / split / drop are moves on the board, not questions in
+prose.
 
 ---
 
 ## Operation D. Quote selection and handoff to writing
 
-For each theme with `in_paper` other than `no`, propose the quotes (Round C): vivid,
-self-contained, exemplifying the *claim* rather than merely the topic, short enough to weave
-inline where possible, with a `did` extract beside a `said` one when the theme is about
-behaviour. Watch the attribution spread across the whole paper: a results section that quotes
-P3 seven times is a case study of P3. List alternatives so the user can overrule, and ask
-separately whether each tension goes in. Write the chosen ids into `selected_extracts` in order.
+Selection happens in the Quotes view (`ta.py open quotes`): the whole bank per theme with word
+counts and an inline/block mark, flagged extracts first, the ordered in-the-paper list, and the
+attribution spread updating as the user chooses. Prepare it rather than replacing it: flag the
+candidates with `--highlight` during coding, and say in a short Round C document only what needs an
+argument (whether a tension goes in, an attribution call you would not make alone).
+
+The criteria to apply while preparing, and to say out loud: vivid, self-contained, exemplifying the
+*claim* rather than merely the topic, short enough to weave inline where possible, with a `did`
+extract beside a `said` one when the theme is about behaviour. Watch the spread across the whole
+paper: a results section that quotes P3 seven times is a case study of P3.
+
+An inline quote that needs trimming is trimmed by the script, never retyped:
+`ta.py theme trim TH1 E-0041 --from "..." --to "..."` (or a text selection in the Quotes view)
+slices the shorter form out of the extract's own stored text and records it in `quote_spans`. The
+extract is untouched, the quote bank prints the trim and what it was cut from, and `verify-quotes`
+still passes.
 
 Then `ta.py report` writes `reports/quote-bank.md`, `themes.md`, `codebook.md` (the appendix
 table), `coverage.md`, and `audit.md`. Those files, plus `references/writing-up.md`, are the
@@ -334,8 +406,21 @@ building a theme from the participants you remember, `collate` it and look at wh
 `tensions`. The write-up needs them, and a theme that survives its exceptions is stronger.
 
 **The user decides.** Codes, themes, names, definitions, quotes, what goes in the paper: all of it
-is negotiated through the review documents. You may recommend, and should, with the evidence
-beside the recommendation. You do not accept your own candidate codes.
+is negotiated in the workbench and the round documents. You may recommend, and should, with the
+evidence beside the recommendation — as a `proposal` field on the code and a staged operation they
+can accept in one click. You do not accept your own candidate codes, and you do not resolve their
+comment threads.
+
+**Propose as an operation, argue in prose.** Anything the script can do — merge, reparent, split,
+accept, retire, recode, select a quote — is staged with `ta.py stage` so the decision happens where
+the evidence is. Anything that needs judgement — why this code exists, what the theme means, which
+of two coding policies to adopt — goes in the round document, where it can be commented on. Never
+ask a question whose answer you would then have to parse back into a command.
+
+**Silence is acceptance, and the record still has to be complete.** An extract the user scrolls
+past is accepted; "Done with T-07" stamps everything they left alone as reviewed. So an extract
+*you* change later drops its stamp and comes back as new in the next pass, and one *they* changed
+counts as reviewed. Never stamp on their behalf outside that button.
 
 **Audit before handback, every time.** `validate`, `verify`, and `coverage` at the end of any
 pass; `verify-quotes` on any document that contains quotes. Paste the summary lines. If a check
@@ -355,25 +440,57 @@ ta.py init --study NAME --transcripts FILES...   # roster + empty files; then ed
 ta.py extract T-01 42 --codes a,b --kind said    # one extract; or --batch file.jsonl
 ta.py extract T-01 42-43 --codes a --from "the biggest thing" --to "whole prompt."
 ta.py recode E-0041 --add trust --remove control --kind did
+ta.py retrim E-0041 --from "being able" --to "that step."    # re-cut the span, same id, still verbatim
 ta.py drop E-0041 E-0042                         # and say why in memos.md
 ta.py mark-coded T-01                            # transcript fully coded with the current codebook
+ta.py mark-reviewed --transcript T-01            # the researcher has seen this coding (the Done button)
 ta.py bump "what changed" [--freeze]             # new codebook version; freeze after the last interview
+
+# the codebook, structurally
+ta.py new-code ID "definition" --parent P        # a candidate code
+ta.py code-status ID accepted|candidate|retired
+ta.py set-field ID definition "..." --old "..."  # reword; refuses if it moved since you read it
+ta.py reparent ID --to PARENT | --root
+ta.py split-code PARENT child --extracts E-1 E-2 --definition "..."
 ta.py merge-code SRC DST --why "..."             # recodes extracts, keeps SRC as merged
 ta.py rename-code OLD NEW
-ta.py stale                                      # transcripts needing a pass
-ta.py validate · verify · coverage · dupes       # the audit
-ta.py collate CODE|THEME                         # all extracts, grouped by participant
-ta.py annotate T-01 -o reviews/annotated/T-01-P1.plan.md   # the coded transcript, spans highlighted, for the user to review
-ta.py recode E-0041 --highlight "why it matters"  # flag a paper-worthy quote (surfaces in the quote bank)
+
+# themes and quotes
+ta.py theme new "A claim, not a topic" --rq RQ1
+ta.py theme assign CODE --to TH1 | --misc | --unplaced
+ta.py theme set TH1 essence|story|name|rq|in_paper|status "..."
+ta.py theme tension TH1 --add E-0099
+ta.py theme select TH1 --add E-0041 --at 0      # the quotes, in order
+ta.py theme trim TH1 E-0041 --from "..." --to "..."   # the inline form, sliced from the extract
+ta.py theme mermaid                              # the map, drawn from themes.yaml
+ta.py reread T-04 --code trust --note "..."      # ask for a re-read; --done to close it
+
+# the audit
+ta.py validate · verify · coverage · dupes · stale       # add --json for the workbench's copy
+ta.py collate CODE|THEME [--json]                # all extracts, grouped by participant
 ta.py verify-quotes FILE.md [--quiet]            # every quote in a document is verbatim + attributed
 ta.py codebook-table                             # appendix table
 ta.py report                                     # reports/{coverage,codebook,themes,quote-bank,audit}.md
+ta.py annotate T-01 -o reviews/annotated/T-01-P1.plan.md   # the coded transcript as text/PDF, for a co-author
+ta.py recode E-0041 --highlight "why it matters"  # flag a paper-worthy quote (surfaces in the quote bank)
+
+# the review workbench
+ta.py open [T-07 | E-0042 | trust.stakes | TH1 | codebook | coverage | themes | quotes | study | history]
+ta.py serve --status | --stop                    # the daemon (one, shared, on port 47821 if free)
+ta.py inbox [--json]                             # what the researcher staged, grouped by view
+ta.py apply --all [--dry-run]                    # execute it, cascade, archive to reviews/
+ta.py stage --op '{"op": "merge-code", ...}'      # propose an operation for them to accept
+ta.py reply op-0031 "..."                        # answer a comment thread (they resolve it)
+ta.py bundle · transcript T-01 --json            # the payloads the workbench reads
 ```
 
-Tests: `cd ~/.claude/skills/thematic-analysis && uv run --with pytest --with pyyaml python -m pytest tests -q`.
-They pin quote copying, verbatim verification, speaker attribution, the two-level rule, duplicate
-detection, staleness, and the markdown quote check.
+Tests: `cd ~/.claude/skills/thematic-analysis && uv run --with pytest --with pyyaml python -m pytest tests -q`
+(52) and `cd ~/.claude/skills/thematic-analysis/app && bun run test` (41). They pin quote copying,
+verbatim verification, speaker attribution, the two-level rule, duplicate detection, staleness, the
+markdown quote check, the operation schema, `apply`'s cascades and refusals, the reviewed-state
+computation, span segmentation, and the pending overlay.
 
-Related skills: `watch-recording` produces the transcripts and settles `did` claims against
-frames; `interactive-plan` is the medium for every review round; `write-like-joseph` writes the
-results section from `reports/` when the repo is gated.
+Related skills: `watch-recording` produces the transcripts and the frames that settle `did` claims;
+`interactive-plan` is the medium for the narrative half of every review round, and the workbench
+copies its visual language on purpose; `write-like-joseph` writes the results section from
+`reports/` when the repo is gated.
