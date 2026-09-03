@@ -1,9 +1,25 @@
 # Using `thematic-analysis`
 
-A Braun & Clarke thematic analysis of interview transcripts, run as a negotiation between you and
-the agent. The agent reads everything, proposes with evidence, and keeps the books; you decide
-every code, theme and quote. Nothing it claims about the data is unchecked: quotes are copied out
-of the transcript by script and re-verified, and coverage is computed rather than estimated.
+A Braun & Clarke thematic analysis of interview transcripts in which **you drive and the agent
+supports**. It works as an experienced qualitative analyst would: it reads every transcript,
+notices what recurs, and proposes codes and themes with the extracts behind them — as a spread of
+options, grounded in your research questions and your draft, not a single verdict. You decide.
+Which codes stay, which themes the data supports, which quotes go in, and what the paper argues
+are yours.
+
+Each new interview is two jobs done together: it codes the transcript against the codebook you
+already have, so this one is comparable with the rest, and it brings you the passages nothing
+covered as candidate codes to rule on.
+
+Two things make that practical. **Reviewing**: the coding is drawn on the transcript, every
+timestamp opens the frame from the recording, and the codebook is a structure you can take apart —
+so checking the work is cheap enough that you actually do it. **Reading everything, every time**:
+a code you just wrote gets carried back across all the transcripts, which is how you learn it was
+under-applied in the first interview, that it overlaps a code you wrote last week, or that two
+participants never triggered it at all.
+
+Nothing it claims about the data is unchecked: quotes are copied out of the transcript by script
+and re-verified, and coverage is computed rather than estimated.
 
 `SKILL.md` in this folder is written for the agent. This file is written for you.
 
@@ -93,6 +109,14 @@ it; **Done with T-07** stamps the rest as reviewed, so the next round costs what
 than what exists. Accept or reject the new codes in the Codebook view, where their extracts are.
 
 ![The Transcript view: coded spans tinted by code family with an ordinal on each, a chip under every turn carrying the extract id, kind glyph and codes, and the inspector holding the selected extract, its kind, its codes and the definitions those codes are meant to satisfy](docs/hero.png)
+
+A `did` claim should not rest on what someone remembers saying they did. If the recording went
+through `watch-recording`, every timestamp in the transcript carries its frame: hover for the
+screen as they spoke, click for full size. The extract inspector shows the same frame for the
+extract you are reading, and names which one it used — the nearest at or before the line, never a
+guess.
+
+![Hovering a timestamp in the transcript pops the video frame from that moment, captioned with the frame file and the fact that it is the nearest one before that timestamp; the inspector shows the same frame under "the screen as they spoke"](docs/frame-peek.png)
 
 Then: *"review my feedback"*.
 

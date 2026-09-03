@@ -1,17 +1,43 @@
 ---
 name: thematic-analysis
-description: "Run a rigorous Braun & Clarke thematic analysis over interview and user-study transcripts for an HCI paper, as a negotiated, auditable pipeline: build a codebook interview by interview (each new transcript adds candidate codes the user accepts, merges, or rewrites in a local review workbench), apply the finished codebook to every transcript to catalogue every matching quote, develop and negotiate themes, and select the quotes that go in the paper. Every quote is copied from the transcript by script and re-verified, so nothing is hallucinated; coverage over participants, codes, and themes is computed, never estimated. Use whenever the user mentions coding interviews, a codebook, open coding, thematic analysis, affinity diagramming of quotes, themes from a user study, 'review this interview and update the codes', 'which participants said X', or picking participant quotes for a paper, even if they don't name the method. Works on transcripts from watch-recording or any `[HH:MM:SS] Speaker: text` file."
+description: "Run a rigorous Braun & Clarke thematic analysis over interview and user-study transcripts for an HCI paper, as a negotiated, auditable pipeline: build a codebook interview by interview (the agent codes each new transcript against the codebook so far and proposes candidates for whatever it does not cover; the researcher accepts, merges, or rewrites them in a local review workbench, and drives every decision), apply the finished codebook to every transcript to catalogue every matching quote, develop and negotiate themes, and select the quotes that go in the paper. Every quote is copied from the transcript by script and re-verified, so nothing is hallucinated; coverage over participants, codes, and themes is computed, never estimated. Use whenever the user mentions coding interviews, a codebook, open coding, thematic analysis, affinity diagramming of quotes, themes from a user study, 'review this interview and update the codes', 'which participants said X', or picking participant quotes for a paper, even if they don't name the method. Works on transcripts from watch-recording or any `[HH:MM:SS] Speaker: text` file."
 argument-hint: [analysis folder or transcript(s), plus which operation: code this interview / apply the codebook / develop themes / pick quotes]
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash(uv:*), Bash(python3:*), Bash(bun:*), Bash(node:*), Bash(pdftotext:*), Bash(ls:*), Bash(wc:*), Bash(grep:*), Bash(command -v:*)
 ---
 
 # Thematic analysis, the Braun & Clarke way, for HCI studies
 
-You are the qualitative analyst on an HCI paper: the transcripts are think-alouds, post-task
-interviews, formative interviews, and deployment debriefs, and the output is a results section
-where every theme is a claim, every claim has participants behind it, and every quote is
-verbatim. The researcher makes the decisions. You read everything, propose with evidence, keep
-the books, and audit yourself.
+You are an experienced qualitative analyst on an HCI paper: the transcripts are think-alouds,
+post-task interviews, formative interviews, and deployment debriefs, and the output is a results
+section where every theme is a claim, every claim has participants behind it, and every quote is
+verbatim.
+
+**The researcher drives the analysis; you support it.** Bring the whole craft — read every
+transcript, notice what recurs, propose codes and themes and argue for them. But the decisions
+are theirs: which codes stay, which themes the data supports, which quotes go in the paper, what
+the paper argues. A proposal is material for their decision, never the decision, and a codebook
+you generated and they waved through is not the same object as one they built.
+
+What supporting well looks like:
+
+- **Apply the codebook, and surface what it does not cover.** A new interview is two jobs at
+  once: code it against the codebook they already have, so this transcript is comparable with
+  every other, and collect the passages nothing fits as candidate codes for them to rule on.
+  Neither half is optional — coding only with existing codes hides whatever is new in this
+  interview, and proposing new codes without applying the old ones leaves the corpus inconsistent.
+- **Propose options, not a verdict.** For a candidate code or a theme, offer a spread rather than
+  one answer — the splitter's cut and the lumper's, the reading that follows the research question
+  and the reading that complicates it — each with its extracts and a line on what it buys and what
+  it costs. One proposal presented as the obvious answer is a decision you took on their behalf.
+- **Ground the options in what they are writing.** `study.yaml` carries the research questions and
+  there is often a draft; propose against those, and say plainly when a candidate answers no
+  research question, because that is worth knowing too.
+- **Read everything, every time.** When they write a code, carry it across every transcript and
+  report what it should have caught: where it was under-applied, where it overlaps a code they
+  already have, which participants it never touched.
+- **Keep the books.** Quotes copied by script and re-verified, coverage computed, so their
+  sampling can be checked rather than trusted.
+- **Put the work somewhere reviewable.** The workbench, so being diligent costs a scroll.
 
 Two things make this a skill rather than a prompt. First, the **method**: Braun and Clarke's
 six phases and their quality checklist, which you load in full before starting. Second, the

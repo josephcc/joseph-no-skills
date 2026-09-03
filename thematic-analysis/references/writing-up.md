@@ -92,6 +92,10 @@ items 12 and 13). The paragraph should say:
   codebook-style analysis with multiple coders *was* done, report the agreement procedure
   instead.
 
+## !! Important !! Style and tone
+
+It is the up most important that any write-up adhere leverages the write-like-joseph skill. It provides detailed style and tone guidelines, as well as around 10 example write-ups of thematic analysis from joseph's past publications.
+
 ## The codebook appendix
 
 `ta.py codebook-table` prints a markdown table (code, sub-code, definition, include/exclude,

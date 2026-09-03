@@ -416,7 +416,16 @@ async function runServer() {
     const tid = String(req.query.t ?? '');
     getBundle(dir)
       .then((b) => {
-        const fdir = b.transcript_files?.[tid]?.frames_dir;
+        // The bundle is cached on the analysis data files' mtimes, and a frame grid appears
+        // beside the *transcript* — often after the analysis folder was first read. Trusting the
+        // cached `frames_dir` there means every frame 404s until something else invalidates the
+        // bundle, while the header cheerfully reports "25 frames". Re-resolve when it is missing.
+        let fdir = b.transcript_files?.[tid]?.frames_dir;
+        if (!fdir) {
+          const abs = b.transcript_files?.[tid]?.abs_path;
+          const guess = abs ? path.join(path.dirname(abs), 'video-snapshots') : null;
+          if (guess && fs.existsSync(guess)) fdir = guess;
+        }
         if (!fdir) return res.status(404).json({ error: 'no video-snapshots folder beside this transcript' });
         let file = req.query.file ? String(req.query.file) : null;
         if (!file && req.query.at) {

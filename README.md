@@ -113,9 +113,20 @@ by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qual
 qualitative analysis is the part an agent gets *plausibly* wrong: it paraphrases a quote and calls
 it verbatim, attributes a line to the wrong participant, builds a "theme" out of the three most
 quotable people, or hands me the interview protocol back as findings. I wanted the real method —
-Braun & Clarke's six phases, read in full at load time rather than from memory — an iterative
-codebook that grows one interview at a time with me approving every code, and bookkeeping strict
-enough to *audit* rather than trust.
+Braun & Clarke's six phases, read in full at load time rather than from memory — and bookkeeping
+strict enough to *audit* rather than trust.
+
+**I drive the analysis; the skill supports it.** The agent works the way an experienced qualitative
+analyst would — reads everything, codes each new interview against the codebook I already have,
+proposes candidates for what that codebook misses, and argues for them against my research
+questions and my draft — but it proposes *options*, and the decisions stay mine: which codes
+survive, which themes the data supports, which quotes run, what the paper argues. What it adds on top is the two things I cannot do by hand at this scale.
+**A place to review**: the transcript with its coding drawn on it, the recording's frame at any
+timestamp, the codebook as a structure I can take apart — so being diligent costs a scroll instead
+of an afternoon. **A reader that has read everything**: when I write a code, it goes back through
+every transcript looking for what that code should have caught, and tells me where I under-coded,
+where two codes are doing one job, and which participants it never touched. It proposes candidates
+when I ask; a proposal is material for my decision, never the decision.
 
 The first version negotiated all of that through the plan viewer, and a document turned out to be
 the wrong shape for most of it. So the skill now opens a **local review workbench**: seven views
@@ -135,7 +146,9 @@ codes side by side with the extracts each one holds — only A, both, only B:
 - **Said / did / intent** on every extract: a modal verb is intent, and a finding about behaviour cannot rest on "I would probably".
 - **Nothing the browser does touches the data.** Every gesture appends one typed operation to `inbox.jsonl`; `ta.py apply` is the only writer, and it archives each pass beside the round documents.
 - **Delta reviewing**: an extract you scroll past is accepted, so the fourth round costs what changed since the third, not what exists.
-- **Every timestamp hovers to the recording** where `watch-recording` left a frame grid, so a `did` claim can be checked against the screen.
+- **Every timestamp hovers to the recording** where `watch-recording` left a frame grid, so a `did` claim can be checked against the screen rather than taken from what someone remembers doing:
+
+  ![Hovering a timestamp in the transcript pops the frame from that moment of the recording, captioned with the frame it used and the fact that it is the nearest one at or before that line](thematic-analysis/docs/frame-peek.png)
 - **Five Codex audits**, 29 findings, all fixed — the concurrency story is in [`plans/`](thematic-analysis/plans/).
 
 **The loop:** you point the agent at an interview → it codes it and opens the workbench → you
