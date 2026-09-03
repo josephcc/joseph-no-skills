@@ -146,6 +146,10 @@ One JSON object per line:
 - `reviewed` (optional): `{at, version}`, stamped when the researcher reviewed this extract in the
   workbench — either by acting on it or by pressing "Done with T-07", which stamps everything they
   left alone. Silence is acceptance, and the record is still complete.
+  The stamp is also a lock against the agent: `ta.py recode`, `retrim` and `drop` refuse to edit a
+  stamped extract and stage the change as a `by: agent` proposal instead; `--force` edits anyway and
+  drops the stamp, so the change resurfaces as new. Operations the researcher stages themselves, and
+  codebook-level merges and renames they decide, still propagate onto stamped extracts.
 - `updated` (optional): when an operation last changed this extract. An edit the *agent* made also
   drops `reviewed`, so the extract comes back as new; an edit the *researcher* made is itself a
   review. That is what "new since your last review" means, and it never depends on comparing two
@@ -248,6 +252,7 @@ code → theme → the review round where the user accepted it.
 | `verify-quotes FILE.md` | any quote in a document (blockquote or inline, 5+ words) that is not verbatim in some transcript, allowing `[...]`/`[insertions]`; a quote attributed to a participant the transcript contradicts |
 | `coverage` | codes nobody said, participants nobody coded, transcripts never coded or coded against an older codebook, per-theme n/N |
 | `dupes` | two live codes with overlapping names, near-identical extract sets, or one a strict subset of the other |
+| `cooccur` | which codes are tagged on the same extracts: every pair with counts, Jaccard and both conditionals, plus ranked merge candidates and codes with a fault line. `--split-min` sets how many extracts before a code is examined. Read-only. |
 | `stale` | transcripts that need a pass because the codebook changed since |
 | `annotate T-01` | renders the coded transcript for review; overlapping spans on one turn get an empty anchor after the turn rather than nesting |
 | `report` | regenerates `reports/`; archives any report that carries interactive-plan comments to `reviews/` first, so feedback left on a rendering is never lost |

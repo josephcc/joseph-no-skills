@@ -38,12 +38,15 @@ export function StudyView({ wb }: { wb: Workbench }) {
           <table className="wb-table">
             <tbody>
               {STANCE.map((f) => (
-                <tr key={f.key}>
-                  <th>{f.label}</th>
+                <tr key={f.key} className={wb.patch.study.stance[f.key] !== undefined ? 'wb-row-staged' : ''}>
+                  <th>
+                    {f.label}
+                    {wb.patch.study.stance[f.key] !== undefined && <span className="wb-staged-flag">staged</span>}
+                  </th>
                   <td>
                     <select
                       className="wb-select"
-                      value={String(b.approach[f.key] ?? '')}
+                      value={wb.patch.study.stance[f.key] ?? String(b.approach[f.key] ?? '')}
                       onChange={(e) => stage(draft('set-stance', null, { field: f.key, value: e.target.value }))}
                     >
                       {(f.options ?? []).map((o) => (
@@ -101,18 +104,27 @@ export function StudyView({ wb }: { wb: Workbench }) {
               </tr>
             </thead>
             <tbody>
-              {b.roster.map((p) => {
+              {b.roster.map((raw) => {
+                // Every field here can be edited, and each edit is staged rather than saved, so
+                // the row must show the staged value — otherwise it snaps back on blur and the
+                // researcher retypes it, which is what happened with the review stamp.
+                const sp = wb.patch.study.participants[String(raw.id)];
+                const p = sp ? { ...raw, ...sp } : raw;
                 const row = b.participants.find((x) => x.id === p.id);
                 return (
-                  <tr key={p.id} className={String(p.id).startsWith('TODO') ? 'wb-warn-row' : ''}>
+                  <tr
+                    key={raw.id}
+                    className={`${String(p.id).startsWith('TODO') ? 'wb-warn-row' : ''} ${sp ? 'wb-row-staged' : ''}`}
+                  >
                     <td>
-                      <InlineText value={p.id} onSave={(v) => stage(draft('set-participant', p.id, { id: v }))} />
+                      <InlineText value={String(p.id)} onSave={(v) => stage(draft('set-participant', String(raw.id), { id: v }))} />
+                      {sp && <span className="wb-staged-flag">staged</span>}
                     </td>
                     <td>
                       <select
                         className="wb-select"
                         value={p.role ?? ''}
-                        onChange={(e) => stage(draft('set-participant', p.id, { role: e.target.value }))}
+                        onChange={(e) => stage(draft('set-participant', String(raw.id), { role: e.target.value }))}
                       >
                         <option value="">unknown</option>
                         {ROLES.map((r) => (
@@ -125,11 +137,11 @@ export function StudyView({ wb }: { wb: Workbench }) {
                     <td>
                       <InlineText
                         value={(p.speakers ?? []).join(', ')}
-                        onSave={(v) => stage(draft('set-participant', p.id, { speakers: v.split(',').map((s) => s.trim()).filter(Boolean) }))}
+                        onSave={(v) => stage(draft('set-participant', String(raw.id), { speakers: v.split(',').map((s) => s.trim()).filter(Boolean) }))}
                       />
                     </td>
                     <td>
-                      <InlineText value={p.group ?? ''} onSave={(v) => stage(draft('set-participant', p.id, { group: v }))} />
+                      <InlineText value={p.group ?? ''} onSave={(v) => stage(draft('set-participant', String(raw.id), { group: v }))} />
                     </td>
                     <td>{row?.extracts ?? 0}</td>
                     <td>{row?.transcripts.join(', ') ?? '—'}</td>

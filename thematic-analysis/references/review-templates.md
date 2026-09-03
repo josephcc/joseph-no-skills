@@ -58,7 +58,7 @@ so a fourth round costs what changed rather than what exists. Every timestamp ho
 
 Reading the researcher's feedback afterwards: `ta.py inbox` groups it by view. A `recode` or
 `set-kind` op is a disputed verdict; a `retrim` is a boundary; a `new-extract` is a passage that
-should have been coded; a `comment` op is a question to answer in the thread, never an edit.
+should have been coded; a `comment` op is a question to answer in the thread, never an edit. In the workbench's pending drawer a thread row opens the extract, code or theme it is about, and a resolve button sits beside it, so the researcher never has to find the card first.
 `ta.py apply --all` executes them, bumps the codebook once for the pass, and prints `stale`,
 `validate` and `verify`.
 

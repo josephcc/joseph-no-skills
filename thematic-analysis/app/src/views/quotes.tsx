@@ -186,6 +186,10 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
             <ol className="wb-sel-list">
               {selected.map((e, i) => {
                 const trim = theme.quote_spans[e.id];
+                // A staged trim (or a staged clear) does not reach `quote_spans` until the pass
+                // is applied, so without this the quote you just shortened still shows full
+                // length and the only evidence was a toast.
+                const stagedTrim = (wb.patch.themes[theme.id]?.trims ?? []).includes(e.id);
                 return (
                   <li key={e.id}>
                     <div className="wb-bank-meta">
@@ -193,6 +197,7 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                       <b>{e.participant}</b>
                       <span title={e.kind}>{KIND_GLYPH[e.kind]}</span>
                       {trim && <span className="wb-trimmed">trimmed to {trim.words} words</span>}
+                      {stagedTrim && <span className="wb-staged-flag" title="a trim is staged for this quote — the text below is the stored one until the pass is applied">trim staged</span>}
                       {theme.tensions.includes(e.id) && <span className="wb-tension-tag">tension</span>}
                     </div>
                     <blockquote>{trim ? trim.text : e.text}</blockquote>

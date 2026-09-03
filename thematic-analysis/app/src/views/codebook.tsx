@@ -5,12 +5,13 @@
 // two names — and a linear document can only show one code at a time. Here the tree
 // carries prevalence and the duplicate flags, the detail pane is `collate` with the
 // definition on top, and the moves are drags rather than options in a question.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { KIND_GLYPH, extractsForCode, familyIndex, health } from '../codes';
-import { codeWithPatch } from '../overlay';
+import { codeWithPatch, withPatch } from '../overlay';
 import { draft } from '../ops';
 import { CodeInspector } from '../inspector/code';
 import { Compare } from './compare';
+import { OverlapView } from './overlap';
 import type { Nav } from '../app';
 import type { Workbench } from '../store';
 import type { Code, Extract } from '../types';
@@ -18,14 +19,20 @@ import type { Code, Extract } from '../types';
 export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: Nav }) {
   const b = wb.bundle!;
   const [filter, setFilter] = useState<string | null>(null);
-  const [compare, setCompare] = useState<string | null>(null);
+  // Seeded from the URL so a merge proposal in the drawer, or a link in a round document, can
+  // open the two codes side by side rather than just one of them.
+  const [compare, setCompare] = useState<string | null>(nav.cmp);
+  useEffect(() => setCompare(nav.cmp), [nav.cmp]);
   const [splitting, setSplitting] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const [drag, setDrag] = useState<string | null>(null);
+  // The tree answers "what is the structure"; the cross-tab answers "is the structure right".
+  // Overlap hides the rail because you are scanning a matrix, not navigating a tree.
+  const [mode, setMode] = useState<'structure' | 'overlap'>('structure');
   const hues = useMemo(() => familyIndex(b.codes), [b.codes]);
   const patched = useMemo(() => b.codes.map((c) => codeWithPatch(c, wb.patch.codes[c.id])), [b.codes, wb.patch.codes]);
   const live = patched.filter((c) => c.status === 'candidate' || c.status === 'accepted');
-  const strip = useMemo(() => health(b), [b]);
+  const strip = useMemo(() => health(b, patched), [b, patched]);
   const shownIds = filter ? new Set(strip.find((h) => h.key === filter)?.ids ?? []) : null;
   const selected = nav.c ? patched.find((c) => c.id === nav.c) ?? null : null;
   const other = compare ? patched.find((c) => c.id === compare) ?? null : null;
@@ -67,6 +74,43 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
     setDrag(null);
   };
 
+  const showPair = (a: string, b: string) => {
+    nav.go({ c: a });
+    setCompare(b);
+    setMode('structure');
+  };
+  const showCode = (id: string) => {
+    nav.go({ c: id });
+    setCompare(null);
+    setMode('structure');
+  };
+
+  const modeSwitch = (
+    <span className="wb-seg wb-mode">
+      <button className={`wb-seg-btn ${mode === 'structure' ? 'wb-seg-on' : ''}`} onClick={() => setMode('structure')}>
+        structure
+      </button>
+      <button
+        className={`wb-seg-btn ${mode === 'overlap' ? 'wb-seg-on' : ''}`}
+        onClick={() => setMode('overlap')}
+        title="which codes are put on the same passage — merges, and codes doing too much"
+      >
+        overlap
+      </button>
+    </span>
+  );
+
+  if (mode === 'overlap') {
+    return (
+      <div className="wb-layout wb-layout-1">
+        <main className="wb-main">
+          {modeSwitch}
+          <OverlapView data={b.cooccur} onPair={showPair} onCode={showCode} selected={nav.c ?? null} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="wb-layout wb-layout-3">
       <aside className="wb-rail">
@@ -95,6 +139,8 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
             const patch = wb.patch.codes[code.id];
             const folding = patch?.mergedInto;
             const retiring = patch?.status === 'retired';
+            const renaming2 = patch?.renamedTo;
+            const splitting2 = patch?.splitInto ?? [];
             return (
               <li
                 key={code.id}
@@ -109,9 +155,15 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
                   <span className="wb-tnode-line1">
                     <span className="wb-swatch" style={{ ['--hue' as string]: hues[code.id] ?? 0 }} />
                     {code.status === 'candidate' && <span className="wb-cand" title="candidate">◦</span>}
-                    <code className={`wb-tnode-id ${folding || retiring ? 'wb-tnode-going' : ''}`}>{shortId(code)}</code>
+                    <code className={`wb-tnode-id ${folding || retiring || renaming2 ? 'wb-tnode-going' : ''}`}>{shortId(code)}</code>
                     {folding && <span className="wb-tnode-into" title={`staged: merge into ${folding}`}>→ {folding}</span>}
                     {retiring && <span className="wb-tnode-into" title="staged: retire">retiring</span>}
+                    {renaming2 && <span className="wb-tnode-into" title={`staged: rename to ${renaming2}`}>→ {renaming2}</span>}
+                    {splitting2.map((n) => (
+                      <span key={n} className="wb-tnode-into" title={`staged: split ${n} out of this code`}>
+                        ⑂ {n}
+                      </span>
+                    ))}
                     {dupe && !folding && <span className="wb-dupe" title="in a duplicate suspicion">⚠</span>}
                     {!code.reviewed && !folding && <span className="wb-newdot" title="never reviewed" />}
                   </span>
@@ -161,6 +213,7 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
       </aside>
 
       <main className="wb-main">
+        {modeSwitch}
         {other && selected ? (
           <Compare a={selected} b={other} extracts={b.extracts_all} wb={wb} onClose={() => (setCompare(null), setPicked([]))} />
         ) : selected ? (
@@ -221,6 +274,7 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
             dupes={b.dupes}
             wb={wb}
             N={b.N}
+            users={directExtracts}
             onCompare={(id) => setCompare(id)}
             onSplit={() => setSplitting(true)}
             onJumpToTheme={(id) => nav.go({ view: 'themes', th: id })}
@@ -250,6 +304,10 @@ function ExtractList({ title, extracts, nav, hues, wb, empty }: {
 }) {
   const byP = new Map<string, Extract[]>();
   for (const e of extracts) byP.set(e.participant, [...(byP.get(e.participant) ?? []), e]);
+  // Reading a code across participants is exactly when you notice a stray, so the fix belongs
+  // here rather than a trip to the transcript. Taking the last code off an extract is a
+  // different act — that is dropping the extract — so it asks first.
+  const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   return (
     <section className="wb-collate">
       <h3>
@@ -260,26 +318,71 @@ function ExtractList({ title, extracts, nav, hues, wb, empty }: {
         <div key={pid} className="wb-collate-group">
           <h4>{pid}</h4>
           <ul>
-            {rows.map((e) => (
-              <li key={e.id} className={`wb-cl-row ${wb.patch.extracts[e.id]?.dropped ? 'wb-dropped' : ''}`}>
+            {rows.map((raw) => {
+              // The row must show what is staged, not what is stored: a chip removed here has to
+              // keep its place, struck through, or the click leaves no trace in the view it was
+              // made from and the only evidence is a toast that has already gone.
+              const e = withPatch(raw, wb.patch.extracts[raw.id]);
+              const shown = [...new Set([...raw.codes, ...e.codes])];
+              return (
+              <li key={e.id} className={`wb-cl-row ${e.dropped ? 'wb-dropped' : ''}`}>
                 <button className="wb-op-id" title="open this in its transcript" onClick={() => nav.go({ view: 'transcript', t: e.transcript, e: e.id })}>
                   {e.id}
                 </button>
                 <span className="wb-cl-kind" title={e.kind}>
                   {KIND_GLYPH[e.kind]}
                 </span>
-                <span className="wb-cl-text">{e.text}</span>
                 <span className="wb-cl-codes">
-                  {e.codes.map((c) => (
-                    <span key={c} className="wb-mini-token" style={{ ['--hue' as string]: hues[c] ?? 0 }}>
-                      {c}
-                    </span>
-                  ))}
+                  {shown.map((c) => {
+                    const going = !e.codes.includes(c);
+                    const arriving = !raw.codes.includes(c);
+                    return (
+                      <span
+                        key={c}
+                        className={`wb-mini-token ${going ? 'wb-mini-going' : ''} ${arriving ? 'wb-mini-new' : ''}`}
+                        style={{ ['--hue' as string]: hues[c] ?? 0 }}
+                        title={going ? `staged: ${c} comes off ${e.id} — undo it in the pending drawer` : undefined}
+                      >
+                        {c}
+                        {going ? (
+                          <span className="wb-mini-flag">staged</span>
+                        ) : (
+                          <button
+                            className="wb-mini-x"
+                            title={e.codes.length > 1 ? `take ${c} off ${e.id}` : `${c} is the only code on ${e.id}`}
+                            onClick={() =>
+                              e.codes.length > 1
+                                ? wb.stage(draft('recode', e.id, { remove: [c] }))
+                                : setConfirmDrop(e.id)
+                            }
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
                 </span>
+                {confirmDrop === e.id && (
+                  <span className="wb-cl-confirm wb-warn">
+                    that is its only code — drop {e.id}?
+                    <button
+                      className="wb-btn wb-btn-danger wb-tiny"
+                      onClick={() => (wb.stage(draft('drop', e.id, {}, 'last code removed in the codebook review')), setConfirmDrop(null))}
+                    >
+                      drop it
+                    </button>
+                    <button className="wb-btn wb-btn-ghost wb-tiny" onClick={() => setConfirmDrop(null)}>
+                      keep
+                    </button>
+                  </span>
+                )}
                 {e.highlight && <span className="wb-echip-star" title={e.highlight}>★</span>}
                 {e.new && <span className="wb-new">new</span>}
+                <span className="wb-cl-text">{e.text}</span>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
       ))}

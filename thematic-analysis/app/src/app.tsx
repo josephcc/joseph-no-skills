@@ -6,6 +6,7 @@
 // linear document — but the round documents stay, and this links back to them.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { analysisDir, param } from './api';
+import type { Op } from './types';
 import { useWorkbench } from './store';
 import { PendingDrawer } from './pending';
 import { TranscriptView } from './views/transcript';
@@ -15,7 +16,7 @@ import { ThemesView } from './views/themes';
 import { QuotesView } from './views/quotes';
 import { StudyView } from './views/study';
 import { HistoryView } from './views/history';
-import { isThread } from './ops';
+import { isThread, targetKind } from './ops';
 
 export type ViewName = 'transcript' | 'codebook' | 'coverage' | 'themes' | 'quotes' | 'study' | 'history';
 const VIEWS: { key: ViewName; label: string; phase: string }[] = [
@@ -34,6 +35,7 @@ export interface Nav {
   e: string | null;
   c: string | null;
   th: string | null;
+  cmp: string | null;
   go: (patch: Partial<Omit<Nav, 'go'>>) => void;
 }
 
@@ -45,6 +47,9 @@ export function App() {
   const [e, setE] = useState<string | null>(param('e'));
   const [c, setC] = useState<string | null>(param('c'));
   const [th, setTh] = useState<string | null>(param('th'));
+  // The second code of a comparison. It is nav state rather than the codebook's own, so a merge
+  // proposal — or a link in a round document — can open the pane that judges it.
+  const [cmp, setCmp] = useState<string | null>(param('cmp'));
   const [drawer, setDrawer] = useState(false);
 
   const go = useCallback((patch: Partial<Omit<Nav, 'go'>>) => {
@@ -53,8 +58,9 @@ export function App() {
     if (patch.e !== undefined) setE(patch.e);
     if (patch.c !== undefined) setC(patch.c);
     if (patch.th !== undefined) setTh(patch.th);
+    if (patch.cmp !== undefined) setCmp(patch.cmp);
   }, []);
-  const nav: Nav = { view, t, e, c, th, go };
+  const nav: Nav = { view, t, e, c, th, cmp, go };
 
   // Keep the URL a deep link, so a round document can point at a code or an extract
   // and a reload lands in the same place.
@@ -65,8 +71,9 @@ export function App() {
     if (e) q.set('e', e);
     if (c) q.set('c', c);
     if (th) q.set('th', th);
+    if (cmp) q.set('cmp', cmp);
     window.history.replaceState(null, '', `?${q}`);
-  }, [dir, view, t, e, c, th]);
+  }, [dir, view, t, e, c, th, cmp]);
 
   // Default to the transcript with the most new extracts: the review actually waiting.
   useEffect(() => {
@@ -96,6 +103,48 @@ export function App() {
   const coded = b.transcripts.filter((x) => x.coded_with_version != null).length;
   const staleRows = b.stale.stale;
   const recodeNeeded = staleRows.filter((r) => r.severity === 'recode');
+
+  // From a staged operation to the thing it is about. Ops already carry the view they were made
+  // in; what they do not carry is the *key* that view navigates by, nor the transcript an extract
+  // belongs to — so that is looked up here rather than stored on every op.
+  const openOp = (o: Op) => {
+    const args = (o.args ?? {}) as Record<string, unknown>;
+    const target = o.target ?? null;
+    const view = (o.view as ViewName) ?? 'transcript';
+    if (isThread(o)) {
+      // A thread's view is where it was typed, not where its target lives, and an agent reply
+      // has none; the target's id says which card holds the conversation.
+      const root = o.op === 'reply' ? wb.inbox.find((x) => x.id === o.target) ?? o : o;
+      const about = root.target ?? null;
+      const kind = targetKind(about, (wb.bundle?.codes ?? []).map((c) => c.id));
+      if (kind === 'extract') {
+        const ex = wb.bundle?.extracts_all.find((x) => x.id === about);
+        nav.go({ view: 'transcript', t: ex?.transcript ?? null, e: about });
+      } else if (kind === 'theme') nav.go({ view: 'themes', th: about });
+      else if (kind === 'code') nav.go({ view: 'codebook', c: about, cmp: null });
+      else nav.go({ view: 'coverage' });
+      setDrawer(false);
+      return;
+    }
+    if (view === 'transcript') {
+      const ex = wb.bundle?.extracts_all.find((x) => x.id === target);
+      nav.go({ view, t: ex?.transcript ?? (typeof args.transcript === 'string' ? args.transcript : null), e: target });
+    } else if (o.op === 'merge-code' || o.op === 'reparent') {
+      // Judging a fold or a move means seeing both codes and what each one holds, which is the
+      // compare pane — landing on the source alone shows half the question.
+      const other = typeof args.into === 'string' ? args.into : typeof args.parent === 'string' ? args.parent : null;
+      nav.go({ view: 'codebook', c: target, cmp: other });
+    } else if (view === 'codebook') {
+      nav.go({ view, c: target ?? (typeof args.code === 'string' ? args.code : null), cmp: null });
+    } else if (view === 'themes' || view === 'quotes') {
+      nav.go({ view, th: target });
+    } else if (view === 'coverage') {
+      nav.go({ view, c: typeof args.code === 'string' ? args.code : null });
+    } else {
+      nav.go({ view });
+    }
+    setDrawer(false);
+  };
 
   return (
     <div className="wb-app">
@@ -155,7 +204,16 @@ export function App() {
       {view === 'study' && <StudyView wb={wb} />}
       {view === 'history' && <HistoryView wb={wb} />}
 
-      {drawer && <PendingDrawer ops={wb.pending} onUndo={wb.undo} onClose={() => setDrawer(false)} applyHint={applyHint} />}
+      {drawer && (
+        <PendingDrawer
+          ops={wb.pending}
+          onUndo={wb.undo}
+          onOpen={openOp}
+          onResolve={(id) => wb.thread(id, 'resolved')}
+          onClose={() => setDrawer(false)}
+          applyHint={applyHint}
+        />
+      )}
     </div>
   );
 }

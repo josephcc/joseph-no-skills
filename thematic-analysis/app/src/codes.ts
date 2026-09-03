@@ -58,8 +58,10 @@ export interface Health {
 }
 
 /** The cleanup review as a strip of filters: each number is a question about the codebook. */
-export function health(bundle: Bundle): Health[] {
-  const live = liveCodes(bundle.codes);
+export function health(bundle: Bundle, codes?: Code[]): Health[] {
+  // Optional `codes` lets the caller pass the overlay-patched codebook, so a staged review or
+  // merge moves these counters instead of leaving them describing the file on disk.
+  const live = liveCodes(codes ?? bundle.codes);
   const tops = live.filter((c) => !c.parent);
   const childless = tops.filter((c) => !live.some((k) => k.parent === c.id));
   const parentHeavy = tops.filter((c) => {

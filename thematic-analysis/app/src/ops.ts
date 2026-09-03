@@ -97,6 +97,18 @@ export function describe(o: Pick<Op, 'op' | 'target' | 'args' | 'note'>): string
 
 export const isThread = (o: Pick<Op, 'op'>) => o.op === 'comment' || o.op === 'reply';
 
+/** Where a thread's target lives, read from the shape of its id and the codebook. A thread
+ *  carries no view worth trusting (an agent's reply is staged with view `any`), so the drawer
+ *  works it out from the target instead: an extract, a theme, a code, or nothing navigable. */
+export type TargetKind = 'extract' | 'theme' | 'code' | 'none';
+export function targetKind(target: string | null | undefined, codeIds: Iterable<string>): TargetKind {
+  if (!target || target === 'any' || target === 'none') return 'none';
+  if (/^E-\d+$/.test(target)) return 'extract';
+  if (/^TH\d+$/.test(target)) return 'theme';
+  for (const id of codeIds) if (id === target) return 'code';
+  return 'none';
+}
+
 /** Worth showing in the drawer: not yet applied, refused, or stalled by a run that died.
  *  `applying` is excluded — the agent is mid-pass on it. */
 export const isPending = (o: Op) =>

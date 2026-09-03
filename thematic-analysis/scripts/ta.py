@@ -730,10 +730,44 @@ def cmd_extract(an: Analysis, args) -> int:
     return 0
 
 
+def stage_instead_of_editing(an: Analysis, ex: dict, op: dict) -> bool:
+    """A reviewed extract is the researcher's verified word, and the agent's own hand does not
+    change it. When the CLI would edit one, the change is staged as a `by: agent` proposal for
+    the researcher to accept or reject in the workbench instead. `--force` is the override,
+    for when the researcher asked for the edit in so many words; it drops the stamp so the
+    change comes back as new in their next pass rather than wearing their verification."""
+    if not ex.get("reviewed"):
+        return False
+    staged = append_inbox(an, {
+        "op": op["op"], "target": ex["id"], "args": op.get("args") or {},
+        "note": op.get("note") or f"{ex['id']} is stamped reviewed; staged instead of edited",
+        "by": "agent", "view": (OP_SPECS.get(str(op["op"])) or {}).get("view", "transcript"), "status": "pending"})
+    print(f"{ex['id']} is stamped reviewed by the researcher; staged {staged['id']} ({op_one_line(an, staged)}) "
+          f"instead of editing it. --force edits directly and drops the stamp.")
+    return True
+
+
 def cmd_recode(an: Analysis, args) -> int:
     ex = an.extract(args.extract_id)
     if ex is None:
         raise SystemExit(f"no extract {args.extract_id}")
+    if ex.get("reviewed") and not getattr(args, "force", False):
+        def lst(v):
+            return [c.strip() for c in v.split(",") if c.strip()]
+        ops = []
+        rec = {k: lst(v) for k, v in (("set", args.set), ("add", args.add), ("remove", args.remove)) if v}
+        if rec:
+            ops.append({"op": "recode", "args": rec})
+        if args.kind:
+            ops.append({"op": "set-kind", "args": {"kind": args.kind}})
+        if args.note is not None:
+            ops.append({"op": "set-note", "args": {"note": args.note}})
+        if args.highlight is not None:
+            clear = args.highlight.strip().lower() in ("", "no", "none", "false", "off")
+            ops.append({"op": "highlight", "args": {} if clear else {"reason": args.highlight}})
+        for op in ops:
+            stage_instead_of_editing(an, ex, op)
+        return 0
     codes = set(ex.get("codes", []))
     def check(cs):
         for c in cs:
@@ -758,6 +792,8 @@ def cmd_recode(an: Analysis, args) -> int:
             ex.pop("highlight", None)
         else:
             ex["highlight"] = args.highlight
+    if ex.pop("reviewed", None) is not None:
+        ex["updated"] = dt.datetime.now().isoformat(timespec="seconds")
     an.save_extracts()
     hl = f"  highlight: {ex['highlight']}" if ex.get("highlight") else ""
     print(f"{ex['id']}: codes -> {', '.join(ex['codes']) or '(none)'}  kind={ex['kind']}{hl}")
@@ -765,18 +801,29 @@ def cmd_recode(an: Analysis, args) -> int:
 
 
 def cmd_drop(an: Analysis, args) -> int:
+    ids = list(args.extract_ids)
+    if not getattr(args, "force", False):
+        kept = []
+        for eid in ids:
+            ex = an.extract(eid)
+            if ex is not None and stage_instead_of_editing(an, ex, {"op": "drop", "args": {}}):
+                continue
+            kept.append(eid)
+        ids = kept
+        if not ids:
+            return 0
     before = len(an.extracts)
-    an._extracts = [e for e in an.extracts if e.get("id") not in set(args.extract_ids)]
+    an._extracts = [e for e in an.extracts if e.get("id") not in set(ids)]
     gone = before - len(an.extracts)
     an.save_extracts()
     for th in an.themes["themes"]:
         for key in ("selected_extracts", "tensions"):
             if th.get(key):
-                th[key] = [x for x in th[key] if x not in set(args.extract_ids)]
+                th[key] = [x for x in th[key] if x not in set(ids)]
     an.save_themes()
     for c in an.codebook["codes"]:
         if c.get("examples"):
-            c["examples"] = [x for x in c["examples"] if x not in set(args.extract_ids)]
+            c["examples"] = [x for x in c["examples"] if x not in set(ids)]
     an.save_codebook()
     print(f"drop: removed {gone} extract(s). Note why in memos.md.")
     return 0
@@ -1094,6 +1141,162 @@ def find_dupes(an: Analysis, name_threshold: float = 0.5, overlap_threshold: flo
             if da and da == db:
                 notes.append(f"identical definitions: `{a['id']}` and `{b['id']}`")
     return notes
+
+
+def cooccur_json(an: Analysis, split_min: int = 8, facet_min: int = 3) -> dict:
+    """Which codes land on the same extract, and what the pattern suggests doing about it.
+
+    Two cleanup questions, one computation. A pair applied to nearly the same extracts is
+    either one code wearing two names (merge) or one code that is a special case of the other
+    (make it a child) — and it is the *asymmetry* that tells them apart, not the raw overlap:
+    twins overlap both ways, a special case only one way. Separately, a big code whose extracts
+    split cleanly by *what else* those extracts carry has a fault line running through it, which
+    is the case for giving it children.
+
+    Codes are counted as tagged, not rolled up into families: the question is which labels a
+    human put on the same passage.
+    """
+    codes = an.live_codes()
+    by_id = {c["id"]: c for c in codes}
+    ex_by_code: dict[str, set[str]] = defaultdict(set)
+    co_of_extract: dict[str, set[str]] = {}
+    for e in an.extracts:
+        ids = {an.resolve_code(c) for c in e.get("codes", [])}
+        ids = {c for c in ids if c in by_id}
+        co_of_extract[e["id"]] = ids
+        for c in ids:
+            ex_by_code[c].add(e["id"])
+
+    parts_by_code: dict[str, set[str]] = defaultdict(set)
+    for e in an.extracts:
+        for c in {an.resolve_code(x) for x in e.get("codes", [])}:
+            if c in by_id:
+                parts_by_code[c].add(e.get("participant", ""))
+
+    def related(a: dict, b: dict) -> str | None:
+        if a.get("parent") == b["id"] or b.get("parent") == a["id"]:
+            return "parent-child"
+        if a.get("parent") and a.get("parent") == b.get("parent"):
+            return "siblings"
+        return None
+
+    pairs, merges = [], []
+    for i, a in enumerate(codes):
+        for b in codes[i + 1:]:
+            ea, eb = ex_by_code.get(a["id"], set()), ex_by_code.get(b["id"], set())
+            both = ea & eb
+            if not both:
+                continue
+            rel = related(a, b)
+            union = len(ea | eb)
+            row = {
+                "a": a["id"], "b": b["id"], "both": len(both),
+                "a_total": len(ea), "b_total": len(eb),
+                "jaccard": round(len(both) / union, 3) if union else 0.0,
+                # read as: when `a` is applied, how often `b` is too
+                "b_given_a": round(len(both) / len(ea), 3) if ea else 0.0,
+                "a_given_b": round(len(both) / len(eb), 3) if eb else 0.0,
+                "related": rel,
+            }
+            pairs.append(row)
+            # A parent and its child sharing extracts is the convention working, not a finding.
+            if rel == "parent-child" or min(len(ea), len(eb)) < facet_min:
+                continue
+            hi, lo = max(row["b_given_a"], row["a_given_b"]), min(row["b_given_a"], row["a_given_b"])
+            inner = a["id"] if row["b_given_a"] >= row["a_given_b"] else b["id"]
+            outer = b["id"] if inner == a["id"] else a["id"]
+            if row["jaccard"] >= 0.5:
+                merges.append({**row, "kind": "twins", "suggest": "merge",
+                               "why": f"applied to nearly the same extracts ({row['jaccard']:.0%} of their union) — one code under two names?"})
+            elif hi >= 0.75 and lo <= 0.5:
+                merges.append({**row, "kind": "nested", "suggest": "child", "inner": inner, "outer": outer,
+                               "why": f"{hi:.0%} of `{inner}` also carries `{outer}`, but only {lo:.0%} the other way — a special case rather than a twin?"})
+            elif row["jaccard"] >= 0.3:
+                merges.append({**row, "kind": "overlap", "suggest": "look",
+                               "why": f"{len(both)} shared extracts ({row['jaccard']:.0%} of their union) — co-occurring by design, or blurred criteria?"})
+    pairs.sort(key=lambda r: (-r["both"], -r["jaccard"]))
+    merges.sort(key=lambda r: -r["jaccard"])
+
+    splits = []
+    for c in codes:
+        mine = ex_by_code.get(c["id"], set())
+        if len(mine) < split_min:
+            continue
+        kids = [k for k in codes if k.get("parent") == c["id"]]
+        facet_n: Counter = Counter()
+        for eid in mine:
+            for other in co_of_extract[eid] - {c["id"]}:
+                if by_id[other].get("parent") == c["id"]:
+                    continue  # its own child is the split already made
+                facet_n[other] += 1
+        facets = [{"with": k, "n": v, "share": round(v / len(mine), 3)} for k, v in facet_n.most_common() if v >= facet_min]
+        # How cleanly do the facets carve it up? An extract that lands in exactly one facet is a
+        # clean cut; one in several is a blur; one in none is residue the split would not explain.
+        top = {f["with"] for f in facets[:4]}
+        uniq = sum(1 for eid in mine if len((co_of_extract[eid] - {c["id"]}) & top) == 1)
+        multi = sum(1 for eid in mine if len((co_of_extract[eid] - {c["id"]}) & top) > 1)
+        alone = sum(1 for eid in mine if not (co_of_extract[eid] - {c["id"]}))
+        kinds = Counter((an.extract(eid) or {}).get("kind", "said") for eid in mine)
+        splits.append({
+            "code": c["id"], "name": c.get("name", ""), "parent": c.get("parent"),
+            "extracts": len(mine), "participants": len(parts_by_code.get(c["id"], set())),
+            "children": len(kids),
+            "facets": facets[:6],
+            "clean": round(uniq / len(mine), 3), "blurred": multi,
+            "residue": len(mine) - uniq - multi,
+            # Extracts carrying no other code at all: the co-code signal is blind to these, and a
+            # lump made of them is exactly the lump most in need of reading. Say so rather than
+            # ranking it last for having no evidence.
+            "alone": alone,
+            "kinds": {"said": kinds.get("said", 0), "did": kinds.get("did", 0), "intent": kinds.get("intent", 0)},
+            # Codes go at most two levels deep, so a child cannot take children of its own.
+            "needs_promotion": bool(c.get("parent")),
+        })
+    # Size is the question ("is this code doing too much?"); the facets are evidence when they
+    # exist. Ranking by evidence buries the biggest undifferentiated codes, which is backwards.
+    splits.sort(key=lambda r: (-(r["extracts"] * (0.6 if r["children"] else 1.0)), -r["clean"]))
+
+    return {
+        "generated": dt.datetime.now().isoformat(timespec="seconds"),
+        "codes": [{"id": c["id"], "name": c.get("name", ""), "parent": c.get("parent"),
+                   "extracts": len(ex_by_code.get(c["id"], set())),
+                   "participants": len(parts_by_code.get(c["id"], set()))} for c in codes],
+        "pairs": pairs,
+        "merges": merges,
+        "splits": splits,
+    }
+
+
+def cmd_cooccur(an: Analysis, args) -> int:
+    data = cooccur_json(an, split_min=args.split_min)
+    if getattr(args, "json", False):
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=json_safe))
+        return 0
+    print(f"# Code overlap ({data['generated'][:10]})\n")
+    print(f"{len(data['codes'])} live code(s), {len(data['pairs'])} pair(s) sharing at least one extract.\n")
+    print("## Pairs worth a decision\n")
+    if not data["merges"]:
+        print("- none: no two codes overlap enough to question.\n")
+    for m in data["merges"][:20]:
+        verb = {"merge": "MERGE?", "child": "CHILD?", "look": "look"}[m["suggest"]]
+        print(f"- [{verb}] `{m['a']}` ({m['a_total']}) x `{m['b']}` ({m['b_total']}): {m['both']} shared. {m['why']}")
+    print("\n## Codes with a fault line in them\n")
+    if not data["splits"]:
+        print(f"- none: no code carries {args.split_min}+ extracts.\n")
+    for s in data["splits"][:12]:
+        note = " (a child already; splitting means siblings or promotion)" if s["needs_promotion"] else ""
+        kids = f", {s['children']} child(ren) already" if s["children"] else ""
+        k = s["kinds"]
+        print(f"- `{s['code']}` {s['extracts']} extracts / {s['participants']} participants{kids}{note}")
+        print(f"  said {k['said']} · did {k['did']} · intent {k['intent']}")
+        if s["facets"]:
+            print(f"  {s['clean']:.0%} of them sit in exactly one of its top facets; {s['blurred']} in several, {s['residue']} in none.")
+            for f in s["facets"][:4]:
+                print(f"    - {f['n']:2d} also carry `{f['with']}` ({f['share']:.0%})")
+        if s["alone"]:
+            print(f"  {s['alone']} of its extracts carry no other code, so overlap says nothing about them: read them.")
+    print("\nThese are prompts for judgement, not verdicts: two codes may co-occur because the study\nasked about both, and a big code may be big because the thing is big.")
+    return 0
 
 
 def cmd_dupes(an: Analysis, args) -> int:
@@ -2028,6 +2231,7 @@ def bundle_json(an: Analysis) -> dict:
         **cov,
         "root": str(an.root.resolve()),
         "dupes": dupes_json(an)["suspicions"],
+        "cooccur": cooccur_json(an),
         "stale": stale_json(an),
         "extracts_all": [extract_public(an, e) for e in an.extracts],
         "changelog": an.codebook.get("changelog") or [],
@@ -3527,9 +3731,13 @@ def run_op_now(an: Analysis, op: dict, quiet: bool = False) -> int:
 
 
 def cmd_retrim(an: Analysis, args) -> int:
-    return run_op_now(an, {"op": "retrim", "target": args.extract_id,
-                           "args": {k: v for k, v in (("from", args.frm), ("to", args.to),
-                                                      ("start", args.start), ("end", args.end)) if v is not None}})
+    op = {"op": "retrim", "target": args.extract_id,
+          "args": {k: v for k, v in (("from", args.frm), ("to", args.to),
+                                     ("start", args.start), ("end", args.end)) if v is not None}}
+    ex = an.extract(args.extract_id)
+    if ex is not None and not getattr(args, "force", False) and stage_instead_of_editing(an, ex, op):
+        return 0
+    return run_op_now(an, op)
 
 
 def cmd_mark_reviewed(an: Analysis, args) -> int:
@@ -3788,10 +3996,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("extract_id")
     p.add_argument("--set"); p.add_argument("--add"); p.add_argument("--remove"); p.add_argument("--kind"); p.add_argument("--note")
     p.add_argument("--highlight", help="flag as a paper-worthy quote, with the reason (\"no\" clears the flag)")
+    p.add_argument("--force", action="store_true", help="edit a reviewed extract directly instead of staging a proposal (drops its stamp)")
     p.set_defaults(fn=cmd_recode)
 
     p = sub.add_parser("drop", help="delete extracts (and dereference them from themes/examples)")
     p.add_argument("extract_ids", nargs="+")
+    p.add_argument("--force", action="store_true", help="drop a reviewed extract directly instead of staging a proposal")
     p.set_defaults(fn=cmd_drop)
 
     p = sub.add_parser("verify-quotes", help="every quote in a markdown file (review plan, paper draft) is verbatim and attributed correctly")
@@ -3806,6 +4016,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dupes", help="codes that may be the same code under two names")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_dupes)
+
+    p = sub.add_parser("cooccur", help="which codes are tagged on the same extracts: merge candidates, and codes with a fault line")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--split-min", type=int, default=8, help="how many extracts before a code is examined for a split (default 8)")
+    p.set_defaults(fn=cmd_cooccur)
 
     p = sub.add_parser("stale", help="transcripts not coded with the current codebook version")
     p.add_argument("--json", action="store_true")
@@ -3885,6 +4100,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--from", dest="frm"); p.add_argument("--to")
     p.add_argument("--start", type=int, help="character offset into the normalised turn text")
     p.add_argument("--end", type=int)
+    p.add_argument("--force", action="store_true", help="re-cut a reviewed extract directly instead of staging a proposal")
     p.set_defaults(fn=cmd_retrim)
 
     p = sub.add_parser("mark-reviewed", help="stamp extracts/codes/themes as reviewed at this codebook version")

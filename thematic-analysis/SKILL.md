@@ -275,6 +275,15 @@ holds everything (that is one code, not a family). The Compare pane puts two cod
 with their extracts in three columns (only A, both, only B), which is the surface for every `dupes`
 flag. Stage each merge as a proposal with the extracts that would move, and let the user decide.
 
+The Codebook view's **overlap** tab (`ta.py cooccur`) is the cross-tab behind that checklist: codes
+x codes, each cell the extracts carrying both. Read it two ways. A hot cell off the diagonal is a
+pair to judge, and the *asymmetry* says which kind: overlapping both ways is one code under two
+names (merge), while "90% of B also carries A, but only 30% of A carries B" is a special case
+(make B a child, do not merge). A big code whose extracts split cleanly by what else they carry has
+a fault line in it, and the facets name the children it wants. Its blind spot is worth stating to
+the user rather than hiding: a code whose extracts carry nothing else is invisible to this — the
+command says how many of them there are, and those have to be read.
+
 Do a **code-consistency review** in the same pass: pick a code and read every extract under it,
 grouped by participant, with the definition on top (the Codebook view's detail pane, or
 `ta.py collate <code>`). That read is the check on whether the definition was applied the same way
@@ -444,9 +453,12 @@ of two coding policies to adopt — goes in the round document, where it can be 
 ask a question whose answer you would then have to parse back into a command.
 
 **Silence is acceptance, and the record still has to be complete.** An extract the user scrolls
-past is accepted; "Done with T-07" stamps everything they left alone as reviewed. So an extract
-*you* change later drops its stamp and comes back as new in the next pass, and one *they* changed
-counts as reviewed. Never stamp on their behalf outside that button.
+past is accepted; "Done with T-07" stamps everything they left alone as reviewed. **A reviewed
+extract is locked against your own hand:** `recode`, `retrim` and `drop` on one stage a `by: agent`
+proposal in the inbox instead of editing, so the change waits for their click beside the extract.
+`--force` overrides that, only when they asked for the edit in so many words; it drops the stamp so
+the change comes back as new in their next pass rather than wearing their verification. An extract
+*they* changed counts as reviewed. Never stamp on their behalf outside that button.
 
 **Audit before handback, every time.** `validate`, `verify`, and `coverage` at the end of any
 pass; `verify-quotes` on any document that contains quotes. Paste the summary lines. If a check
@@ -465,7 +477,7 @@ time. It is also what makes a second session, or a co-author, able to pick the a
 ta.py init --study NAME --transcripts FILES...   # roster + empty files; then edit study.yaml
 ta.py extract T-01 42 --codes a,b --kind said    # one extract; or --batch file.jsonl
 ta.py extract T-01 42-43 --codes a --from "the biggest thing" --to "whole prompt."
-ta.py recode E-0041 --add trust --remove control --kind did
+ta.py recode E-0041 --add trust --remove control --kind did   # on a reviewed extract: stages a proposal; --force edits
 ta.py retrim E-0041 --from "being able" --to "that step."    # re-cut the span, same id, still verbatim
 ta.py drop E-0041 E-0042                         # and say why in memos.md
 ta.py mark-coded T-01                            # transcript fully coded with the current codebook

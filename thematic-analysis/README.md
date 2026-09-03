@@ -127,6 +127,14 @@ the same way under different names, then proposes the merges *with the extracts 
 The Codebook view's health strip counts those shapes for you, and **compare** puts any two codes
 side by side with the extracts each one holds.
 
+Its **overlap** tab is the same question asked across the whole codebook at once: a cross-tab of
+codes x codes where each cell is the extracts carrying both. Two codes that always travel together
+are one code under two names; a code that appears whenever another does, but not the reverse, is a
+special case of it and wants to be its child; and a big code whose extracts split cleanly by what
+else they carry is a code doing too much. The tab ranks both readings above the matrix, and tells
+you when it cannot see — a code whose extracts carry no other code is invisible to overlap, and
+those you have to read.
+
 ![The Codebook view: the tree of codes with prevalence bars and one staged merge struck through, the compare pane holding two definitions and their exclude clauses above three columns of extracts — only A, both, only B — and the inspector for the code under decision](docs/codebook-compare.png)
 
 ### B. Freeze the codebook and code everything

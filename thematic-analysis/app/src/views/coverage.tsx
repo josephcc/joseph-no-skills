@@ -89,6 +89,13 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                     const cellData = b.cells[c.id]?.[p];
                     const n = cellData?.extracts.length ?? 0;
                     const kinds = cellData?.kinds;
+                    // A staged re-read is the one gesture this view makes, so the cell it was
+                    // made on has to keep a mark. Requests name a transcript; a participant's
+                    // transcripts stand in for them here.
+                    const asked = wb.patch.rereads.some((o) => {
+                      const ar = (o.args ?? {}) as Record<string, unknown>;
+                      return ar.code === c.id && transcriptsOf(p).includes(String(ar.transcript ?? ''));
+                    });
                     return (
                       <td
                         key={p}
@@ -96,11 +103,13 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                           (cell?.code === c.id && cell?.participant === p) || (ask?.code === c.id && ask?.participant === p)
                             ? 'wb-heat-on'
                             : ''
-                        }`}
+                        } ${asked ? 'wb-heat-asked' : ''}`}
                         title={
                           n
                             ? `${p} · ${c.id}: ${n} extract(s)${kinds ? ` (said ${kinds.said}, did ${kinds.did}, intent ${kinds.intent})` : ''}`
-                            : `${p} has nothing under ${c.id} — click to ask for a re-read`
+                            : asked
+                              ? `re-read of ${c.id} for ${p} is staged`
+                              : `${p} has nothing under ${c.id} — click to ask for a re-read`
                         }
                         onClick={() => {
                           // One cell is selected at a time: opening either panel closes the other,
@@ -122,6 +131,8 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                               {kinds ? KIND_GLYPH.said.repeat(Math.min(3, kinds.said)) + KIND_GLYPH.did.repeat(Math.min(3, kinds.did)) + KIND_GLYPH.intent.repeat(Math.min(3, kinds.intent)) : ''}
                             </span>
                           </>
+                        ) : asked ? (
+                          <span className="wb-heat-ask-mark" title="re-read staged">⟲</span>
                         ) : (
                           '·'
                         )}

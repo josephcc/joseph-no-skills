@@ -142,6 +142,73 @@ def test_dupes_flags_overlapping_names_and_extract_sets(study: ta.Analysis):
     assert any("extracts overlap" in n for n in notes)
 
 
+def _add_code(an, cid, parent=None):
+    an.codebook["codes"].append({"id": cid, "name": cid, "status": "candidate", "definition": "d", "parent": parent})
+    an.save_codebook()
+
+
+def test_cooccur_counts_shared_extracts_and_both_conditionals(study: ta.Analysis):
+    an = study
+    _add_code(an, "twin")
+    run(study, "extract", "T-01", "9", "--codes", "control,twin")
+    run(study, "extract", "T-01", "13", "--codes", "control,twin")
+    run(study, "extract", "T-02", "7", "--codes", "control")
+    data = ta.cooccur_json(ta.Analysis(an.root))
+    pair = next(p for p in data["pairs"] if {p["a"], p["b"]} == {"control", "twin"})
+    assert pair["both"] == 2
+    # asymmetric on purpose: every `twin` extract carries control, but not the reverse
+    given = {(pair["a"], pair["b_given_a"]), (pair["b"], pair["a_given_b"])}
+    assert (("twin", 1.0) in given) or (("control", 1.0) in given)
+    assert pair["jaccard"] == round(2 / 3, 3)
+
+
+def test_cooccur_calls_a_two_way_overlap_twins_and_a_one_way_one_nested(study: ta.Analysis):
+    an = study
+    for cid in ("twin-a", "twin-b", "special-case"):
+        _add_code(an, cid)
+    # P1's turns carry the twins; P2's carry the special case; `control` carries all of them
+    for line in ("9", "13", "15"):
+        run(study, "extract", "T-01", line, "--codes", "control,twin-a,twin-b")
+    run(study, "extract", "T-01", "19", "--codes", "control")
+    for line in ("7", "9", "13"):
+        run(study, "extract", "T-02", line, "--codes", "control,special-case")
+    data = ta.cooccur_json(ta.Analysis(an.root))
+    by = {frozenset((m["a"], m["b"])): m for m in data["merges"]}
+    # identical extract sets, both ways -> one code under two names
+    assert by[frozenset(("twin-a", "twin-b"))]["suggest"] == "merge"
+    # every special-case extract carries control, but only 3 of control's 7 carry special-case
+    nested = by[frozenset(("control", "special-case"))]
+    assert nested["suggest"] == "child" and nested["inner"] == "special-case"
+
+
+def test_cooccur_leaves_a_parent_and_its_child_out_of_the_merge_list(study: ta.Analysis):
+    an = study
+    _add_code(an, "control.rerun2", parent="control")
+    for line in ("9", "13", "15"):
+        run(study, "extract", "T-01", line, "--codes", "control,control.rerun2")
+    data = ta.cooccur_json(ta.Analysis(an.root))
+    assert not any({m["a"], m["b"]} == {"control", "control.rerun2"} for m in data["merges"])
+    pair = next(p for p in data["pairs"] if {p["a"], p["b"]} == {"control", "control.rerun2"})
+    assert pair["related"] == "parent-child"
+
+
+def test_cooccur_ranks_a_big_undifferentiated_code_above_a_small_clean_one(study: ta.Analysis):
+    """The lump whose extracts carry nothing else is the one most in need of reading, so it must
+    not rank last for having no evidence — that was the first version's bug."""
+    an = study
+    for cid in ("lump", "smaller", "facet"):
+        _add_code(an, cid)
+    for line in ("9", "13", "15", "19"):  # 4 extracts, none carrying another code
+        run(study, "extract", "T-01", line, "--codes", "lump")
+    for line in ("7", "9", "13"):  # 3 extracts, every one cleanly co-coded
+        run(study, "extract", "T-02", line, "--codes", "smaller,facet")
+    data = ta.cooccur_json(ta.Analysis(an.root), split_min=3, facet_min=2)
+    order = [s["code"] for s in data["splits"]]
+    assert order.index("lump") < order.index("smaller")
+    lump = next(s for s in data["splits"] if s["code"] == "lump")
+    assert lump["alone"] == 4 and lump["facets"] == [] and lump["children"] == 0
+
+
 def test_merge_code_recodes_extracts_and_bumps_version(study: ta.Analysis):
     an = study
     an.codebook["codes"].append({"id": "agent-control", "name": "Control over the agent", "status": "candidate", "definition": "d", "parent": None})
@@ -1046,3 +1113,50 @@ def test_a_hand_written_yaml_date_does_not_break_the_payloads(study: ta.Analysis
     assert payload["codes"][0]["added"]["date"] == "2026-09-01"
     for argv in (["bundle"], ["transcript", "T-01", "--json"], ["coverage", "--json"], ["collate", "control", "--json"]):
         assert ta.main(["-d", str(study.root), *argv]) == 0
+
+
+# --- the reviewed stamp is a lock against the agent's own hand -------------------------
+
+def test_recode_on_a_reviewed_extract_stages_a_proposal_instead(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    eid = ta.Analysis(study.root).extracts[0]["id"]
+    run(study, "mark-reviewed", "--extracts", eid)
+    assert ta.Analysis(study.root).extract(eid).get("reviewed")
+    assert run(study, "recode", eid, "--add", "trust", "--kind", "did") == 0
+    an = ta.Analysis(study.root)
+    assert an.extract(eid)["codes"] == ["control"] and an.extract(eid)["kind"] == "said"
+    assert an.extract(eid).get("reviewed"), "the researcher's stamp survives"
+    staged = [o for o in ta.read_inbox(an) if o["target"] == eid and o["by"] == "agent" and o["status"] == "pending"]
+    assert {o["op"] for o in staged} == {"recode", "set-kind"}
+    assert next(o for o in staged if o["op"] == "recode")["args"] == {"add": ["trust"]}
+    # --force is the deliberate override: it edits, and the stamp comes off so the change resurfaces
+    assert run(study, "recode", eid, "--add", "trust", "--force") == 0
+    an = ta.Analysis(study.root)
+    assert an.extract(eid)["codes"] == ["control", "trust"]
+    assert not an.extract(eid).get("reviewed") and an.extract(eid).get("updated")
+
+
+def test_drop_on_a_reviewed_extract_stages_a_proposal_instead(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "extract", "T-01", "13", "--codes", "control.rerun", "--kind", "did")
+    e1, e2 = [e["id"] for e in ta.Analysis(study.root).extracts]
+    run(study, "mark-reviewed", "--extracts", e1)
+    assert run(study, "drop", e1, e2) == 0
+    an = ta.Analysis(study.root)
+    assert [e["id"] for e in an.extracts] == [e1], "the reviewed extract stays, the other is dropped"
+    assert any(o["op"] == "drop" and o["target"] == e1 and o["by"] == "agent" for o in ta.read_inbox(an))
+    assert run(study, "drop", e1, "--force") == 0
+    assert ta.Analysis(study.root).extracts == []
+
+
+def test_retrim_on_a_reviewed_extract_stages_a_proposal_instead(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    an = ta.Analysis(study.root)
+    eid, before = an.extracts[0]["id"], an.extracts[0]["text"]
+    run(study, "mark-reviewed", "--extracts", eid)
+    assert run(study, "retrim", eid, "--from", "the biggest thing", "--to", "whole prompt.") == 0
+    an = ta.Analysis(study.root)
+    assert an.extract(eid)["text"] == before
+    assert any(o["op"] == "retrim" and o["target"] == eid and o["by"] == "agent" and o["args"] == {"from": "the biggest thing", "to": "whole prompt."} for o in ta.read_inbox(an))
+    assert run(study, "retrim", eid, "--from", "the biggest thing", "--to", "whole prompt.", "--force") == 0
+    assert ta.Analysis(study.root).extract(eid)["text"].startswith("the biggest thing")

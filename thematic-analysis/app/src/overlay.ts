@@ -31,10 +31,12 @@ export interface CodePatch {
   mergedInto?: string;
   renamedTo?: string;
   splitInto?: string[];
+  reviewed?: boolean;
   ops: Op[];
 }
 
 export interface ThemePatch {
+  reviewed?: boolean;
   name?: string;
   essence?: string;
   story?: string;
@@ -59,6 +61,12 @@ export interface Patch {
   newCodes: Op[];
   newThemes: Op[];
   rereads: Op[];
+  study: {
+    participants: Record<string, { id?: string; role?: string; group?: string; speakers?: string[]; notes?: string; ops: Op[] }>;
+    transcripts: Record<string, { participants?: string[]; ops: Op[] }>;
+    stance: Record<string, string>;
+    stanceOps: Op[];
+  };
   countsWillChange: boolean;
 }
 
@@ -66,7 +74,7 @@ const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
 export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
-  const patch: Patch = { extracts: {}, codes: {}, themes: {}, newExtracts: [], newCodes: [], newThemes: [], rereads: [], countsWillChange: false };
+  const patch: Patch = { extracts: {}, codes: {}, themes: {}, newExtracts: [], newCodes: [], newThemes: [], rereads: [], study: { participants: {}, transcripts: {}, stance: {}, stanceOps: [] }, countsWillChange: false };
   const byId = new Map(extracts.map((e) => [e.id, e]));
   const ex = (id: string): ExtractPatch => (patch.extracts[id] ??= { ops: [] });
   const co = (id: string): CodePatch => (patch.codes[id] ??= { ops: [] });
@@ -134,10 +142,15 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
         patch.countsWillChange = true;
         break;
       case 'mark-reviewed': {
+        // "Done with this round" stamps whole lists of codes and themes, not just extracts, and
+        // the badge that says NEVER REVIEWED has to move when it does — otherwise the only
+        // evidence the click landed is a toast that is already gone.
         for (const id of arr(a.extracts)) ex(id).reviewed = true;
         if (a.transcript) {
           for (const e of extracts) if (e.transcript === a.transcript) ex(e.id).reviewed = true;
         }
+        for (const id of arr(a.codes)) co(id).reviewed = true;
+        for (const id of arr(a.themes)) th(id).reviewed = true;
         break;
       }
       case 'code-status': {
@@ -237,6 +250,31 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
       case 'reread-request':
         patch.rereads.push(o);
         break;
+      // The Study view edits the roster and the stance. These were never collected, so its
+      // fields snapped back to the stored value the moment they lost focus and the only sign
+      // the edit existed was a toast.
+      case 'set-participant': {
+        const cur = patch.study.participants[t] ?? (patch.study.participants[t] = { ops: [] });
+        if (a.id !== undefined) cur.id = str(a.id);
+        if (a.role !== undefined) cur.role = str(a.role);
+        if (a.group !== undefined) cur.group = str(a.group);
+        if (a.speakers !== undefined) cur.speakers = arr(a.speakers);
+        if (a.notes !== undefined) cur.notes = str(a.notes);
+        cur.ops.push(o);
+        break;
+      }
+      case 'set-transcript': {
+        const cur = patch.study.transcripts[t] ?? (patch.study.transcripts[t] = { ops: [] });
+        if (a.participants !== undefined) cur.participants = arr(a.participants);
+        cur.ops.push(o);
+        break;
+      }
+      case 'set-stance': {
+        const field = str(a.field);
+        if (field) patch.study.stance[field] = str(a.value) ?? '';
+        patch.study.stanceOps.push(o);
+        break;
+      }
       default:
         break;
     }
@@ -249,6 +287,10 @@ export function withPatch(e: Extract, p?: ExtractPatch): Extract & { pending: bo
   if (!p) return { ...e, pending: false, dropped: false };
   return {
     ...e,
+    // A reviewed extract is by definition no longer new to the researcher, so the NEW badge and
+    // the "new only" filter follow the stamp rather than lagging a pass behind it.
+    new: p.reviewed ? false : e.new,
+    reviewed: p.reviewed ? { at: 'staged', version: 0 } as unknown as Extract['reviewed'] : e.reviewed,
     codes: p.codes ?? e.codes,
     kind: (p.kind as Extract['kind']) ?? e.kind,
     context: p.context !== undefined ? p.context : e.context,
@@ -263,6 +305,7 @@ export function codeWithPatch(c: Code, p?: CodePatch): Code & { pending: boolean
   if (!p) return { ...c, pending: false };
   return {
     ...c,
+    reviewed: p.reviewed ? { at: 'staged', version: 0 } as unknown as Code['reviewed'] : c.reviewed,
     status: (p.status as Code['status']) ?? c.status,
     name: p.name ?? c.name,
     definition: p.definition ?? c.definition,
@@ -280,6 +323,7 @@ export function themeWithPatch(t: Theme, p?: ThemePatch): Theme & { pending: boo
   const tensions = [...new Set([...t.tensions.filter((e) => !p.removeTensions.includes(e)), ...p.addTensions])];
   return {
     ...t,
+    reviewed: p.reviewed ? { at: 'staged', version: 0 } as unknown as Theme['reviewed'] : t.reviewed,
     name: p.name ?? t.name,
     essence: p.essence ?? t.essence,
     story: p.story ?? t.story,

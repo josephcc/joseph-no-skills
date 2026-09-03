@@ -157,6 +157,7 @@ export interface Spread {
 }
 
 export interface Bundle {
+  cooccur: Cooccur;
   root: string;
   study: string;
   approach: Record<string, string>;
@@ -245,3 +246,31 @@ export interface Collate {
   total: number;
   groups: CollateGroup[];
 }
+
+export type CooccurPair = {
+  a: string; b: string; both: number; a_total: number; b_total: number;
+  jaccard: number; b_given_a: number; a_given_b: number;
+  related: 'parent-child' | 'siblings' | null;
+};
+export type CooccurMerge = CooccurPair & {
+  kind: 'twins' | 'nested' | 'overlap';
+  suggest: 'merge' | 'child' | 'look';
+  why: string;
+  inner?: string;
+  outer?: string;
+};
+export type CooccurSplit = {
+  code: string; name: string; parent: string | null;
+  extracts: number; participants: number; children: number;
+  facets: { with: string; n: number; share: number }[];
+  clean: number; blurred: number; residue: number; alone: number;
+  kinds: { said: number; did: number; intent: number };
+  needs_promotion: boolean;
+};
+export type Cooccur = {
+  generated: string;
+  codes: { id: string; name: string; parent: string | null; extracts: number; participants: number }[];
+  pairs: CooccurPair[];
+  merges: CooccurMerge[];
+  splits: CooccurSplit[];
+};

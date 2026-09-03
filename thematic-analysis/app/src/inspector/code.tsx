@@ -9,7 +9,7 @@ import { Md } from '../md';
 import { KIND_GLYPH } from '../codes';
 import { draft } from '../ops';
 import { CommentComposer, ThreadCard, threadsFor } from '../threads';
-import type { Code, Dupe } from '../types';
+import type { Code, Dupe, Extract } from '../types';
 import type { Workbench } from '../store';
 
 function EditableField({ label, value, onSave, onComment, multiline = true }: {
@@ -64,19 +64,52 @@ function EditableField({ label, value, onSave, onComment, multiline = true }: {
   );
 }
 
-export function CodeInspector({ code, codes, dupes, wb, N, onCompare, onSplit, onJumpToTheme }: {
+export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onSplit, onJumpToTheme }: {
   code: Code;
   codes: Code[];
   dupes: Dupe[];
   wb: Workbench;
   N: number;
+  /** the extracts actually carrying this code — what retiring it has to deal with */
+  users: Extract[];
   onCompare: (other: string) => void;
   onSplit: () => void;
   onJumpToTheme?: (id: string) => void;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [mergeTo, setMergeTo] = useState('');
-  const tops = codes.filter((c) => !c.parent && c.id !== code.id && (c.status === 'accepted' || c.status === 'candidate'));
+  const [retiring, setRetiring] = useState(false);
+  const [orphanPlan, setOrphanPlan] = useState<'drop' | ''>('');
+  // A code already staged to be merged away or retired is not a legal target: staging a merge
+  // into it builds a cycle the researcher never decided, and `apply` would settle it by inbox
+  // order — first op wins, second fails with "target is merged".
+  const goingAway = (id: string) => {
+    const patch = wb.patch.codes[id];
+    return !!patch?.mergedInto || patch?.status === 'retired';
+  };
+  const tops = codes.filter(
+    (c) => !c.parent && c.id !== code.id && (c.status === 'accepted' || c.status === 'candidate') && !goingAway(c.id),
+  );
+  // ...and a code that is itself on its way out cannot take a merge or a reparent either.
+  const leaving = goingAway(code.id);
+
+  // Why "make a child" may be refused. The rule is *not* "this code already has a parent" — a
+  // childless child moves between parents freely, and the tree's drag already allows it. It is
+  // the two-level ceiling (a code with children cannot go under another) and an id collision at
+  // the destination, which is what `op_reparent` actually enforces.
+  const orphans = users.filter((e) => (e.codes ?? []).length <= 1);
+  const myKids = codes.filter((c) => c.parent === code.id).map((c) => c.id);
+  const childBase = code.id.includes('.') ? code.id.slice(code.id.indexOf('.') + 1) : code.id;
+  const collidesWith = mergeTo && codes.some((c) => c.id === `${mergeTo}.${childBase}`) ? `${mergeTo}.${childBase}` : null;
+  const childBlocked = leaving
+    ? 'this code is staged to be folded away'
+    : myKids.length
+      ? `it has child code(s) ${myKids.join(', ')} — moving it under another code would make three levels`
+      : collidesWith
+        ? `${collidesWith} already exists; rename one of them first, or merge instead`
+        : code.parent === mergeTo
+          ? `already a child of ${mergeTo}`
+          : null;
   const kids = codes.filter((c) => c.parent === code.id && c.status !== 'merged' && c.status !== 'retired');
   const neighbours = dupes.filter((d) => d.a === code.id || d.b === code.id);
   const threads = threadsFor(wb.inbox, code.id);
@@ -180,15 +213,9 @@ export function CodeInspector({ code, codes, dupes, wb, N, onCompare, onSplit, o
           )}
           <button
             className="wb-btn wb-btn-ghost"
-            disabled={code.extracts > 0 || kids.length > 0}
-            title={
-              code.extracts > 0
-                ? `${code.id} still codes ${code.extracts} extract(s); merge it or recode them first`
-                : kids.length > 0
-                  ? 'it still has live children'
-                  : 'retire this code'
-            }
-            onClick={() => wb.stage(draft('code-status', code.id, { status: 'retired' }))}
+            disabled={kids.length > 0}
+            title={kids.length > 0 ? 'it still has live child code(s); move or retire those first' : 'retire this code'}
+            onClick={() => (users.length === 0 ? wb.stage(draft('code-status', code.id, { status: 'retired' })) : setRetiring(true))}
           >
             retire
           </button>
@@ -223,29 +250,168 @@ export function CodeInspector({ code, codes, dupes, wb, N, onCompare, onSplit, o
             </span>
           )}
         </div>
-        <div className="wb-actions wb-wrap">
-          <select className="wb-select" value={mergeTo} onChange={(e) => setMergeTo(e.target.value)}>
-            <option value="">merge into / make a child of…</option>
-            {tops.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.id}
-              </option>
-            ))}
-          </select>
-          <button
-            className="wb-btn wb-btn-ghost"
-            disabled={!mergeTo}
-            onClick={() => (wb.stage(draft('merge-code', code.id, { into: mergeTo })), setMergeTo(''))}
-          >
-            merge
-          </button>
-          <button
-            className="wb-btn wb-btn-ghost"
-            disabled={!mergeTo || !!code.parent}
-            onClick={() => (wb.stage(draft('reparent', code.id, { parent: mergeTo })), setMergeTo(''))}
-          >
-            make a child
-          </button>
+        {retiring && users.length > 0 && (
+          <div className="wb-retire">
+            {/* Retiring a code that still labels passages would orphan them, so the question is
+                never "may I retire this" but "where do its extracts go". Most survive untouched
+                because they carry another code; only the ones carrying this code alone need a
+                decision, and that decision is the researcher's. */}
+            <label>retire {code.id}</label>
+            <p className="wb-muted">
+              {users.length} extract(s) carry it. Retiring stages one recode each, then the retirement — nothing is
+              written until you hand the pass back.
+            </p>
+            <ul className="wb-retire-list">
+              {users.map((e) => {
+                const alone = (e.codes ?? []).length <= 1;
+                return (
+                  <li key={e.id} className={alone ? 'wb-retire-alone' : ''}>
+                    <code>{e.id}</code> <span className="wb-muted">{e.participant}</span>{' '}
+                    {alone ? (
+                      <span className="wb-warn">carries only this code</span>
+                    ) : (
+                      <span className="wb-muted">
+                        keeps {(e.codes ?? []).filter((c) => c !== code.id).join(', ')}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {orphans.length > 0 && (
+              <div className="wb-field">
+                <label>{orphans.length} would be left with no code</label>
+                <div className="wb-actions wb-wrap">
+                  <button
+                    className={`wb-btn ${orphanPlan === 'drop' ? 'wb-btn-primary' : 'wb-btn-ghost'}`}
+                    onClick={() => setOrphanPlan(orphanPlan === 'drop' ? '' : 'drop')}
+                  >
+                    drop those extracts
+                  </button>
+                  <span className="wb-muted">
+                    or close this, open each in its transcript, and give it another code first.
+                  </span>
+                </div>
+              </div>
+            )}
+            <div className="wb-actions wb-wrap">
+              <button
+                className="wb-btn wb-btn-danger"
+                disabled={orphans.length > 0 && orphanPlan !== 'drop'}
+                onClick={() => {
+                  for (const e of users) {
+                    if ((e.codes ?? []).length <= 1) wb.stage(draft('drop', e.id, {}, `only code was ${code.id}, retired`));
+                    else wb.stage(draft('recode', e.id, { remove: [code.id] }));
+                  }
+                  wb.stage(draft('code-status', code.id, { status: 'retired' }));
+                  setRetiring(false);
+                  setOrphanPlan('');
+                }}
+              >
+                stage all of it
+              </button>
+              <button
+                className="wb-btn wb-btn-ghost"
+                title="hand the judgement back: the agent rehomes or drops them and reports"
+                onClick={() => {
+                  wb.stage({
+                    op: 'comment',
+                    target: code.id,
+                    args: {
+                      text:
+                        `Proposing we retire \`${code.id}\`. ${users.length} extract(s) carry it` +
+                        (orphans.length
+                          ? `, and ${orphans.map((e) => e.id).join(', ')} carr${orphans.length > 1 ? 'y' : 'ies'} no other code. ` +
+                            'Find them a better home if one exists, drop them if the passage is not data, and come back to me on any that is a real judgement call.'
+                          : ', all of which carry another code. Recode them and retire it.'),
+                    },
+                    view: 'codebook',
+                    by: 'user',
+                  });
+                  setRetiring(false);
+                  setOrphanPlan('');
+                }}
+              >
+                propose it instead
+              </button>
+              <button className="wb-btn wb-btn-ghost" onClick={() => (setRetiring(false), setOrphanPlan(''))}>
+                cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="wb-move">
+          <label>move or fold this code</label>
+          {leaving ? (
+            <p className="wb-warn">
+              Staged to be folded away already. Undo that in the pending drawer before moving it anywhere else.
+            </p>
+          ) : (
+            <>
+              <select
+                className="wb-select"
+                value={mergeTo}
+                onChange={(e) => setMergeTo(e.target.value)}
+                aria-label="destination code"
+              >
+                <option value="">pick a destination…</option>
+                {tops.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.id}
+                  </option>
+                ))}
+              </select>
+              {/* Two verbs, one destination — and they are not variations of each other: one
+                  destroys a code, the other moves it. Spelling out the consequence with the real
+                  ids and counts is the whole point; a person should not have to remember which
+                  button discards a definition. */}
+              <div className="wb-move-opt">
+                <button
+                  className="wb-btn wb-btn-ghost"
+                  disabled={!mergeTo}
+                  onClick={() => (wb.stage(draft('merge-code', code.id, { into: mergeTo })), setMergeTo(''))}
+                >
+                  fold into {mergeTo || '…'}
+                </button>
+                <p className="wb-muted">
+                  {mergeTo ? (
+                    <>
+                      <code>{code.id}</code> stops existing. Its {code.direct_extracts} extract(s) are recoded to{' '}
+                      <code>{mergeTo}</code>, and <b>{mergeTo}&rsquo;s definition governs them</b> — this code&rsquo;s
+                      definition is not carried over.
+                    </>
+                  ) : (
+                    'Folds this code away: its extracts move, its definition does not.'
+                  )}
+                </p>
+              </div>
+              <div className="wb-move-opt">
+                <button
+                  className="wb-btn wb-btn-ghost"
+                  disabled={!mergeTo || !!childBlocked}
+                  onClick={() => (wb.stage(draft('reparent', code.id, { parent: mergeTo })), setMergeTo(''))}
+                >
+                  make a child of {mergeTo || '…'}
+                </button>
+                <p className={childBlocked && mergeTo ? 'wb-warn' : 'wb-muted'}>
+                  {childBlocked && mergeTo ? (
+                    <>Cannot: {childBlocked}.</>
+                  ) : mergeTo ? (
+                    <>
+                      Keeps its definition and its {code.direct_extracts} extract(s); its id becomes{' '}
+                      <code>
+                        {mergeTo}.{childBase}
+                      </code>
+                      . The same move as dragging it onto <code>{mergeTo}</code> in the tree.
+                    </>
+                  ) : (
+                    'Moves this code under another, keeping its definition. Dragging it in the tree does the same.'
+                  )}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

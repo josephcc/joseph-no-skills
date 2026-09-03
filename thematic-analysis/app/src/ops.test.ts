@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OP_VIEW, describe as describeOp, draft, isPending, isThread, opsFor } from './ops';
+import { OP_VIEW, describe as describeOp, draft, isPending, isThread, opsFor, targetKind } from './ops';
 import type { Op } from './types';
 
 const op = (o: Partial<Op> & Pick<Op, 'op'>): Op => ({
@@ -59,5 +59,20 @@ describe('pending and threads', () => {
       op({ id: 'op-3', op: 'recode', target: 'E-2' }),
     ];
     expect(opsFor(inbox, 'E-1').map((o) => o.id)).toEqual(['op-1', 'op-2']);
+  });
+});
+
+describe('targetKind', () => {
+  it('reads an extract, a theme, or a code out of a thread target, so the drawer can open it', () => {
+    const codes = ['iterate', 'triage.coverage'];
+    expect(targetKind('E-0042', codes)).toBe('extract');
+    expect(targetKind('TH1', codes)).toBe('theme');
+    expect(targetKind('iterate', codes)).toBe('code');
+    expect(targetKind('triage.coverage', codes)).toBe('code');
+  });
+  it('has nowhere to go for a coverage cell, an unknown id, or no target', () => {
+    expect(targetKind(null, ['iterate'])).toBe('none');
+    expect(targetKind('any', ['iterate'])).toBe('none');
+    expect(targetKind('P13|trust', ['iterate'])).toBe('none');
   });
 });
