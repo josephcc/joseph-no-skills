@@ -510,6 +510,21 @@ async function runServer() {
       .catch(fail(res));
   });
 
+  // Accept a proposal: `ta.py accept` carries it out now as the researcher's decision and
+  // clears it from the inbox. Queued with the gestures, since it is one.
+  app.post('/api/accept', (req, res) => {
+    const dir = need(req, res, 'body');
+    if (!dir) return;
+    const id = String(req.body?.id ?? '');
+    if (!/^op-\d+$/.test(id)) return res.status(400).json({ error: 'op id required' });
+    queued(dir, () => runTa(dir, ['accept', id, '--json']))
+      .then((out) => {
+        invalidate(dir);
+        res.json(out);
+      })
+      .catch(fail(res));
+  });
+
   // Undo before hand-off: drop a pending line the researcher staged by mistake — or discard
   // a whole comment thread, which resolving deliberately does not do.
   app.delete('/api/inbox', (req, res) => {

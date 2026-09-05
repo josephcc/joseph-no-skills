@@ -8,7 +8,7 @@ export type OpName =
   | 'recode' | 'set-kind' | 'set-context' | 'set-note' | 'retrim' | 'drop' | 'new-extract' | 'highlight' | 'mark-reviewed'
   | 'code-status' | 'set-field' | 'reparent' | 'rename-code' | 'merge-code' | 'split-code' | 'new-code'
   | 'reread-request'
-  | 'new-theme' | 'assign-theme' | 'set-theme-field' | 'merge-theme' | 'set-tension' | 'theme-request' | 'set-framing'
+  | 'new-theme' | 'assign-theme' | 'set-theme-field' | 'merge-theme' | 'drop-theme' | 'set-tension' | 'theme-request' | 'set-framing'
   | 'select-quote' | 'deselect-quote' | 'quote-span'
   | 'set-participant' | 'set-transcript' | 'set-stance' | 'set-rq'
   | 'comment' | 'reply';
@@ -21,7 +21,7 @@ export const OP_VIEW: Record<OpName, string> = {
   'merge-code': 'codebook', 'split-code': 'codebook', 'new-code': 'codebook',
   'reread-request': 'coverage',
   'new-theme': 'themes', 'assign-theme': 'themes', 'set-theme-field': 'themes', 'merge-theme': 'themes',
-  'set-tension': 'themes', 'theme-request': 'themes', 'set-framing': 'themes',
+  'set-tension': 'themes', 'theme-request': 'themes', 'set-framing': 'themes', 'drop-theme': 'themes',
   'select-quote': 'quotes', 'deselect-quote': 'quotes', 'quote-span': 'quotes',
   'set-participant': 'study', 'set-transcript': 'study', 'set-stance': 'study', 'set-rq': 'study',
   comment: 'any', reply: 'any',
@@ -83,6 +83,7 @@ export function describe(o: Pick<Op, 'op' | 'target' | 'args' | 'note'>): string
     case 'set-framing': return 'the paper’s framing reworded';
     case 'set-theme-field': return `${t}.${a.field} updated`;
     case 'merge-theme': return `merge ${t} into ${a.into}`;
+    case 'drop-theme': return `drop ${t}${a.why ? ` — ${short(a.why, 50)}` : ''}`;
     case 'set-tension': return `${t}: tensions ${arr(a.add).length ? `+${arr(a.add).join(' +')}` : ''}${arr(a.remove).length ? ` −${arr(a.remove).join(' −')}` : ''}`;
     case 'select-quote': return `${t}: quote ${a.extract}`;
     case 'deselect-quote': return `${t}: drop quote ${a.extract}`;

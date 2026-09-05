@@ -33,7 +33,8 @@ function ThreadRow({ o, replies, onOpen, onResolve }: { o: Op; replies: number; 
   );
 }
 
-function Row({ o, onUndo, onOpen }: { o: Op; onUndo: (id: string) => void; onOpen: (o: Op) => void }) {
+function Row({ o, onUndo, onAccept, onOpen }: { o: Op; onUndo: (id: string) => void; onAccept?: (id: string) => void; onOpen: (o: Op) => void }) {
+  const proposal = o.by === 'agent';
   return (
     <li className={`${o.status === 'failed' || o.status === 'stalled' ? 'wb-op-failed' : ''} wb-op-row`}>
       <button className="wb-op-open" onClick={() => onOpen(o)} title="open what this operation is about">
@@ -43,16 +44,28 @@ function Row({ o, onUndo, onOpen }: { o: Op; onUndo: (id: string) => void; onOpe
       <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
       {o.note && <span className="wb-op-note">{o.note}</span>}
       {o.error && <span className="wb-op-error">{o.error}</span>}
-      <button className="wb-btn wb-btn-ghost wb-op-undo" title="Remove this staged operation" onClick={() => onUndo(o.id)}>
-        undo
+      {proposal && onAccept && (
+        <button className="wb-btn wb-btn-primary wb-tiny" title="carry this out now, as your decision" onClick={() => onAccept(o.id)}>
+          accept
+        </button>
+      )}
+      <button
+        className="wb-btn wb-btn-ghost wb-op-undo"
+        title={proposal ? 'reject this proposal: it leaves the inbox and nothing changes' : 'Remove this staged operation'}
+        onClick={() => onUndo(o.id)}
+      >
+        {proposal ? 'reject' : 'undo'}
       </button>
     </li>
   );
 }
 
-export function PendingDrawer({ ops, onUndo, onOpen, onResolve, onClose, applyHint }: {
+export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onResolve, onClose, applyHint }: {
   ops: Op[];
   onUndo: (id: string) => void;
+  /** Accept one proposal: carried out now as the researcher's decision. */
+  onAccept: (id: string) => void;
+  onAcceptAll: (ids: string[]) => void;
   /** Take the researcher to what the operation is about, so a proposal can be read in context. */
   onOpen: (o: Op) => void;
   /** Resolve a thread from the drawer, without hunting for its card. */
@@ -83,14 +96,22 @@ export function PendingDrawer({ ops, onUndo, onOpen, onResolve, onClose, applyHi
         <>
           <h4>
             Proposed by the agent <span className="wb-muted">({proposals.length}) — open each to see what it would change</span>
+            <button
+              className="wb-btn wb-btn-ghost wb-tiny wb-accept-all"
+              title="carry out every proposal here, in order, as your decisions"
+              onClick={() => onAcceptAll(proposals.filter((o) => o.status !== 'failed' && o.status !== 'stalled').map((o) => o.id))}
+            >
+              accept all
+            </button>
           </h4>
           <ul className="wb-drawer-list">
             {proposals.map((o) => (
-              <Row key={o.id} o={o} onUndo={onUndo} onOpen={onOpen} />
+              <Row key={o.id} o={o} onUndo={onUndo} onAccept={onAccept} onOpen={onOpen} />
             ))}
           </ul>
           <p className="wb-muted wb-apply-hint">
-            A proposal you leave here is accepted when you hand the pass back and the agent runs:
+            <b>accept</b> carries a proposal out now, as your decision; <b>reject</b> drops it. One you leave standing is applied when you
+            hand the pass back and the agent runs:
             <code>{applyHint}</code>
           </p>
         </>

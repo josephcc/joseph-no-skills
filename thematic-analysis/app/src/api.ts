@@ -37,6 +37,8 @@ export type Applied = Op & { result?: string; created?: string };
 /** Carry out one of the researcher's gestures at once: the daemon runs `ta.py exec` — the same
  *  handler `apply` uses, under the same lock — and the applied log records it as theirs. */
 export const execOp = (dir: string, op: Record<string, unknown>) => send<{ applied: Applied[] }>('POST', '/api/do', { analysis: dir, op });
+/** Accept a staged proposal: `ta.py accept` runs it now as the researcher's decision and clears it. */
+export const acceptOp = (dir: string, id: string) => send<{ accepted: Applied[]; failed: Record<string, string> }>('POST', '/api/accept', { analysis: dir, id });
 /** Discard a whole thread — the root and every reply on it. Resolving keeps it; this does not. */
 export const deleteThreadOp = (dir: string, id: string) =>
   send<{ removed: string[] }>('DELETE', '/api/inbox', { analysis: dir, id, withReplies: true });

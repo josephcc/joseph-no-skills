@@ -53,6 +53,9 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
         a.id.localeCompare(c.id),
     );
   const selected = nav.th ? themes.find((t) => t.id === nav.th) ?? null : null;
+  // Dropping is immediate, so the way back has to be one click away: a dropped theme keeps its
+  // record, and restoring it is setting its status back.
+  const dropped = b.themes.map((t) => themeWithPatch(t, wb.patch.themes[t.id])).filter((t) => t.status === 'dropped');
   const errands =
     themes.reduce((n, t) => n + t.requests.filter((r) => r.status !== 'done').length, 0) +
     Object.values(wb.patch.themes).reduce((n, p) => n + p.requests.length, 0);
@@ -68,9 +71,39 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
       .sort((x, y) => x.participant.localeCompare(y.participant) || x.line_start - y.line_start);
   };
 
-  const onDrop = (themeId: string | null) => {
+  // Which themes each code sits in, so a card can say "also in TH3" and a drop can say whether it
+  // is a move or an addition.
+  const inThemes = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const t of themes) for (const c of t.codes) (out[c] ??= []).push(t.id);
+    return out;
+  }, [themes]);
+
+  // A plain drop moves the card out of the column it left. Holding ⌥ (alt) while dropping adds the
+  // code to the target and leaves it where it was — a code may sit in several themes, and its
+  // extracts then count toward each (`validate` says so, `coverage` prints the overlap).
+  const onDrop = (themeId: string | null, add = false) => {
     if (!drag) return;
-    if (drag.from !== themeId) wb.stage(draft('assign-theme', drag.code, { theme: themeId, ...(drag.from ? { from: drag.from } : {}) }));
+    // A card the agent proposed is not in the theme yet: dragging it off is rejecting the
+    // proposal, and dragging it to another column is rejecting it and placing the code there
+    // yourself. A move against the data would be a no-op that left the proposal to redraw it.
+    const proposal = drag.from ? wb.patch.themes[drag.from]?.proposedCodes[drag.code] : undefined;
+    if (proposal) {
+      if (drag.from !== themeId) {
+        wb.undo(proposal.id);
+        if (themeId) wb.stage(draft('assign-theme', drag.code, { theme: themeId, ...(add ? { add: true } : {}) }));
+      }
+      setDrag(null);
+      return;
+    }
+    if (drag.from !== themeId)
+      wb.stage(
+        draft('assign-theme', drag.code, {
+          theme: themeId,
+          ...(drag.from ? { from: drag.from } : {}),
+          ...(add && themeId ? { add: true } : {}),
+        }),
+      );
     setDrag(null);
   };
 
@@ -83,6 +116,11 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
             {b.frozen ? ' (frozen)' : ''}
             {errands > 0 ? ` · ${errands} errand(s) for the agent` : ''}
           </span>
+          {drag && (
+            <span className="wb-muted wb-drag-hint">
+              drop on a column to move · drop on its <b>+ add</b> foot (or hold <kbd>⌥</kbd>) to add — the code stays where it is too
+            </span>
+          )}
           {naming ? (
             <span className="wb-inline-form">
               <input
@@ -159,10 +197,11 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
               N={b.N}
               hues={hues}
               proposed={wb.patch.themes[t.id]?.proposedCodes ?? {}}
+              inThemes={inThemes}
               selected={nav.th === t.id}
               dragging={!!drag}
               onSelect={() => nav.go({ th: t.id })}
-              onDrop={() => onDrop(t.id)}
+              onDrop={(add) => onDrop(t.id, add)}
               onDragStart={(cid) => setDrag({ code: cid, from: t.id })}
               onDragEnd={() => setDrag(null)}
               onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
@@ -207,6 +246,23 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
             ))}
           </section>
         </div>
+        {dropped.length > 0 && (
+          <p className="wb-muted wb-dropped-strip">
+            dropped:{' '}
+            {dropped.map((t) => (
+              <span key={t.id} className="wb-dropped-theme">
+                <span className="wb-op-id">{t.id}</span> {t.name}{' '}
+                <button
+                  className="wb-btn wb-btn-ghost wb-tiny"
+                  title="restore this theme: status back to candidate, its codes placed again"
+                  onClick={() => wb.stage(draft('set-theme-field', t.id, { field: 'status', value: 'candidate' })).then((o) => o && nav.go({ th: t.id }))}
+                >
+                  restore
+                </button>
+              </span>
+            ))}
+          </p>
+        )}
       </main>
 
       <aside className="wb-inspector-pane">
@@ -302,7 +358,7 @@ function Framing({ wb }: { wb: Workbench }) {
 // Hoisted out of ThemesView on purpose: a component defined inside another is a new
 // component *type* on every render, so React unmounts and remounts the whole board when
 // any state changes — which throws away the node you are dragging, mid-drag.
-function Card({ code, codes, N, hue, indent = false, proposedBy, onDragStart, onDragEnd, onOpen }: {
+function Card({ code, codes, N, hue, indent = false, proposedBy, alsoIn = [], onDragStart, onDragEnd, onOpen }: {
   code: Code;
   codes: Code[];
   N: number;
@@ -310,6 +366,8 @@ function Card({ code, codes, N, hue, indent = false, proposedBy, onDragStart, on
   indent?: boolean;
   /** The agent's `assign-theme` behind this card, when it is a proposal rather than a decision. */
   proposedBy?: Op;
+  /** The other themes this code also sits in. */
+  alsoIn?: string[];
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   onOpen: () => void;
@@ -338,21 +396,28 @@ function Card({ code, codes, N, hue, indent = false, proposedBy, onDragStart, on
         {KIND_GLYPH.intent.repeat(Math.min(4, code.kinds.intent))}
       </span>
       {kids.length > 0 && <span className="wb-card-kids">+{kids.length} child{kids.length > 1 ? 'ren' : ''}</span>}
+      {alsoIn.length > 0 && (
+        <span className="wb-card-also" title="this code sits in more than one theme; its extracts count toward each">
+          also in {alsoIn.join(', ')}
+        </span>
+      )}
       {proposedBy && <span className="wb-card-tag">proposed by the agent</span>}
     </div>
   );
 }
 
-function Column({ theme, codes, N, hues, proposed, selected, dragging, onSelect, onDrop, onDragStart, onDragEnd, onOpenCode }: {
+function Column({ theme, codes, N, hues, proposed, inThemes, selected, dragging, onSelect, onDrop, onDragStart, onDragEnd, onOpenCode }: {
   theme: Shown;
   codes: Code[];
   N: number;
   hues: Record<string, number>;
   proposed: Record<string, Op>;
+  inThemes: Record<string, string[]>;
   selected: boolean;
   dragging: boolean;
   onSelect: () => void;
-  onDrop: () => void;
+  /** `add` when ⌥ was held on the drop: the code joins this theme and stays where it was. */
+  onDrop: (add: boolean) => void;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   onOpenCode: (id: string) => void;
@@ -361,8 +426,12 @@ function Column({ theme, codes, N, hues, proposed, selected, dragging, onSelect,
   return (
     <section
       className={`wb-col ${selected ? 'wb-col-on' : ''} ${dragging ? 'wb-col-live' : ''}`}
-      onDragOver={(e) => dragging && e.preventDefault()}
-      onDrop={onDrop}
+      onDragOver={(e) => {
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
+      }}
+      onDrop={(e) => onDrop(e.altKey)}
     >
       <header onClick={onSelect}>
         <span className="wb-op-id">{theme.id}</span>
@@ -384,6 +453,7 @@ function Column({ theme, codes, N, hues, proposed, selected, dragging, onSelect,
             hue={hues[cid] ?? 0}
             indent={!!c.parent}
             proposedBy={proposed[cid]}
+            alsoIn={(inThemes[cid] ?? []).filter((id) => id !== theme.id)}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onOpen={() => onOpenCode(cid)}
@@ -391,6 +461,27 @@ function Column({ theme, codes, N, hues, proposed, selected, dragging, onSelect,
         ) : null;
       })}
       {!theme.codes.length && <p className="wb-muted">drop a code here</p>}
+      {/* A second target at the foot of every column, always there so it can be read before a
+          drag starts: dropping here adds the code to this theme and leaves it where it was —
+          the same as ⌥-dropping on the column, without the modifier. The inner drop must not
+          bubble to the column's, or it would add and then move. */}
+      <div
+        className={`wb-col-add ${dragging ? 'wb-col-add-live' : ''}`}
+        onDragOver={(e) => {
+          if (!dragging) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDrop(true);
+        }}
+        title="drop a card here to add the code to this theme as well; it stays where it is, and its extracts count toward each theme"
+      >
+        + add a code here too
+      </div>
     </section>
   );
 }

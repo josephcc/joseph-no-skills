@@ -634,3 +634,20 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
 .wb-framing > header b { flex: 1; font-size: 0.82rem; color: var(--asta-dark-teal); }
 .wb-framing-drafts { font-size: 0.72rem; color: var(--muted); font-family: ui-monospace, monospace; }
 .wb-framing-body { margin-top: 0.35rem; }
+
+.wb-dropped-strip { margin-top: 0.5rem; }
+.wb-dropped-theme { margin-right: 0.8rem; white-space: nowrap; }
+
+.wb-card-also { flex: 1 1 100%; font-size: 0.62rem; color: var(--asta-teal-60); }
+.wb-drag-hint kbd { font-size: 0.7rem; }
+.wb-col-add { margin-top: 0.35rem; border: 1px dashed var(--border); border-radius: 6px; padding: 0.25rem 0.4rem; font-size: 0.66rem; color: var(--muted); text-align: center; }
+.wb-col-add-live { border-color: var(--asta-teal-40); color: var(--asta-teal); background: var(--asta-cream); }
+.wb-col-add-live:hover { border-color: var(--asta-green); background: var(--asta-green-20); }
+
+/* quotes: the codes an extract carries, the theme's own solid, others dimmed */
+.wb-qcodes { display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.15rem 0 0.25rem; }
+.wb-qcode { font: inherit; font-family: ui-monospace, monospace; font-size: 0.66rem; padding: 0 0.4rem; border-radius: 4px; cursor: pointer; color: var(--asta-dark-teal); background: hsl(calc(var(--hue) * 47deg) 45% 94%); border: 1px solid hsl(calc(var(--hue) * 47deg) 40% 78%); border-left: 3px solid hsl(calc(var(--hue) * 47deg) 62% 52%); }
+.wb-qcode:hover { background: hsl(calc(var(--hue) * 47deg) 55% 88%); }
+.wb-qcode-other { opacity: 0.55; border-style: dashed; border-left-style: solid; }
+.wb-quotes-tip { margin: 0 0 0.4rem; }
+.wb-accept-all { margin-left: 0.5rem; }

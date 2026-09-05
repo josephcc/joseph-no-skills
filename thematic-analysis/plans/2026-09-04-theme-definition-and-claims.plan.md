@@ -871,3 +871,15 @@ the manual, data-model, review templates. Tests: 102 Python, 51 bun; typecheck a
 - none.
 
 Codex's full final message saved at `/tmp/codex-audit-20260904-184736-report.md` (this run).
+
+**Addendum (2026-09-05): accept is a gesture too.** Joseph: "when the agent proposed a quote to be
+included in the paper, i can see it in the view, i can undo it in the drawer, but there's no way for
+me to confirm??" — and a proposed quote he "removed" reappeared a moment later, because the removal
+ran a `deselect-quote` against data that had never selected it while the proposal stayed pending.
+Now wherever a proposal is drawn — the pending drawer (with *accept all*), the theme tray, a quote
+row, a proposed extract in the transcript — it carries **accept** and **reject**. Accept runs
+`ta.py accept op-NNNN` through the daemon: the row is carried out at once as the researcher's
+decision (`by: user`, `proposed_by: agent`, `accepted_at`), keeps its id, and leaves the inbox;
+`changes` shows it to the agent as an acceptance. Reject is the undo. Dragging a proposed card off
+the board rejects it (and places the code where it was dropped, as the researcher's own move).
+Leaving a proposal standing still applies it on the next hand-back. Tests: 108 Python, 54 bun.

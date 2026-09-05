@@ -1756,9 +1756,10 @@ def themes_report(an: Analysis) -> str:
     pids = [p["id"] for p in an.participants()]
     N = len(pids)
     out = [f"# Themes ({today()})", ""]
-    for th in [t for t in an.themes["themes"] if not t.get("parent")]:
+    live = [t for t in an.themes["themes"] if t.get("status") not in ("merged", "dropped")]
+    for th in [t for t in live if not t.get("parent")]:
         out += theme_block(an, th, pids, N, level=2)
-        for sub in [t for t in an.themes["themes"] if t.get("parent") == th.get("id")]:
+        for sub in [t for t in live if t.get("parent") == th.get("id")]:
             out += theme_block(an, sub, pids, N, level=3)
     return "\n".join(out) + "\n"
 
@@ -2868,6 +2869,8 @@ OP_SPECS: dict[str, dict] = {
     "assign-theme":   {"view": "themes", "target": "code", "required": [], "optional": ["theme", "why", "add", "from"]},
     "set-theme-field": {"view": "themes", "target": "theme", "required": ["field", "value"], "optional": ["old", "force"]},
     "merge-theme":    {"view": "themes", "target": "theme", "required": ["into"], "optional": []},
+    # status -> dropped, codes back to unplaced, the record kept; `theme set TH1 status candidate` restores it
+    "drop-theme":     {"view": "themes", "target": "theme", "required": [], "optional": ["why"]},
     "set-tension":    {"view": "themes", "target": "theme", "required": [], "optional": ["add", "remove"]},
     # the errand from the board: "propose the codes that belong here" / "draft the claims"
     "theme-request":  {"view": "themes", "target": "theme", "required": ["kind"], "optional": ["note"]},
@@ -3495,6 +3498,31 @@ def op_set_framing(an, op, ctx):
     return f"framing updated ({len(value.split())} words)"
 
 
+def op_drop_theme(an, op, ctx):
+    """Drop a theme. The record stays — its brief, claims and tensions are analytic work, and ids
+    are never reused — with status `dropped`, which every count, report and board filter already
+    skips; its codes are therefore unplaced again. A sub-theme it had is promoted to top level
+    rather than left pointing at a dropped parent. `theme set TH1 status candidate` restores it."""
+    th = _need_theme(an, op.get("target"))
+    if th.get("status") == "dropped":
+        return f"{th['id']} is already dropped; nothing changed"
+    if th.get("status") == "merged":
+        raise OpError(f"{th['id']} was merged into {th.get('merged_into')}; there is nothing left to drop")
+    promoted = []
+    for sub in an.themes["themes"]:
+        if sub.get("parent") == th["id"]:
+            sub["parent"] = None
+            promoted.append(str(sub.get("id")))
+    th["status"] = "dropped"
+    why = (op.get("args") or {}).get("why")
+    ctx["themes"] = True
+    ctx["memos"].append(f"{th['id']} \"{th.get('name', '')}\" dropped ({op.get('by', 'user')})"
+                        + (f": {why}" if why else "") + (f"; {', '.join(promoted)} promoted to top level" if promoted else "")
+                        + f". Its {len(th.get('codes') or [])} code(s) are unplaced again; `theme set {th['id']} status candidate` restores it.")
+    return (f"{th['id']} dropped; {len(th.get('codes') or [])} code(s) back to unplaced"
+            + (f"; {', '.join(promoted)} promoted to top level" if promoted else "") + (f" — {why}" if why else ""))
+
+
 def op_set_tension(an, op, ctx):
     th = _need_theme(an, op.get("target"))
     a = op.get("args") or {}
@@ -3666,7 +3694,7 @@ HANDLERS = {
     "merge-theme": op_merge_theme, "set-tension": op_set_tension, "select-quote": op_select_quote,
     "deselect-quote": op_deselect_quote, "quote-span": op_quote_span, "set-participant": op_set_participant,
     "set-transcript": op_set_transcript, "set-stance": op_set_stance, "set-rq": op_set_rq,
-    "theme-request": op_theme_request, "set-framing": op_set_framing,
+    "theme-request": op_theme_request, "set-framing": op_set_framing, "drop-theme": op_drop_theme,
 }
 
 
@@ -4056,7 +4084,9 @@ def run_op(an: Analysis, op: dict) -> dict:
     try:
         row = {"id": op.get("id") or next_op_id(an), "at": op.get("at") or now, "by": op.get("by") or "agent",
                "view": (OP_SPECS.get(str(op.get("op"))) or {}).get("view", "any"), "op": op.get("op"),
-               "target": op.get("target"), "args": op.get("args") or {}, "note": op.get("note"), "status": "pending"}
+               "target": op.get("target"), "args": op.get("args") or {}, "note": op.get("note"), "status": "pending",
+               # an accepted proposal keeps who proposed it and when it was accepted
+               **{k: op[k] for k in ("proposed_by", "accepted_at") if op.get(k)}}
         problems = validate_op(an, row)
         if problems:
             raise SystemExit("; ".join(problems))
@@ -4111,6 +4141,75 @@ def op_number(oid: object) -> int:
     return int(m.group(1)) if m else 0
 
 
+def cmd_accept(an: Analysis, args) -> int:
+    """Accept staged proposal(s): each is carried out now as the researcher's decision — `by:
+    user`, with `proposed_by` naming who proposed it and `accepted_at` when — and leaves the
+    inbox. The daemon's path for the accept button. The row keeps its id, so the applied log
+    shows the proposal and its acceptance as one line, and `changes` lists it for the agent.
+    Same claim/settle shape as `apply`, so a second writer cannot take the row meanwhile."""
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    wanted = [str(x) for x in args.op_ids]
+    inbox_lock(an)
+    try:
+        rows = read_inbox(an)
+        todo = []
+        for oid in wanted:
+            row = next((r for r in rows if str(r.get("id")) == oid), None)
+            if row is None:
+                raise SystemExit(f"no staged operation {oid}")
+            if row.get("op") in THREAD_OPS:
+                raise SystemExit(f"{oid} is a thread: reply to it or resolve it; there is nothing to accept")
+            if row.get("status") not in (None, "pending", "failed", "stalled"):
+                raise SystemExit(f"{oid} is {row.get('status')}; nothing to accept")
+            row["status"], row["claimed_at"] = "applying", now
+            todo.append(dict(row))
+        write_inbox(an, rows)
+    finally:
+        inbox_unlock(an)
+    done: list[dict] = []
+    failed: dict[str, str] = {}
+    for row in todo:
+        op = {k: v for k, v in row.items() if k not in ("status", "claimed_at", "error")}
+        op["proposed_by"] = row.get("by") or "agent"
+        op["by"] = "user"
+        op["accepted_at"] = now
+        try:
+            res = run_op(an, op)
+        except SystemExit as exc:
+            failed[str(row["id"])] = str(exc)
+            if not getattr(args, "json", False):
+                print(f"FAILED {row['id']} {row['op']}: {exc}")
+            continue
+        done.append(res)
+        if not getattr(args, "json", False):
+            print(f"accepted {res['id']} {res['op']}: {res['result']}")
+    # settle: the accepted rows leave the inbox (they are archived), a failure keeps its reason,
+    # and a thread about a proposal that created something follows the thing it created
+    retarget = {str(r["id"]): str(r["created"]) for r in done if r.get("created")}
+    done_ids = {str(r["id"]) for r in done}
+    inbox_lock(an)
+    try:
+        rows = read_inbox(an)
+        keep = []
+        for r in rows:
+            oid = str(r.get("id"))
+            if oid in done_ids:
+                continue
+            if oid in failed:
+                r["status"], r["error"] = "failed", failed[oid]
+                r.pop("claimed_at", None)
+            if r.get("op") == "comment" and str(r.get("target")) in retarget:
+                r["about"] = r["target"]
+                r["target"] = retarget[str(r["target"])]
+            keep.append(r)
+        write_inbox(an, keep)
+    finally:
+        inbox_unlock(an)
+    if getattr(args, "json", False):
+        print(json.dumps({"accepted": done, "failed": failed}, ensure_ascii=False, default=json_safe))
+    return 1 if failed else 0
+
+
 def direct_changes(an: Analysis) -> list[dict]:
     """The researcher's own operations, carried out at once from the workbench, since the agent
     last acknowledged them (`changes --ack`). Read from the applied logs, in id order — ids are
@@ -4152,7 +4251,8 @@ def cmd_changes(an: Analysis, args) -> int:
                 continue
             print(f"## {view} ({len(by_view[view])})")
             for o in by_view[view]:
-                print(f"  {o.get('applied_at', '')[:16]}  {op_one_line(an, o)}")
+                print(f"  {o.get('applied_at', '')[:16]}  {op_one_line(an, o)}"
+                      + (f"  (accepted the {o['proposed_by']}'s proposal)" if o.get("proposed_by") else ""))
                 if o.get("result"):
                     print(f"      → {o['result']}")
             print()
@@ -4628,6 +4728,10 @@ def cmd_theme_merge(an: Analysis, args) -> int:
     return run_op_now(an, {"op": "merge-theme", "target": args.source, "args": {"into": args.target}})
 
 
+def cmd_theme_drop(an: Analysis, args) -> int:
+    return run_op_now(an, {"op": "drop-theme", "target": args.theme, "args": {"why": args.why}})
+
+
 def theme_mermaid(an: Analysis) -> str:
     """The thematic map, drawn from themes.yaml so the document and the board agree."""
     lines = ["graph LR"]
@@ -4741,7 +4845,7 @@ def cmd_serve(an: Analysis, args) -> int:
 WRITING_COMMANDS = {
     "extract", "recode", "retrim", "drop", "mark-coded", "mark-reviewed", "bump",
     "merge-code", "rename-code", "reparent", "split-code", "set-field", "code-status",
-    "new-code", "reread", "theme", "apply", "report", "paper", "exec", "changes",
+    "new-code", "reread", "theme", "apply", "report", "paper", "exec", "changes", "accept",
 }
 
 
@@ -4886,6 +4990,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_exec)
 
+    p = sub.add_parser("accept", help="accept staged proposal(s) now, as the researcher's decision (the daemon's path for the accept button)")
+    p.add_argument("op_ids", nargs="+")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_accept)
+
     p = sub.add_parser("changes", help="what the researcher changed directly since you last acknowledged (`--ack`)")
     p.add_argument("--json", action="store_true")
     p.add_argument("--ack", action="store_true", help="record that you have read them")
@@ -5027,6 +5136,10 @@ def main(argv: list[str] | None = None) -> int:
     q = tsub.add_parser("merge", help="fold one theme into another")
     q.add_argument("source"); q.add_argument("target")
     q.set_defaults(fn=cmd_theme_merge)
+
+    q = tsub.add_parser("drop", help="drop a theme: status dropped, its codes unplaced again, the record kept (`theme set TH1 status candidate` restores)")
+    q.add_argument("theme"); q.add_argument("--why")
+    q.set_defaults(fn=cmd_theme_drop)
 
     q = tsub.add_parser("mermaid", help="the thematic map, drawn from themes.yaml")
     q.set_defaults(fn=cmd_theme_mermaid)

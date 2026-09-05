@@ -258,6 +258,23 @@ describe('the agent’s proposals and the researcher’s decisions on the board'
     );
     expect(shown.codes).toEqual(['control']);
   });
+  it('takes a dropped theme off the board while the drop is in flight', () => {
+    const p = pendingPatch([op({ op: 'drop-theme', target: 'TH5', view: 'themes' })], []);
+    expect(p.themes.TH5.status).toBe('dropped');
+  });
+  it('marks a quote the agent proposed, and clears the mark when the researcher chooses it themself', () => {
+    const p = pendingPatch([op({ id: 'op-3', op: 'select-quote', target: 'TH1', args: { extract: 'E-2' }, view: 'quotes', by: 'agent' })], []);
+    expect(p.themes.TH1.addQuotes).toEqual(['E-2']);
+    expect(p.themes.TH1.proposedQuotes['E-2'].id).toBe('op-3');
+    const q = pendingPatch(
+      [
+        op({ id: 'op-3', op: 'select-quote', target: 'TH1', args: { extract: 'E-2' }, view: 'quotes', by: 'agent' }),
+        op({ id: 'op-4', op: 'select-quote', target: 'TH1', args: { extract: 'E-2' }, view: 'quotes' }),
+      ],
+      [],
+    );
+    expect(q.themes.TH1.proposedQuotes['E-2']).toBeUndefined();
+  });
   it('overlays a brief edit and a framing correction', () => {
     const p = pendingPatch(
       [

@@ -57,6 +57,19 @@ export function FramePeek({ dir, t, frames, ts, onOpen, inline = false }: {
   );
 }
 
+/** The same peek for a view that holds extracts from many transcripts and carries no frame index
+ *  (the Quotes view): the daemon resolves the nearest frame at or before the timestamp itself
+ *  (`/api/frame?at=`), so the row needs only the transcript and the time. */
+export function FramePeekAt({ dir, t, ts }: { dir: string; t: string; ts: string | null }) {
+  if (!ts) return null;
+  return (
+    <span className="wb-peek">
+      <img src={frameUrl(dir, t, { at: ts })} alt={`screen at ${ts}`} loading="lazy" />
+      <span className="wb-peek-meta">the screen at {ts} — the nearest frame at or before it · click to open the transcript there</span>
+    </span>
+  );
+}
+
 export function FrameLightbox({ dir, t, frames, file, onClose }: {
   dir: string;
   t: string;

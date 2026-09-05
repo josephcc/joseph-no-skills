@@ -37,6 +37,7 @@ describe('describe', () => {
     expect(describeOp(op({ op: 'theme-request', target: 'TH1', args: { kind: 'codes' } }))).toBe('TH1: ask the agent for codes');
     expect(describeOp(op({ op: 'theme-request', target: 'op-0031', args: { kind: 'both' } }))).toBe('op-0031: ask the agent for codes and claims');
     expect(describeOp(op({ op: 'set-framing', args: { value: 'x' } }))).toBe('the paper’s framing reworded');
+    expect(describeOp(op({ op: 'drop-theme', target: 'TH5', args: { why: 'it was TH3 all along' } }))).toBe('drop TH5 — it was TH3 all along');
   });
   it('shortens long text instead of spilling it', () => {
     const long = 'x'.repeat(200);

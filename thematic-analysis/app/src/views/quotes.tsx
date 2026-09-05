@@ -6,42 +6,69 @@
 // updates as you pick, and a trim is a selection the script slices out of the extract —
 // so the paper's shorter quote is still transcript text and `verify-quotes` still passes.
 import { useMemo, useState } from 'react';
-import { KIND_GLYPH } from '../codes';
+import { KIND_GLYPH, familyIndex } from '../codes';
+import { FramePeekAt } from '../frames';
+import { ThemeInspector } from '../inspector/theme';
 import { draft } from '../ops';
 import { themeWithPatch } from '../overlay';
 import { snapToWords } from '../spans';
 import type { Nav } from '../app';
 import type { Workbench } from '../store';
-import type { Extract } from '../types';
+import type { Extract, Op } from '../types';
 
 const INLINE_MAX = 25;
 
-export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
+export function QuotesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: Nav }) {
   const b = wb.bundle!;
   const [filterP, setFilterP] = useState('');
   const [starOnly, setStarOnly] = useState(false);
   const [kind, setKind] = useState('');
   const [sort, setSort] = useState<'order' | 'short'>('order');
   const [trimming, setTrimming] = useState<{ theme: string; extract: Extract } | null>(null);
+  const [codeFilter, setCodeFilter] = useState('');
+  const hues = useMemo(() => familyIndex(b.codes), [b.codes]);
   const themes = useMemo(
     () => b.themes.map((t) => themeWithPatch(t, wb.patch.themes[t.id])).filter((t) => t.status !== 'merged' && t.status !== 'dropped' && t.in_paper !== 'no'),
     [b.themes, wb.patch.themes],
   );
   const theme = nav.th ? themes.find((t) => t.id === nav.th) ?? themes[0] ?? null : themes[0] ?? null;
 
+  // The codes this theme gathers, children included: what puts an extract in the bank, and what
+  // the chips on each row set solid — an extract's other codes are drawn dimmed, so a quote that
+  // is here through a tangential code reads as such.
+  const fam = useMemo(() => {
+    const out = new Set<string>(theme ? (theme.family?.length ? theme.family : theme.codes) : []);
+    for (const cid of theme?.codes ?? []) {
+      const c = b.codes.find((x) => x.id === cid);
+      for (const f of c?.family ?? []) out.add(f);
+    }
+    return out;
+  }, [theme, b.codes]);
+
+  // Everything the theme gathers, unfiltered, in participant order: what the inspector on the
+  // right reasons over (its tensions, its claims' evidence), as on the board.
+  const themeExtracts = useMemo(
+    () =>
+      b.extracts_all
+        .filter((e) => e.codes.some((c) => fam.has(c)))
+        .sort((x, y) => x.participant.localeCompare(y.participant) || x.transcript.localeCompare(y.transcript) || x.line_start - y.line_start),
+    [b.extracts_all, fam],
+  );
+
   const bank = useMemo(() => {
     if (!theme) return [] as Extract[];
-    const fam = new Set(theme.family?.length ? theme.family : theme.codes);
-    for (const cid of theme.codes) {
-      const c = b.codes.find((x) => x.id === cid);
-      for (const f of c?.family ?? []) fam.add(f);
-    }
     // Flagged extracts first — those are the moments that struck the researcher during
     // coding — then either the order they were said in (keeps the context of a session) or
     // shortest first (hunting for something that will weave inline).
     return b.extracts_all
       .filter((e) => e.codes.some((c) => fam.has(c)))
-      .filter((e) => (!filterP || e.participant === filterP) && (!kind || e.kind === kind) && (!starOnly || e.highlight))
+      .filter(
+        (e) =>
+          (!filterP || e.participant === filterP) &&
+          (!kind || e.kind === kind) &&
+          (!starOnly || e.highlight) &&
+          (!codeFilter || e.codes.includes(codeFilter)),
+      )
       .sort(
         (x, y) =>
           Number(!!y.highlight) - Number(!!x.highlight) ||
@@ -49,7 +76,7 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
             ? x.words - y.words
             : x.participant.localeCompare(y.participant) || x.transcript.localeCompare(y.transcript) || x.line_start - y.line_start),
       );
-  }, [theme, b.extracts_all, b.codes, filterP, kind, starOnly, sort]);
+  }, [theme, fam, b.extracts_all, filterP, kind, starOnly, codeFilter, sort]);
 
   // The spread is the check the skill states: a results section that quotes P3 seven
   // times is a case study of P3. It counts the selections as they stand, staged ops
@@ -77,6 +104,10 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
   const selected = theme.selected_extracts
     .map((id) => b.extracts_all.find((e) => e.id === id))
     .filter((e): e is Extract => !!e);
+  // A selection the agent proposed is drawn as chosen, but it is a proposal: the gestures on it
+  // are accept and reject, not "remove" — a deselect against the data would be a no-op against a
+  // quote that was never selected, and the still-pending proposal would redraw it a moment later.
+  const proposedFor = (eid: string): Op | undefined => wb.patch.themes[theme.id]?.proposedQuotes[eid];
   const kinds = selected.reduce<Record<string, number>>((a, e) => ((a[e.kind] = (a[e.kind] ?? 0) + 1), a), {});
   const availableDid = bank.filter((e) => e.kind === 'did').length;
 
@@ -97,6 +128,14 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
               <option key={p.id} value={p.id}>
                 {p.id}
                 {spread[p.id]?.length ? ` · ${spread[p.id].length} quoted` : ''}
+              </option>
+            ))}
+          </select>
+          <select className="wb-select" value={codeFilter} onChange={(e) => setCodeFilter(e.target.value)} title="only the extracts carrying this code">
+            <option value="">any of {theme.id}'s codes</option>
+            {[...fam].sort().map((c) => (
+              <option key={c} value={c}>
+                {c}
               </option>
             ))}
           </select>
@@ -135,6 +174,7 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                       </button>
                       <b>{e.participant}</b>
                       <span title={e.kind}>{KIND_GLYPH[e.kind]}</span>
+                      <QuoteTime dir={dir} e={e} hasFrames={!!b.transcript_files[e.transcript]?.frames_dir} onOpen={() => nav.go({ view: 'transcript', t: e.transcript, e: e.id })} />
                       <span className={e.words <= INLINE_MAX ? 'wb-inline-ok' : 'wb-block-only'}>
                         {e.words} words · {e.words <= INLINE_MAX ? 'fits inline' : 'block quote'}
                       </span>
@@ -145,10 +185,21 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                         </span>
                       )}
                     </div>
+                    <QuoteCodes codes={e.codes} fam={fam} hues={hues} onOpen={(c) => nav.go({ view: 'codebook', c })} />
                     <blockquote>{e.text}</blockquote>
                     {e.context && <p className="wb-muted">context: {e.context}</p>}
                     <div className="wb-actions">
-                      {chosen ? (
+                      {proposedFor(e.id) ? (
+                        <>
+                          <span className="wb-card-tag">proposed by the agent</span>
+                          <button className="wb-btn wb-btn-primary wb-tiny" title="select it now, as your decision" onClick={() => void wb.accept(proposedFor(e.id)!.id)}>
+                            accept
+                          </button>
+                          <button className="wb-btn wb-btn-ghost wb-tiny" title="drop the proposal; nothing changes" onClick={() => wb.undo(proposedFor(e.id)!.id)}>
+                            reject
+                          </button>
+                        </>
+                      ) : chosen ? (
                         <button className="wb-btn wb-btn-ghost" onClick={() => wb.stage(draft('deselect-quote', theme.id, { extract: e.id }))}>
                           remove from the paper
                         </button>
@@ -196,10 +247,13 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                       <span className="wb-op-id">{e.id}</span>
                       <b>{e.participant}</b>
                       <span title={e.kind}>{KIND_GLYPH[e.kind]}</span>
+                      <QuoteTime dir={dir} e={e} hasFrames={!!b.transcript_files[e.transcript]?.frames_dir} onOpen={() => nav.go({ view: 'transcript', t: e.transcript, e: e.id })} />
                       {trim && <span className="wb-trimmed">trimmed to {trim.words} words</span>}
-                      {stagedTrim && <span className="wb-staged-flag" title="a trim is staged for this quote — the text below is the stored one until the pass is applied">trim staged</span>}
+                      {stagedTrim && <span className="wb-staged-flag" title="a trim is in flight for this quote — the text below is the stored one until it lands">trim in flight</span>}
                       {theme.tensions.includes(e.id) && <span className="wb-tension-tag">tension</span>}
+                      {proposedFor(e.id) && <span className="wb-card-tag" title={`the agent proposed this quote (${proposedFor(e.id)!.id})`}>proposed by the agent</span>}
                     </div>
+                    <QuoteCodes codes={e.codes} fam={fam} hues={hues} onOpen={(c) => nav.go({ view: 'codebook', c })} />
                     <blockquote>{trim ? trim.text : e.text}</blockquote>
                     <div className="wb-actions">
                       <button
@@ -216,6 +270,13 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                       >
                         ↓
                       </button>
+                      <button
+                        className="wb-btn wb-btn-ghost wb-tiny"
+                        title={trim ? 'cut it differently: select the words again' : 'select the words that go in the sentence; the script cuts them from the stored extract'}
+                        onClick={() => setTrimming({ theme: theme.id, extract: e })}
+                      >
+                        {trim ? 're-trim' : 'trim for inline use'}
+                      </button>
                       {trim && (
                         <button
                           className="wb-btn wb-btn-ghost wb-tiny"
@@ -224,9 +285,20 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                           untrim
                         </button>
                       )}
-                      <button className="wb-btn wb-btn-ghost wb-tiny" onClick={() => wb.stage(draft('deselect-quote', theme.id, { extract: e.id }))}>
-                        remove
-                      </button>
+                      {proposedFor(e.id) ? (
+                        <>
+                          <button className="wb-btn wb-btn-primary wb-tiny" title="select it now, as your decision" onClick={() => void wb.accept(proposedFor(e.id)!.id)}>
+                            accept
+                          </button>
+                          <button className="wb-btn wb-btn-ghost wb-tiny" title="drop the proposal; nothing changes" onClick={() => wb.undo(proposedFor(e.id)!.id)}>
+                            reject
+                          </button>
+                        </>
+                      ) : (
+                        <button className="wb-btn wb-btn-ghost wb-tiny" onClick={() => wb.stage(draft('deselect-quote', theme.id, { extract: e.id }))}>
+                          remove
+                        </button>
+                      )}
                     </div>
                   </li>
                 );
@@ -298,24 +370,63 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
             }}
           />
         ) : (
-          <div className="wb-inspector">
-            <h3>{theme.id}</h3>
-            <p>{theme.name}</p>
-            <p className="wb-muted">{theme.essence}</p>
-            <p className="wb-insp-num">
-              {theme.n}/{theme.N} participants · {theme.extracts} extracts · {selected.length} quote(s) ·{' '}
-              {(['said', 'did', 'intent'] as const).map((k) => `${KIND_GLYPH[k]}${kinds[k] ?? 0}`).join(' ')}
+          <>
+            {/* The same inspector as the board, so the story gets written here, with the evidence
+                in view, rather than afterwards from memory. */}
+            <p className="wb-muted wb-quotes-tip">
+              {selected.length} quote(s) chosen ·{' '}
+              {(['said', 'did', 'intent'] as const).map((k) => `${KIND_GLYPH[k]}${kinds[k] ?? 0}`).join(' ')} · not quoted anywhere:{' '}
+              {b.participants.filter((p) => !(spread[p.id] ?? []).length).map((p) => p.id).join(', ') || 'none'}. Pick for the claim, not
+              the topic; a `did` beside a `said` when the theme is about behaviour.
             </p>
-            <p className="wb-muted">
-              Pick for the claim, not the topic. Short enough to weave inline where you can; a `did` beside a `said` when the theme is about
-              behaviour; and watch who is already carrying the section.
-            </p>
-            <p className="wb-muted">
-              Participants not quoted anywhere: {b.participants.filter((p) => !(spread[p.id] ?? []).length).map((p) => p.id).join(', ') || 'none'}
-            </p>
-          </div>
+            <ThemeInspector
+              theme={theme}
+              extracts={themeExtracts}
+              wb={wb}
+              rqs={b.research_questions}
+              onJumpToExtract={(e) => nav.go({ view: 'transcript', t: e.transcript, e: e.id })}
+              onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
+            />
+          </>
         )}
       </aside>
+    </div>
+  );
+}
+
+/** When the quote was said — and, where `watch-recording` left frames beside the transcript, the
+ *  screen as they said it, one hover away (the ▣ is the affordance); a click opens the transcript
+ *  at the extract, where the full frame tools are. A quote is chosen for what it exemplifies, and
+ *  what was on the screen is often the difference between a `said` and a `did`. */
+function QuoteTime({ dir, e, hasFrames, onOpen }: { dir: string; e: Extract; hasFrames: boolean; onOpen: () => void }) {
+  if (!e.timestamp) return null;
+  if (!hasFrames) return <span className="wb-ts wb-ts-plain">[{e.timestamp}]</span>;
+  return (
+    <button className="wb-ts" title={`the screen at ${e.timestamp} — hover to peek, click to open the transcript there`} onClick={onOpen}>
+      [{e.timestamp}]
+      <span className="wb-ts-mark" aria-hidden="true">▣</span>
+      <FramePeekAt dir={dir} t={e.transcript} ts={e.timestamp} />
+    </button>
+  );
+}
+
+/** The codes an extract carries, in their family colours: the theme's own solid, any other dimmed. */
+function QuoteCodes({ codes, fam, hues, onOpen }: { codes: string[]; fam: Set<string>; hues: Record<string, number>; onOpen: (c: string) => void }) {
+  if (!codes.length) return null;
+  const sorted = [...codes].sort((a, b) => Number(fam.has(b)) - Number(fam.has(a)) || a.localeCompare(b));
+  return (
+    <div className="wb-qcodes">
+      {sorted.map((c) => (
+        <button
+          key={c}
+          className={`wb-qcode ${fam.has(c) ? '' : 'wb-qcode-other'}`}
+          style={{ ['--hue' as string]: hues[c] ?? 0 }}
+          title={fam.has(c) ? `${c} — one of this theme's codes; open it` : `${c} — not one of this theme's codes; open it`}
+          onClick={() => onOpen(c)}
+        >
+          {c}
+        </button>
+      ))}
     </div>
   );
 }

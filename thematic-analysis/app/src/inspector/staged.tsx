@@ -20,7 +20,7 @@ export interface StagedExtract {
   kind: string;
 }
 
-export function StagedInspector({ staged, text, codes, allCodes, transcriptId, line, op, wb, onUndo, onClose }: {
+export function StagedInspector({ staged, text, codes, allCodes, transcriptId, line, op, wb, onAccept, onUndo, onClose }: {
   staged: StagedExtract;
   text: string;
   codes: Record<string, Code>;
@@ -29,6 +29,8 @@ export function StagedInspector({ staged, text, codes, allCodes, transcriptId, l
   line: number;
   op: Op | undefined;
   wb: Workbench;
+  /** Accept the proposal: the extract is cut from the transcript now, as the researcher's decision. */
+  onAccept: () => void;
   onUndo: () => void;
   onClose: () => void;
 }) {
@@ -48,9 +50,14 @@ export function StagedInspector({ staged, text, codes, allCodes, transcriptId, l
       </header>
 
       <p className="wb-muted wb-why-new">
-        Not an extract yet. The agent cuts these words out of the transcript and gives it an id on the next
-        <code> apply</code>; until then it lives in the inbox and nothing in the data files has changed.
+        Not an extract yet: the agent proposed it. Accept it and the script cuts these words out of the transcript now and gives it an
+        id; leave it and that happens on the next <code>apply</code>; reject it and nothing changes.
       </p>
+      <div className="wb-actions">
+        <button className="wb-btn wb-btn-primary" title="cut it from the transcript now, as your decision" onClick={() => (onAccept(), onClose())}>
+          accept this extract
+        </button>
+      </div>
 
       <blockquote className="wb-insp-quote wb-insp-quote-staged">{text}</blockquote>
 
@@ -115,13 +122,13 @@ export function StagedInspector({ staged, text, codes, allCodes, transcriptId, l
       </div>
 
       <div className="wb-field">
-        <label>change your mind</label>
+        <label>reject it</label>
         <p className="wb-muted">
-          A staged operation cannot be edited — remove it and code the passage again with the codes you want.
+          A proposal cannot be edited — reject it and code the passage yourself with the codes you want.
         </p>
         {confirming ? (
           <div className="wb-actions">
-            <span className="wb-warn">Remove this staged extract?</span>
+            <span className="wb-warn">Reject this proposed extract?</span>
             <button
               className="wb-btn wb-btn-danger"
               onClick={() => {
@@ -130,7 +137,7 @@ export function StagedInspector({ staged, text, codes, allCodes, transcriptId, l
                 onClose();
               }}
             >
-              Remove it
+              Reject it
             </button>
             <button className="wb-btn wb-btn-ghost" onClick={() => setConfirming(false)}>
               Keep it
@@ -138,7 +145,7 @@ export function StagedInspector({ staged, text, codes, allCodes, transcriptId, l
           </div>
         ) : (
           <button className="wb-btn wb-btn-ghost" onClick={() => setConfirming(true)}>
-            remove this staged extract
+            reject this proposed extract
           </button>
         )}
       </div>

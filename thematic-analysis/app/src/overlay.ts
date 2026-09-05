@@ -48,6 +48,8 @@ export interface ThemePatch {
   removeCodes: string[];
   /** Assignments the *agent* staged, by code: shown as proposed on the card, argued in the tray. */
   proposedCodes: Record<string, Op>;
+  /** Quote selections the *agent* staged, by extract: drawn as chosen, marked, accepted or rejected in place. */
+  proposedQuotes: Record<string, Op>;
   addQuotes: string[];
   removeQuotes: string[];
   addTensions: string[];
@@ -87,7 +89,7 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
   const ex = (id: string): ExtractPatch => (patch.extracts[id] ??= { ops: [] });
   const co = (id: string): CodePatch => (patch.codes[id] ??= { ops: [] });
   const th = (id: string): ThemePatch => (patch.themes[id] ??= {
-    addCodes: [], removeCodes: [], proposedCodes: {}, addQuotes: [], removeQuotes: [], addTensions: [], removeTensions: [], trims: [], requests: [], ops: [],
+    addCodes: [], removeCodes: [], proposedCodes: {}, addQuotes: [], removeQuotes: [], proposedQuotes: {}, addTensions: [], removeTensions: [], trims: [], requests: [], ops: [],
   });
 
   // Staged order is the researcher's order, so a later op overrides an earlier one.
@@ -246,6 +248,18 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
         p.ops.push(o);
         break;
       }
+      case 'drop-theme': {
+        const p = th(t);
+        p.status = 'dropped';
+        p.ops.push(o);
+        break;
+      }
+      case 'merge-theme': {
+        const p = th(t);
+        p.status = 'merged';
+        p.ops.push(o);
+        break;
+      }
       case 'set-framing': {
         patch.framing = str(a.value) ?? '';
         patch.framingOps.push(o);
@@ -253,15 +267,20 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
       }
       case 'select-quote': {
         const p = th(t);
-        p.addQuotes.push(String(a.extract ?? ''));
-        p.removeQuotes = p.removeQuotes.filter((x) => x !== String(a.extract ?? ''));
+        const eid = String(a.extract ?? '');
+        p.addQuotes.push(eid);
+        p.removeQuotes = p.removeQuotes.filter((x) => x !== eid);
+        if (o.by === 'agent') p.proposedQuotes[eid] = o;
+        else delete p.proposedQuotes[eid];
         p.ops.push(o);
         break;
       }
       case 'deselect-quote': {
         const p = th(t);
-        p.removeQuotes.push(String(a.extract ?? ''));
-        p.addQuotes = p.addQuotes.filter((x) => x !== String(a.extract ?? ''));
+        const eid = String(a.extract ?? '');
+        p.removeQuotes.push(eid);
+        p.addQuotes = p.addQuotes.filter((x) => x !== eid);
+        delete p.proposedQuotes[eid];
         p.ops.push(o);
         break;
       }

@@ -78,6 +78,7 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [mergeTo, setMergeTo] = useState('');
+  const [alsoIn, setAlsoIn] = useState('');
   const [retiring, setRetiring] = useState(false);
   const [orphanPlan, setOrphanPlan] = useState<'drop' | ''>('');
   // A code already staged to be merged away or retired is not a legal target: staging a merge
@@ -415,16 +416,42 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
         </div>
       </div>
 
-      {themesWithIt.length > 0 && (
+      <div className="wb-field">
+        <label>themes</label>
         <p className="wb-muted">
-          in{' '}
+          {themesWithIt.length > 0 ? 'in ' : 'in no theme yet '}
           {themesWithIt.map((t) => (
             <button key={t.id} className="wb-btn wb-btn-ghost wb-tiny" onClick={() => onJumpToTheme?.(t.id)}>
               {t.id}
             </button>
           ))}
         </p>
-      )}
+        {/* A code may sit in several themes; its extracts then count toward each, and the board
+            says so on the card. This is the same move as ⌥-dropping the card on the board. */}
+        <div className="wb-actions wb-wrap">
+          <select className="wb-select" value={alsoIn} onChange={(e) => setAlsoIn(e.target.value)} aria-label="place in another theme too">
+            <option value="">{themesWithIt.length ? 'place here too…' : 'place in…'}</option>
+            {(wb.bundle?.themes ?? [])
+              .filter((t) => t.status !== 'merged' && t.status !== 'dropped' && !t.codes.includes(code.id))
+              .map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.id} · {t.name}
+                </option>
+              ))}
+          </select>
+          <button
+            className="wb-btn wb-btn-ghost"
+            disabled={!alsoIn}
+            title={alsoIn ? `${code.id} joins ${alsoIn} and stays where it is; its extracts count toward each` : 'pick a theme'}
+            onClick={() => {
+              wb.stage(draft('assign-theme', code.id, { theme: alsoIn, add: true }));
+              setAlsoIn('');
+            }}
+          >
+            {themesWithIt.length ? 'place here too' : 'place it'}
+          </button>
+        </div>
+      </div>
 
       <div className="wb-field">
         <label>threads</label>

@@ -39,7 +39,7 @@ function Field({ label, value, hint, multiline, tall, placeholder, onSave, onCom
       <div className="wb-field">
         <label>
           {label}
-          <button className="wb-btn wb-btn-ghost wb-tiny" onClick={() => (setD(value), setEditing(true))}>
+          <button className="wb-btn wb-btn-ghost wb-tiny" onClick={() => (setD(value), setEditing(true))} title="edit">
             ✎
           </button>
         </label>
@@ -74,12 +74,13 @@ function Field({ label, value, hint, multiline, tall, placeholder, onSave, onCom
 }
 
 /** One code the agent proposes for this theme: the case, the numbers, two of its extracts. */
-function ProposedCard({ op, code, N, placedIn, extracts, onReject, onOpenCode, onJumpToExtract }: {
+function ProposedCard({ op, code, N, placedIn, extracts, onAccept, onReject, onOpenCode, onJumpToExtract }: {
   op: Op;
   code: Code | undefined;
   N: number;
   placedIn: string[];
   extracts: Extract[];
+  onAccept: () => void;
   onReject: () => void;
   onOpenCode: () => void;
   onJumpToExtract: (e: Extract) => void;
@@ -115,10 +116,13 @@ function ProposedCard({ op, code, N, placedIn, extracts, onReject, onOpenCode, o
         </p>
       ))}
       <div className="wb-actions">
-        <span className="wb-muted">leave it staged to accept</span>
-        <button className="wb-btn wb-btn-ghost wb-tiny" title="undo the agent's proposal" onClick={onReject}>
+        <button className="wb-btn wb-btn-primary wb-tiny" title="place it now, as your decision" onClick={onAccept}>
+          accept
+        </button>
+        <button className="wb-btn wb-btn-ghost wb-tiny" title="drop the agent's proposal; nothing changes" onClick={onReject}>
           reject
         </button>
+        <span className="wb-muted">or leave it: it is applied when you hand the pass back</span>
       </div>
     </div>
   );
@@ -192,6 +196,9 @@ export function ThemeInspector({ theme, extracts, wb, onJumpToExtract, onOpenCod
   rqs: { id: string; text: string }[];
 }) {
   const b = wb.bundle!;
+  const [foldInto, setFoldInto] = useState('');
+  const [confirmDrop, setConfirmDrop] = useState(false);
+  const others = b.themes.filter((t) => t.id !== theme.id && t.status !== 'merged' && t.status !== 'dropped');
   const comment = (text: string) => wb.stage({ op: 'comment', target: theme.id, args: { text }, view: 'themes', by: 'user' });
   const threads = threadsFor(wb.inbox, theme.id);
   const tension = new Set(theme.tensions);
@@ -274,6 +281,7 @@ export function ThemeInspector({ theme, extracts, wb, onJumpToExtract, onOpenCod
               N={b.N}
               placedIn={placedElsewhere(String(o.target))}
               extracts={extractsOfCode(String(o.target))}
+              onAccept={() => void wb.accept(o.id)}
               onReject={() => wb.undo(o.id)}
               onOpenCode={() => onOpenCode?.(String(o.target))}
               onJumpToExtract={onJumpToExtract}
@@ -375,6 +383,55 @@ export function ThemeInspector({ theme, extracts, wb, onJumpToExtract, onOpenCod
               {v}
             </button>
           ))}
+        </div>
+      </div>
+
+      <div className="wb-field">
+        <label>decide</label>
+        <div className="wb-actions wb-wrap">
+          <select className="wb-select" value={foldInto} onChange={(e) => setFoldInto(e.target.value)} aria-label="fold into">
+            <option value="">fold into…</option>
+            {others.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.id} · {t.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="wb-btn wb-btn-ghost"
+            disabled={!foldInto}
+            title={foldInto ? `${theme.id}'s codes, tensions and quotes move into ${foldInto}; ${theme.id} keeps its record as merged` : 'pick a destination'}
+            onClick={() => {
+              wb.stage(draft('merge-theme', theme.id, { into: foldInto }));
+              setFoldInto('');
+            }}
+          >
+            fold into {foldInto || '…'}
+          </button>
+          {confirmDrop ? (
+            <span className="wb-inline-form">
+              <span className="wb-warn">
+                Drop {theme.id}? Its {theme.codes.length} code(s) return to unplaced; the brief, claims and tensions stay in the record as
+                dropped, and the strip under the board can restore it.
+              </span>
+              <button
+                className="wb-btn wb-btn-danger"
+                onClick={() => {
+                  wb.stage(draft('drop-theme', theme.id, {}));
+                  setConfirmDrop(false);
+                }}
+              >
+                drop it
+              </button>
+              <button className="wb-btn wb-btn-ghost" onClick={() => setConfirmDrop(false)}>
+                keep
+              </button>
+            </span>
+          ) : (
+            <button className="wb-btn wb-btn-ghost" onClick={() => setConfirmDrop(true)} title="drop this theme; its record is kept and can be restored">
+              drop this theme
+            </button>
+          )}
         </div>
       </div>
 

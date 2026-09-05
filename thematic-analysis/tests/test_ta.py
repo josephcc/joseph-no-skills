@@ -1560,3 +1560,84 @@ def test_a_drag_moves_only_the_membership_it_left(study: ta.Analysis):
     assert (an.theme("TH1")["codes"], an.theme("TH3")["codes"]) == (["control"], [])
     with pytest.raises(SystemExit, match="no theme TH9"):
         ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "assign-theme", "target": "control", "args": {"theme": "TH2", "from": "TH9"}})])
+
+
+def test_dropping_a_theme_keeps_its_record_unplaces_its_codes_and_can_be_undone(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "theme", "new", "A parent theme", "--brief", "## Rule\nsomething")
+    run(study, "theme", "new", "A sub-theme", "--parent", "TH1")
+    run(study, "theme", "new", "Another theme")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    run(study, "theme", "assign", "trust", "--to", "TH3")
+    assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "drop-theme", "target": "TH1", "args": {"why": "the codes tell TH3's story"}})]) == 0
+    an = ta.Analysis(study.root)
+    th = an.theme("TH1")
+    assert th["status"] == "dropped" and th["codes"] == ["control"] and th["brief"].startswith("## Rule")   # the record stays
+    assert an.theme("TH2")["parent"] is None                                    # the sub-theme is promoted, not orphaned
+    assert "UNPLACED --> control(control)" in ta.theme_mermaid(an)             # its codes are unplaced again
+    assert "TH1" not in ta.themes_report(an) and "TH3 · Another theme" in ta.themes_report(an)
+    assert ta.codes_in_several_themes(an) == {}
+    memo = (study.root / "memos.md").read_text()
+    assert "TH1 \"A parent theme\" dropped (user): the codes tell TH3's story" in memo and "TH2 promoted" in memo
+    errors, _ = ta.validate(an)
+    assert errors == []
+    # dropping twice is a no-op, dropping a merged theme is refused
+    assert ta.main(["-d", str(study.root), "theme", "drop", "TH1"]) == 0
+    run(study, "theme", "merge", "TH2", "TH3")
+    with pytest.raises(SystemExit, match="was merged into TH3"):
+        ta.main(["-d", str(study.root), "theme", "drop", "TH2"])
+    # the way back: status to candidate brings it back whole
+    run(study, "theme", "set", "TH1", "status", "candidate")
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["status"] == "candidate" and an.theme("TH1")["codes"] == ["control"]
+    assert "TH1 --> control(control)" in ta.theme_mermaid(an)
+
+
+def test_accepting_a_proposal_runs_it_now_as_the_researchers_decision_and_clears_it(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "extract", "T-01", "13", "--codes", "control", "--kind", "did")
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    assert ta.main(["-d", str(study.root), "stage", "--op", json.dumps({"op": "select-quote", "target": "TH1", "args": {"extract": "E-0002"}, "note": "the one did"})]) == 0
+    assert ta.main(["-d", str(study.root), "stage", "--op", json.dumps({"op": "recode", "target": "E-0001", "args": {"remove": ["control"]}})]) == 0   # would leave no codes
+    an = ta.Analysis(study.root)
+    ids = [o["id"] for o in ta.read_inbox(an)]
+    assert [o["by"] for o in ta.read_inbox(an)] == ["agent", "agent"]
+    # accept the good one: applied now, as the researcher's, and gone from the inbox
+    assert ta.main(["-d", str(study.root), "accept", ids[0]]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["selected_extracts"] == ["E-0002"]
+    assert [o["id"] for o in ta.read_inbox(an)] == [ids[1]]
+    log = [json.loads(l) for l in (study.root / "reviews" / f"{ta.today()}-applied.jsonl").read_text().splitlines()]
+    row = next(o for o in log if o["id"] == ids[0])
+    assert (row["by"], row["proposed_by"], row["status"]) == ("user", "agent", "applied") and row["accepted_at"] and row["note"] == "the one did"
+    assert any(o["id"] == ids[0] and o.get("proposed_by") == "agent" for o in ta.direct_changes(an))   # the agent sees the acceptance
+    # accept the bad one: it fails on its own reason and stays, marked
+    assert ta.main(["-d", str(study.root), "accept", ids[1]]) == 1
+    left = ta.read_inbox(ta.Analysis(study.root))
+    assert len(left) == 1 and left[0]["status"] == "failed" and "no codes" in left[0]["error"]
+    assert ta.Analysis(study.root).extract("E-0001")["codes"] == ["control"]
+    with pytest.raises(SystemExit, match="no staged operation op-9999"):
+        ta.main(["-d", str(study.root), "accept", "op-9999"])
+
+
+def test_a_thread_on_an_accepted_proposal_follows_what_it_created(study: ta.Analysis):
+    proposal = ta.append_inbox(ta.Analysis(study.root), {"op": "new-theme", "args": {"name": "Checking is a habit"}, "by": "agent"})
+    thread = stage(study, "comment", proposal["id"], text="is this a theme or a sub-theme?")
+    with pytest.raises(SystemExit, match="is a thread"):
+        ta.main(["-d", str(study.root), "accept", thread["id"]])
+    assert ta.main(["-d", str(study.root), "accept", proposal["id"]]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["name"] == "Checking is a habit"
+    left = ta.read_inbox(an)
+    assert [o["id"] for o in left] == [thread["id"]] and left[0]["target"] == "TH1" and left[0]["about"] == proposal["id"]
+
+
+def test_accept_json_mode_prints_only_json(study: ta.Analysis, capsys):
+    run(study, "theme", "new", "A claim")
+    proposal = ta.append_inbox(ta.Analysis(study.root), {"op": "set-theme-field", "target": "TH1", "args": {"field": "brief", "value": "## Rule\nproposed"}, "by": "agent"})
+    capsys.readouterr()
+    assert ta.main(["-d", str(study.root), "accept", proposal["id"], "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)          # the daemon parses stdout whole
+    assert [o["id"] for o in out["accepted"]] == [proposal["id"]] and out["failed"] == {}
+    assert ta.Analysis(study.root).theme("TH1")["brief"].startswith("## Rule")

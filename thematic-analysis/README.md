@@ -62,9 +62,11 @@ finished when you say it is, not when the tool decides you have clicked enough. 
 **Everything you click changes the analysis — through the script.** The browser never writes an
 analysis file itself; it asks the daemon to run `ta.py`, which does at once what `apply` would
 have done, and records it in `reviews/*-applied.jsonl` as yours. Change your mind by doing the
-opposite: drag the card back, flip the field again. What does *not* happen at once is the
-agent's proposals — those sit in the Pending drawer until you leave them standing (acceptance) or
-undo them.
+opposite: drag the card back, flip the field again. What does *not* happen by itself is the
+agent's proposals. They are drawn where they would land — a dashed card on the board, a chosen
+quote marked *proposed by the agent* — and wherever one is drawn, and in the Pending drawer, it has
+**accept** (carried out now, recorded as your decision) and **reject** (dropped, nothing changes);
+the drawer has *accept all*. One you leave standing is applied when you hand the pass back.
 
 **A codebook version is an application, not an edit.** Reword a definition, accept a code, merge
 two: the header chip counts them as *unapplied* and nothing is versioned. The version moves when
@@ -164,9 +166,14 @@ to ask for a re-read of that participant for that code.
 
 > Let's do themes.
 
-The Themes view is a board: codes are cards, themes are columns, dragging moves a card. A theme
-you create exists at once, and so does everything you do to it — drop the codes you already know
-it rests on, write its brief, ask for what you might be missing.
+The Themes view is a board: codes are cards, themes are columns, dragging moves a card. Every
+column ends in a dashed **+ add a code here too** foot: drop a card there (or hold ⌥ while dropping
+anywhere on the column) to *add* the code to a second theme instead — it stays where it was, the
+card says "also in TH3", and its extracts count toward both. The code's own inspector has the same
+move as *place here too*. A theme you create exists at once, and so does everything you do to it — drop the codes
+you already know it rests on, write its brief, ask for what you might be missing. A theme that did not work out is
+dropped from its inspector (or folded into another): its codes return to unplaced, its record is
+kept, and a strip under the board restores it with one click.
 
 Each theme's inspector holds, in the order the work is done: its name and essence (with the
 two-sentence scope test); its **brief** — the rule for what belongs, the near-miss that does not,
@@ -194,8 +201,13 @@ place if the reading is off — before any theme is proposed against it.
 
 > Pick the quotes for the themes going in the paper.
 
-The Quotes view shows the whole bank per theme with word counts and an inline/block mark, the
-ordered list of what is going in, and the attribution spread updating as you choose — so
+The Quotes view shows the whole bank per theme — each extract with its codes (the theme's own
+solid, any other it carries dimmed, so a quote that is only here through a tangential code reads
+as such; a code filter narrows the bank to one), its timestamp with the recording's frame one hover
+away where `watch-recording` left frames (click it to open the transcript there), word counts and
+an inline/block mark — the ordered list of what is going in, the attribution spread updating as
+you choose, and on the right the theme's own inspector, the same one the board shows (brief, the
+agent's proposals and claims, story, tensions), so the story is written with the evidence in view — so
 "a results section that quotes P3 seven times is a case study of P3" is caught while you are
 choosing rather than afterwards. To shorten a quote, select the words: the script cuts them out of
 the stored extract, so the paper's version is still transcript text and still verifies.

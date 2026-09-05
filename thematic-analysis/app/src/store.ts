@@ -9,7 +9,7 @@
 // as theirs. The agent's proposals are the other thing in the inbox, and the only thing the
 // researcher accepts (by leaving them) or rejects (by undoing them).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { deleteThreadOp, execOp, loadBundle, loadCollate, loadTranscript, setThreadStatus, stageOp, undoOp, watch } from './api';
+import { acceptOp, deleteThreadOp, execOp, loadBundle, loadCollate, loadTranscript, setThreadStatus, stageOp, undoOp, watch } from './api';
 import type { Applied } from './api';
 import type { Bundle, Collate, Op, TranscriptPayload } from './types';
 import type { Draft } from './ops';
@@ -29,6 +29,8 @@ export interface Workbench {
   /** Carry out a gesture: a thread is staged for the agent; anything else is applied at once. */
   stage: (d: Draft) => Promise<Applied | null>;
   undo: (id: string) => Promise<void>;
+  /** Accept a proposal: carried out now as the researcher's decision, and gone from the inbox. */
+  accept: (id: string) => Promise<boolean>;
   thread: (id: string, status: 'resolved' | 'pending') => Promise<void>;
   deleteThread: (id: string) => Promise<void>;
   reply: (threadId: string, text: string) => Promise<void>;
@@ -148,6 +150,34 @@ export function useWorkbench(dir: string | null): Workbench {
     [dir, say],
   );
 
+  const accept = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!dir) return false;
+      // Accepting is a gesture, so it takes its turn in the same queue as the others.
+      const run = async (): Promise<boolean> => {
+        try {
+          const { accepted, failed } = await acceptOp(dir, id);
+          await reload();
+          const why = failed[id];
+          if (why) {
+            say(`Could not accept ${id}: ${why}`);
+            return false;
+          }
+          const row = accepted[0];
+          say(row?.result ? `Accepted ${id}: ${row.result}` : `Accepted ${id}`);
+          return true;
+        } catch (e) {
+          say(`Could not accept ${id}: ${(e as Error).message}`);
+          return false;
+        }
+      };
+      const next = queue.current.then(run, run);
+      queue.current = next;
+      return next;
+    },
+    [dir, say, reload],
+  );
+
   const thread = useCallback(
     async (id: string, status: 'resolved' | 'pending') => {
       if (!dir) return;
@@ -185,7 +215,7 @@ export function useWorkbench(dir: string | null): Workbench {
     [stage],
   );
 
-  return { bundle, error, version, pending, inbox, patch, toast, say, reload, stage, undo, thread, deleteThread, reply };
+  return { bundle, error, version, pending, inbox, patch, toast, say, reload, stage, undo, accept, thread, deleteThread, reply };
 }
 
 export function useTranscript(dir: string | null, tid: string | null, version: number) {

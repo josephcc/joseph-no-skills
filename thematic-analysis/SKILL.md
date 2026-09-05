@@ -458,7 +458,9 @@ never typed; `ta.py coverage` prints the n/N.
 
 **Negotiate.** The Themes view (`ta.py open themes`) is the board: columns are themes, cards are
 codes with their n/N and kind mix, and dragging a card moves it — at once, and only out of the
-column it left, since a code may sit in more than one theme. Above the board sits the paper's framing as you read it, correctable in place.
+column it left. A code may sit in more than one theme: the researcher drops the card on a column's
+*+ add a code here too* foot, or ⌥-drops it, or uses *place here too* in the code's inspector; the
+card then says "also in TH3", and its extracts count toward each theme. Above the board sits the paper's framing as you read it, correctable in place.
 Each theme's inspector holds, in the order the work is done: name, essence (with the two-sentence
 counter), the brief, the tray of your proposed codes and your case for the edge, the story, the
 RQ, `in_paper`, your claims with their evidence lines, and the tensions list they drag extracts
@@ -545,8 +547,10 @@ there, which claim the paper makes is decided when they write it.
 
 **Their gestures are decisions; yours are proposals.** Nothing the researcher does in the workbench
 waits for you: the daemon carries it out at once and the applied log records it. What waits is what
-you staged, for them to leave standing or undo. So a pass begins with `changes`, not `inbox`, and you
-never "apply" something they did — it is done; understand it, and follow it where it leads.
+you staged, which they **accept** (carried out at once as their decision, `proposed_by: agent` in
+the log — `changes` shows it as an acceptance), **reject** (undone), or leave standing for `apply`.
+So a pass begins with `changes`, not `inbox`, and you never "apply" something they did — it is
+done; understand it, and follow it where it leads.
 
 **Propose as an operation, argue in prose.** Anything the script can do — merge, reparent, split,
 accept, retire, recode, select a quote — is staged with `ta.py stage` so the decision happens where
@@ -610,6 +614,7 @@ ta.py stage --op '{"op": "assign-theme", "target": CODE, "args": {"theme": "TH1"
 ta.py theme propose TH1 --near-miss CODE "why not" ... --reading "..." [--round N] [--close-request]
 ta.py theme claim TH1 --file claims.json [--replace] | --check | --clear   # 2–4 claims; evidence computed here; refuses quotes
 ta.py theme request [TH1] [--codes] [--claims] [--done]   # the errands asked from the board
+ta.py theme merge TH2 TH1 · theme drop TH3 [--why "..."]   # fold one theme into another · drop one: codes unplaced, record kept; `theme set TH3 status candidate` restores
 ta.py theme tension TH1 --add E-0099
 ta.py theme select TH1 --add E-0041 --at 0      # the quotes, in order
 ta.py theme trim TH1 E-0041 --from "..." --to "..."   # the inline form, sliced from the extract

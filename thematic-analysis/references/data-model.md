@@ -220,6 +220,12 @@ themes:
 stored text and saves the slice. The extract is untouched, the quote bank prints the trim and says
 what it was cut from, and `verify-quotes` still passes on the draft.
 
+A theme is never deleted: `drop-theme` (the inspector's *drop this theme*, or `theme drop`) sets
+`status: dropped` and keeps the record — brief, claims, tensions, codes — while every count, report
+and board filter skips it, so its codes are unplaced again; a sub-theme it had is promoted to top
+level. `theme set TH3 status candidate` (the board's *restore*) brings it back whole. `merge-theme`
+folds one theme's codes, tensions and quotes into another and marks the source `merged`.
+
 Participants per theme are never stored; they are derived from the extracts carrying the theme's
 codes, so the count in the paper can always be regenerated. `tensions` is not optional in spirit:
 Braun & Clarke expect a pattern to have exceptions and expect the report to keep them.
@@ -311,6 +317,7 @@ code → theme → the review round where the user accepted it.
 | `report` | regenerates `reports/`; archives any report that carries interactive-plan comments to `reviews/` first, so feedback left on a rendering is never lost |
 | `validate` (added) | an extract whose text cannot be located inside its own turn (the workbench cannot highlight it); an inbox line that is not valid JSON or names an operation the script has no handler for; a frozen codebook carrying unapplied changes |
 | `exec --op '{...}'` | carries out operation(s) at once through the same handler `apply` uses, under the same lock, archived as `by: user` — the daemon's path for every gesture that is not a thread |
+| `accept op-0031 ...` | carries out staged proposal(s) now as the researcher's decision — the row keeps its id and gains `proposed_by` and `accepted_at` — and clears them from the inbox; a failure keeps its reason there. The daemon's path for the accept button |
 | `changes [--ack]` | the researcher's direct changes since the agent last acknowledged them (by op id, no clock), grouped by view with each result |
 | `bump ["label"] [--freeze]` | marks an application: the pending changes become one versioned changelog entry; nothing pending, nothing marked. `mark-coded` does the same on the first transcript of a pass |
 | `theme fit TH1` | every live code the theme does not gather, with co-occurrence on the theme's extracts, shared participants, wording overlap with the brief, kind mix, and current placement — the agent's recall check before proposing, not a shortlist. Read-only. |

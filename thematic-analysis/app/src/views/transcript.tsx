@@ -520,6 +520,7 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
             line={selectedStaged.line}
             op={wb.inbox.find((o) => o.id === selectedStaged.row.op)}
             wb={wb}
+            onAccept={() => void wb.accept(selectedStaged.row.op)}
             onUndo={() => wb.undo(selectedStaged.row.op)}
             onClose={() => select(null)}
           />

@@ -209,7 +209,7 @@ export function App() {
       {view === 'codebook' && <CodebookView dir={dir} wb={wb} nav={nav} />}
       {view === 'coverage' && <CoverageView wb={wb} nav={nav} />}
       {view === 'themes' && <ThemesView dir={dir} wb={wb} nav={nav} />}
-      {view === 'quotes' && <QuotesView wb={wb} nav={nav} />}
+      {view === 'quotes' && <QuotesView dir={dir} wb={wb} nav={nav} />}
       {view === 'study' && <StudyView wb={wb} />}
       {view === 'history' && <HistoryView wb={wb} />}
 
@@ -217,6 +217,10 @@ export function App() {
         <PendingDrawer
           ops={wb.pending}
           onUndo={wb.undo}
+          onAccept={(id) => void wb.accept(id)}
+          onAcceptAll={async (ids) => {
+            for (const id of ids) if (!(await wb.accept(id))) break;
+          }}
           onOpen={openOp}
           onResolve={(id) => wb.thread(id, 'resolved')}
           onClose={() => setDrawer(false)}
