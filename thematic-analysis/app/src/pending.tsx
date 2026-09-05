@@ -1,8 +1,9 @@
-// The pending drawer: everything staged, with an undo per line.
+// The pending drawer: what waits for the agent, with an undo per line.
 //
-// The browser writes only inbox.jsonl, so this is the whole of what the researcher has
-// said and the agent has not yet applied. Undo before hand-off deletes the line; after
-// `apply` it would be a new operation, which is why the drawer says who staged what.
+// The researcher's own gestures do not wait — they are carried out at once and recorded in
+// the applied log — so what is here is the agent's proposals (accepted by leaving them,
+// rejected by undoing them) and the threads. Undo deletes the line; after `apply` a change
+// of mind is a new operation, which is why the drawer says who staged what.
 import { describe, isThread } from './ops';
 import type { Op } from './types';
 
@@ -68,14 +69,14 @@ export function PendingDrawer({ ops, onUndo, onOpen, onResolve, onClose, applyHi
   return (
     <aside className="wb-drawer">
       <header>
-        <b>Staged for the agent</b>
+        <b>Waiting for the agent</b>
         <button className="wb-btn wb-btn-ghost" onClick={onClose}>
           Close
         </button>
       </header>
       {actionable.length === 0 && threads.length === 0 && (
         <p className="wb-muted">
-          Nothing staged. Dispute a coding, accept a code, or move a card, and it lands here as one typed operation.
+          Nothing waiting. Your own edits apply as you make them; what waits here is the agent's proposals, and your threads.
         </p>
       )}
       {proposals.length > 0 && (
@@ -88,6 +89,10 @@ export function PendingDrawer({ ops, onUndo, onOpen, onResolve, onClose, applyHi
               <Row key={o.id} o={o} onUndo={onUndo} onOpen={onOpen} />
             ))}
           </ul>
+          <p className="wb-muted wb-apply-hint">
+            A proposal you leave here is accepted when you hand the pass back and the agent runs:
+            <code>{applyHint}</code>
+          </p>
         </>
       )}
       {mine.length > 0 && (
@@ -99,8 +104,7 @@ export function PendingDrawer({ ops, onUndo, onOpen, onResolve, onClose, applyHi
             ))}
           </ul>
           <p className="wb-muted wb-apply-hint">
-            Nothing is applied until you hand the pass back. Then the agent runs:
-            <code>{applyHint}</code>
+            These wait for the agent; it runs <code>{applyHint}</code> on the next pass.
           </p>
         </>
       )}

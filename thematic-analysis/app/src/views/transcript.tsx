@@ -50,6 +50,27 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
     return out;
   }, [payload?.extracts, wb.patch.extracts]);
 
+  // Counters have to come from the same place the chips do, or "Done with T-02" clears every
+  // badge on the page except the two that say how much is left — which reads as "keep going".
+  const newHere = useMemo(() => [...shown.values()].filter((e) => e.new && !e.dropped).length, [shown]);
+  // Done is done when nothing here is new: the stamp lands at once, so this reads the data (and
+  // the in-flight overlay for the half-second before the file comes back).
+  const reviewedStaged = useMemo(
+    () =>
+      (!!nav.t && wb.patch.extracts && [...shown.values()].length > 0 && [...shown.values()].every((e) => !e.new || e.dropped)) ||
+      (!!nav.t && wb.pending.some((o) => o.op === 'mark-reviewed' && (o.args as { transcript?: string })?.transcript === nav.t)),
+    [wb.pending, wb.patch.extracts, nav.t, shown],
+  );
+  // Per-transcript counts for the rail: one pass over the staged extract patches.
+  const newByTranscript = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const row of bundle.transcripts) out[row.id] = row.new_extracts;
+    for (const e of bundle.extracts_all) {
+      if (e.new && wb.patch.extracts[e.id]?.reviewed) out[e.transcript] = Math.max(0, (out[e.transcript] ?? 0) - 1);
+    }
+    return out;
+  }, [bundle.transcripts, bundle.extracts_all, wb.patch.extracts]);
+
   const visible = useCallback(
     (e: Extract & { pending: boolean; dropped: boolean }): boolean => {
       if (!kinds[e.kind]) return false;
@@ -184,7 +205,13 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
                 <span className="wb-tp">{row.participants.join(', ') || '—'}</span>
                 <span className="wb-tmeta">
                   {row.extracts} ex
-                  {row.new_extracts > 0 && <b className="wb-new"> {row.new_extracts} new</b>}
+                  {(newByTranscript[row.id] ?? row.new_extracts) > 0 ? (
+                    <b className="wb-new"> {newByTranscript[row.id] ?? row.new_extracts} new</b>
+                  ) : row.new_extracts > 0 ? (
+                    <b className="wb-reviewed-flag" title="the rest of this transcript is marked reviewed">
+                      {' '}reviewed
+                    </b>
+                  ) : null}
                 </span>
                 {row.state !== 'current' && <span className="wb-tstate">{row.state}</span>}
               </button>
@@ -209,7 +236,11 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
         <div className="wb-toolbar">
           <span className="wb-tool-title">
             <b>{t.id}</b> · {t.participants.join(', ')} · {t.turns} turns · {payload.stats.extracts} extracts
-            {payload.stats.new > 0 && <b className="wb-new"> · {payload.stats.new} new</b>}
+            {newHere > 0 ? (
+              <b className="wb-new"> · {newHere} new</b>
+            ) : payload.stats.new > 0 ? (
+              <b className="wb-reviewed-flag" title="nothing here is waiting on you"> · all reviewed</b>
+            ) : null}
             {frames.length > 0 ? (
               <span className="wb-tool-frames" title={`from ${payload.frames.dir}`}>
                 {' '}· ▣ {frames.length} frames
@@ -246,13 +277,18 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
             ★ only
           </button>
           <button
-            className="wb-btn wb-btn-primary"
-            title="stamp every extract you did not act on as reviewed"
+            className={`wb-btn ${reviewedStaged ? 'wb-btn-done' : 'wb-btn-primary'}`}
+            disabled={reviewedStaged}
+            title={
+              reviewedStaged
+                ? `everything in ${t.id} is marked reviewed`
+                : 'stamp every extract you did not act on as reviewed — at once'
+            }
             onClick={() =>
-              wb.stage(draft('mark-reviewed', null, { transcript: t.id })).then(() => wb.say(`${t.id}: the rest of the coding is marked reviewed.`))
+              wb.stage(draft('mark-reviewed', null, { transcript: t.id })).then((o) => o && wb.say(`${t.id}: the rest of the coding is marked reviewed.`))
             }
           >
-            Done with {t.id}
+            {reviewedStaged ? `✓ ${t.id} reviewed` : `Done with ${t.id}`}
           </button>
           <button className="wb-btn wb-btn-ghost" onClick={() => openInEditor(dir, t.id, 1).catch(() => wb.say('Could not open the editor.'))}>
             open the file
@@ -405,7 +441,14 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
                         <span className="wb-echip-n">{ordinal.get(p.id)}</span>
                         <span className="wb-echip-id">new</span>
                         <span className="wb-echip-kind">{KIND_GLYPH[p.kind]}</span>
-                        <span className="wb-echip-codes">{p.codes.join(' · ')}</span>
+                        <span className="wb-echip-codes">
+                          {p.codes.map((c, ci) => (
+                            <span key={c} className="wb-code-tok">
+                              {ci > 0 && <span className="wb-code-sep"> · </span>}
+                              {c}
+                            </span>
+                          ))}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -429,7 +472,14 @@ export function TranscriptView({ dir, wb, nav }: { dir: string; wb: Workbench; n
                         <span className="wb-echip-kind" title={e.kind}>
                           {KIND_GLYPH[e.kind]}
                         </span>
-                        <span className="wb-echip-codes">{e.codes.join(' · ')}</span>
+                        <span className="wb-echip-codes">
+                          {e.codes.map((c, ci) => (
+                            <span key={c} className="wb-code-tok">
+                              {ci > 0 && <span className="wb-code-sep"> · </span>}
+                              {c}
+                            </span>
+                          ))}
+                        </span>
                         {e.context && <span className="wb-echip-ctx">ctx: {e.context}</span>}
                         {e.highlight && <span className="wb-echip-star">★</span>}
                         {e.hints && e.hints.length > 0 && (
@@ -614,7 +664,7 @@ function NewExtractForm({ codes, onSubmit, onCancel }: {
       </div>
       <div className="wb-actions">
         <button className="wb-btn wb-btn-primary" disabled={!picked.length} onClick={() => onSubmit(picked, kind)}>
-          stage the extract
+          add the extract
         </button>
         <button className="wb-btn wb-btn-ghost" onClick={onCancel}>
           cancel

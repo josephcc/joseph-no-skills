@@ -120,10 +120,12 @@ because deciding who counts as a participant is analytic work, not clerical: a r
 several people, a colleague who joined for ten minutes is context, and (from `watch-recording`)
 presence is not participation.
 
-Read `references/data-model.md` for every field. Two files have exactly one writer, and that is
-the safety story: `extracts.jsonl` is written only by `ta.py`, and `inbox.jsonl` — the operations
-the researcher stages in the workbench — is written only by the browser. `ta.py apply` is where
-they meet. The rule that matters most: **`extracts.jsonl`
+Read `references/data-model.md` for every field. The script is the only writer of the analysis
+files, and that is the safety story: the browser never touches one. **The researcher's own
+gestures in the workbench are carried out at once** — the daemon runs `ta.py exec`, the same
+handler `apply` uses, under the same lock, and `reviews/<date>-applied.jsonl` records them as
+theirs. Only *your* proposals, and their comment threads, wait in `inbox.jsonl` (written only by
+the browser) for `ta.py apply`. The rule that matters most: **`extracts.jsonl`
 is written only by `ta.py extract`**, which copies the quote out of the transcript at the lines
 you name. You never type a quote into any file. You read the transcript with line numbers,
 decide the span and the codes, and let the script copy the text, resolve the speaker to a
@@ -183,6 +185,11 @@ uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> mark-c
 
 (each batch line: `{"transcript": "T-07", "lines": "42-43", "codes": "control,control.rerun", "kind": "said", "from": "...", "to": "...", "context": "...", "note": "..."}`, the last five optional)
 
+`mark-coded` is also where the codebook **version** moves: the version counts applications, not
+edits. Codes added or reworded since the last application sit as *pending* changes; the first
+transcript coded against them makes the new version (`bump` does the same by hand), and the rest
+of the pass shares it. Never bump for an edit.
+
 `extract` refuses interviewer speech, refuses a range that spans two speakers, and folds an
 identical quote into the existing record rather than duplicating it. Use `--from/--to` to trim a
 long turn to the sentences that matter; never edit the text afterwards. Give `context` whenever
@@ -232,17 +239,25 @@ tinted by code family, one chip per extract with its id, kind and codes, the def
 the passage, delta mode so only what changed since the last review is vivid, and every timestamp
 hovering to the `watch-recording` frame so a `did` can be checked against the screen.
 
-**5. Read the feedback and apply it.** When the user says *"review my feedback"*:
+**5. Read what they did, then apply what they left you.** When the user says *"review my
+feedback"*:
 
 ```bash
-uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> inbox
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> changes        # what they changed directly
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> inbox          # your proposals left standing, their threads
 uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> apply --all
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> changes --ack
 ```
 
-`inbox` groups what they staged by view, with the comment threads beside it. `apply` executes the
-operations in the order they were staged, bumps the codebook **once** for the pass, stamps the
-codes whose meaning moved, archives every line to `reviews/<date>-applied.jsonl`, and prints
-`stale`, `validate` and `verify`. An operation that cannot be applied — a definition edit written
+Their own gestures — a recode, a retrim, a dropped extract, an accepted code, a reworded definition,
+a card moved on the board — **were carried out the moment they made them**. `changes` lists them
+from the applied log, grouped by view, with the script's result beside each: read them as decisions
+to understand (and to re-read transcripts for, when a code moved), never as operations to run.
+`inbox` holds what still waits: the proposals you staged that they did not reject — leaving one
+standing is acceptance — and the comment threads. `apply` executes those in the order they were
+staged, records any codebook change among them as pending, archives every line to
+`reviews/<date>-applied.jsonl`, and prints `stale`, `validate` and `verify`. An operation that
+cannot be applied — a definition edit written
 against wording you have since changed, a retire on a code that still holds extracts, an op naming
 an extract that has since been dropped — stays in the inbox with its reason while every other
 operation still runs, so one stale line never holds up the rest of the researcher's feedback. Fix
@@ -252,8 +267,9 @@ round, and reply to threads with `ta.py reply op-0031 "..."` (the user resolves 
 Then look at `stale`. A code added or redefined after a transcript was coded means that transcript
 gets a pass for that code before the next interview, because Braun and Clarke's phase 2 is
 systematic across the *entire* data set, not across the interviews that happened to come after the
-code existed. `stale --json` says which codes changed, so the re-read is targeted; a bump with no
-code change is marked `version-only` and needs nothing.
+code existed. `stale` measures against the codebook as it stands, pending edits included, and
+`stale --json` says which codes changed, so the re-read is targeted. That re-read is an application:
+its first `mark-coded` turns the pending edits into the next version.
 
 **6. Keep the flagged moments.** When a passage turns out to belong in the paper (the system
 predicting an unpublished result, a sceptic being convinced), flag it:
@@ -340,15 +356,90 @@ researcher's time after this pass is what it added. `ta.py open T-04` with the t
 
 ## Operation C. Theme development and selection
 
-Themes are where the analysis happens; codes only organise. Braun and Clarke's phases 3 to 5:
+Themes are where the analysis happens; codes only organise. Braun and Clarke's phases 3 to 5 —
+with the researcher naming, defining and deciding, and you carrying each theme's rule back across
+every code and drafting what the evidence supports.
+
+**Read the paper first.** `ta.py paper` says which draft(s) are registered (`paper --add <path>`
+registers one; the path is stored relative to the analysis folder). Read every registered draft
+**in full** before any theme work in a session. The research questions are the formal framing; the
+draft is the actual one — what the paper argues, in what order, against which related work, with
+which words already committed to — and a theme is drafted against it. Then write what you took as
+one paragraph, `paper --framing "..."`: it sits above the board, where the researcher corrects a
+misreading *before* you propose anything on the strength of it. `paper --digest` (title, abstract,
+headings, every sentence that touches an RQ or a theme by name) is the cheap refresher between
+full reads, not a substitute for one. No draft registered: say so, and work from `study.yaml`'s
+research questions.
 
 **Search (phase 3).** For each code family, `ta.py collate <code>` and read every extract, grouped by
 participant. Then ask which codes, together, tell one story about a research question. A theme is
 a **claim** ("Co-planning afforded steerability", "Reencountered citations read as relevance,
 citation counts as quality"), never a topic ("Trust", "Feature X"), and never an interview
-question restated. Draft the thematic map as a mermaid graph in the review document; a
-`miscellaneous` pile for orphan codes is allowed and temporary. Two levels at most: theme and
-sub-theme.
+question restated. A `miscellaneous` pile for orphan codes is allowed and temporary. Two levels at
+most: theme and sub-theme.
+
+The researcher usually creates the theme themself, on the board (`+ theme`), at the moment the
+reading arrives — and **it exists at once**: they drop the codes they know it rests on, write its
+**brief**, and ask you for the codes they might be missing, each gesture carried out immediately
+and logged (`changes` lists them). The brief is theirs: the rule for what belongs (written the way a code
+definition is), the near-miss that does not, and what they mean to write in the paper. It is
+written early and allowed to be wrong, and it is what your proposals are judged against.
+
+**Service the errands.** `apply` ends by listing open theme errands (`theme request` lists them
+too; the inbox does as well). For each theme that asked for **codes**:
+
+1. `ta.py theme fit TH4` — every live code the theme does not gather, with how often it rides along
+   on the theme's extracts, how much of the theme's cast it shares, how much its wording shares
+   with the brief, its kind mix, and where it currently sits. **It is a recall check, not a
+   shortlist**: its job is to make sure you looked at all thirty-five codes rather than the six you
+   remember. Read the extracts behind each row (`collate CODE`) against the brief. A code that never
+   rides along can still belong; one that always does can still be a different claim.
+2. For each code that belongs, stage one assignment with **one line of why** — the reason this code
+   satisfies this brief, not a summary of the code:
+
+   ```bash
+   uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> stage \
+       --op '{"op": "assign-theme", "target": "graph-overwhelm", "args": {"theme": "TH4", "why": "the participant'"'"'s next move is set by the graph'"'"'s size — the rule'"'"'s first clause"}}'
+   ```
+
+   It appears on the board as a card marked *proposed by the agent* and in the theme's inspector
+   with your line, its n/N, two of its extracts, and a reject button; leaving it staged is
+   acceptance. A code already gathered by another theme may still be proposed — stage it with
+   `"add": true` in `args`, so accepting **adds** it here rather than moving it (without `add`, an
+   assignment is a move, which is what a drag on the board means); the card says where it sits,
+   `validate` warns, and `coverage` prints the extracts then counted twice — including a child
+   reached through its parent in one theme and placed directly in another. Say so in the round
+   document when two themes' n/N rest on the same sentences.
+3. Record the **near misses** — about five, each with the clause of the brief that excluded it —
+   and the other defensible boundary where one genuinely exists (the tight reading and the
+   inclusive one, with what each takes and costs):
+
+   ```bash
+   uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> theme propose TH4 \
+       --near-miss coverage "about what the corpus lacks, not how much of it is on the canvas" \
+       --reading "The inclusive reading takes coverage.gap too: ... It costs the theme its edge against TH1." \
+       --round 1 --close-request
+   ```
+
+   A rejection the researcher disagrees with is the fastest sign the brief's boundary is wrong,
+   which is why the near misses earn their five lines.
+
+For each theme that asked for **claims** — and for any theme that has a brief, codes, and a
+tension when the round document is being written:
+
+4. `ta.py theme claim TH4 --file claims.json --replace` — **two to four candidate claims**, each a
+   sentence a reader could disagree with, each naming the tension it survives (`{"text": ...,
+   "tension": "E-0113"}`). Different claims cut the same evidence differently — the strong-but-
+   narrow one and the safe-but-flat one — and seeing them together is what makes the researcher's
+   choice a choice. Cite extracts by id in the text; **never quote** — the command refuses a
+   quotation, and the inspector and `reports/themes.md` render the words from the record. The
+   evidence line (n/N, the kind mix, the codes) is computed by the script at write time; never
+   type one. The command refuses a theme with no tension: record one first (`theme tension TH4
+   --add E-...`). Claims are **your field**: written directly, rewritten freely when the evidence
+   moves (`theme claim TH4 --check`; `validate` says when they have gone stale), and never staged
+   for acceptance. The researcher judges them when writing the paper.
+
+Then `ta.py theme request TH4 --done` for anything `--close-request` did not close.
 
 **Review (phase 4).** Level one: `ta.py collate TH1` for each candidate and read it whole. Do the
 extracts cohere (Patton's internal homogeneity)? Are the themes distinct from each other
@@ -361,21 +452,25 @@ you have not looked at hard enough, and the write-up will need the exception any
 scope will not fit in two sentences, the theme is doing too much), a `story` paragraph that
 interprets rather than paraphrases (what does the pattern mean, what conditions produced it, why
 this framing and not another, what it implies for the design or the research question), the codes
-it gathers, and the `rq` it answers. Participants per theme are derived from the extracts, never
-typed; `ta.py coverage` prints the n/N.
+it gathers, and the `rq` it answers. The accepted claim is the natural opening of the story — the
+inspector has a button for exactly that. Participants per theme are derived from the extracts,
+never typed; `ta.py coverage` prints the n/N.
 
 **Negotiate.** The Themes view (`ta.py open themes`) is the board: columns are themes, cards are
-codes with their n/N and kind mix, and dragging a card stages an `assign-theme`. Each theme's
-inspector holds the essence (with the two-sentence counter), the story, the RQ, `in_paper`, and the
-tensions list you drag extracts into — phases 4 and 5 in one pane. `ta.py theme mermaid` exports
-the map from `themes.yaml`, so the picture in a document can never disagree with the board.
+codes with their n/N and kind mix, and dragging a card moves it — at once, and only out of the
+column it left, since a code may sit in more than one theme. Above the board sits the paper's framing as you read it, correctable in place.
+Each theme's inspector holds, in the order the work is done: name, essence (with the two-sentence
+counter), the brief, the tray of your proposed codes and your case for the edge, the story, the
+RQ, `in_paper`, your claims with their evidence lines, and the tensions list they drag extracts
+into. `ta.py theme mermaid` exports the map from `themes.yaml`, so the picture in a document can
+never disagree with the board.
 
 Then author `reviews/YYYY-MM-DD-themes-N.plan.md` following Round B for what the board cannot
 carry: per theme the story paragraph, three representative extracts, the tension and what it does
 to the claim, the level-2 result, and the naming question. End with the overall story — how the
-themes together answer the research questions, and in what order. That paragraph is the one most
-worth the user's edits. Include / merge / split / drop are moves on the board, not questions in
-prose.
+themes together answer the research questions, and in what order, against the framing the draft
+already commits to. That paragraph is the one most worth the user's edits. Include / merge / split
+/ drop are moves on the board, not questions in prose.
 
 ---
 
@@ -444,7 +539,14 @@ building a theme from the participants you remember, `collate` it and look at wh
 is negotiated in the workbench and the round documents. You may recommend, and should, with the
 evidence beside the recommendation — as a `proposal` field on the code and a staged operation they
 can accept in one click. You do not accept your own candidate codes, and you do not resolve their
-comment threads.
+comment threads. A theme's `claims` are the one field that is yours to write rather than theirs to
+accept — they are your summary of what the evidence supports, kept current as it moves — and even
+there, which claim the paper makes is decided when they write it.
+
+**Their gestures are decisions; yours are proposals.** Nothing the researcher does in the workbench
+waits for you: the daemon carries it out at once and the applied log records it. What waits is what
+you staged, for them to leave standing or undo. So a pass begins with `changes`, not `inbox`, and you
+never "apply" something they did — it is done; understand it, and follow it where it leads.
 
 **Propose as an operation, argue in prose.** Anything the script can do — merge, reparent, split,
 accept, retire, recode, select a quote — is staged with `ta.py stage` so the decision happens where
@@ -480,9 +582,9 @@ ta.py extract T-01 42-43 --codes a --from "the biggest thing" --to "whole prompt
 ta.py recode E-0041 --add trust --remove control --kind did   # on a reviewed extract: stages a proposal; --force edits
 ta.py retrim E-0041 --from "being able" --to "that step."    # re-cut the span, same id, still verbatim
 ta.py drop E-0041 E-0042                         # and say why in memos.md
-ta.py mark-coded T-01                            # transcript fully coded with the current codebook
+ta.py mark-coded T-01                            # transcript fully coded; pending edits become the next version here
 ta.py mark-reviewed --transcript T-01            # the researcher has seen this coding (the Done button)
-ta.py bump "what changed" [--freeze]             # new codebook version; freeze after the last interview
+ta.py bump ["label"] [--freeze]                  # mark an application by hand: pending edits become a version; never for an edit
 
 # the codebook, structurally
 ta.py new-code ID "definition" --parent P        # a candidate code
@@ -493,10 +595,21 @@ ta.py split-code PARENT child --extracts E-1 E-2 --definition "..."
 ta.py merge-code SRC DST --why "..."             # recodes extracts, keeps SRC as merged
 ta.py rename-code OLD NEW
 
+# the paper the themes have to land in
+ta.py paper                                      # what is registered, and the framing
+ta.py paper --add ../paper/main.tex              # register a draft; then read it in full
+ta.py paper --framing "..."                      # one paragraph: what the paper argues, shown above the board
+ta.py paper --digest | --check                   # the refresher between full reads · verify-quotes over every draft
+
 # themes and quotes
-ta.py theme new "A claim, not a topic" --rq RQ1
+ta.py theme new "A claim, not a topic" --rq RQ1 [--brief "..."]
 ta.py theme assign CODE --to TH1 | --misc | --unplaced
-ta.py theme set TH1 essence|story|name|rq|in_paper|status "..."
+ta.py theme set TH1 essence|brief|story|name|rq|in_paper|status "..."
+ta.py theme fit TH1 [--json]                     # every live code against the theme: the recall check before proposing
+ta.py stage --op '{"op": "assign-theme", "target": CODE, "args": {"theme": "TH1", "why": "...", "add": true}}'   # a proposal, with its line; `add` keeps it where it also sits
+ta.py theme propose TH1 --near-miss CODE "why not" ... --reading "..." [--round N] [--close-request]
+ta.py theme claim TH1 --file claims.json [--replace] | --check | --clear   # 2–4 claims; evidence computed here; refuses quotes
+ta.py theme request [TH1] [--codes] [--claims] [--done]   # the errands asked from the board
 ta.py theme tension TH1 --add E-0099
 ta.py theme select TH1 --add E-0041 --at 0      # the quotes, in order
 ta.py theme trim TH1 E-0041 --from "..." --to "..."   # the inline form, sliced from the extract
@@ -506,7 +619,7 @@ ta.py reread T-04 --code trust --note "..."      # ask for a re-read; --done to 
 # the audit
 ta.py validate · verify · coverage · dupes · stale       # add --json for the workbench's copy
 ta.py collate CODE|THEME [--json]                # all extracts, grouped by participant
-ta.py verify-quotes FILE.md [--quiet]            # every quote in a document is verbatim + attributed
+ta.py verify-quotes [FILE.md] [--quiet]          # every quote in a document is verbatim + attributed; default: the registered draft(s)
 ta.py codebook-table                             # appendix table
 ta.py report                                     # reports/{coverage,codebook,themes,quote-bank,audit}.md
 ta.py annotate T-01 -o reviews/annotated/T-01-P1.plan.md   # the coded transcript as text/PDF, for a co-author
@@ -515,18 +628,22 @@ ta.py recode E-0041 --highlight "why it matters"  # flag a paper-worthy quote (s
 # the review workbench
 ta.py open [T-07 | E-0042 | trust.stakes | TH1 | codebook | coverage | themes | quotes | study | history]
 ta.py serve --status | --stop                    # the daemon (one, shared, on port 47821 if free)
-ta.py inbox [--json]                             # what the researcher staged, grouped by view
-ta.py apply --all [--dry-run]                    # execute it, cascade, archive to reviews/
+ta.py changes [--ack]                            # what the researcher changed directly since you last acknowledged
+ta.py inbox [--json]                             # your proposals they left standing, and their threads
+ta.py apply --all [--dry-run]                    # execute those, cascade, archive to reviews/
+ta.py exec --op '{...}'                          # carry out an operation at once (what the daemon runs for their gestures)
 ta.py stage --op '{"op": "merge-code", ...}'      # propose an operation for them to accept
 ta.py reply op-0031 "..."                        # answer a comment thread (they resolve it)
 ta.py bundle · transcript T-01 --json            # the payloads the workbench reads
 ```
 
 Tests: `cd ~/.claude/skills/thematic-analysis && uv run --with pytest --with pyyaml python -m pytest tests -q`
-(52) and `cd ~/.claude/skills/thematic-analysis/app && bun run test` (41). They pin quote copying,
+(102) and `cd ~/.claude/skills/thematic-analysis/app && bun run test` (51). They pin quote copying,
 verbatim verification, speaker attribution, the two-level rule, duplicate detection, staleness, the
 markdown quote check, the operation schema, `apply`'s cascades and refusals, the reviewed-state
-computation, span segmentation, and the pending overlay.
+computation (by codebook revision), span segmentation, the pending overlay, `exec` and the applied
+log, `changes`, versions that move only on application, the theme fit, claims (tension required,
+quotes refused, evidence drift), the paper registration and digest, and the double-placement warning.
 
 Related skills: `watch-recording` produces the transcripts and the frames that settle `did` claims;
 `interactive-plan` is the medium for the narrative half of every review round, and the workbench

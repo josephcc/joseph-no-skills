@@ -19,7 +19,11 @@ Where the paper has research questions or design goals, tag headings with them (
 
 ## The shape of a theme paragraph
 
-1. **The claim**, in one sentence.
+1. **The claim**, in one sentence. Where the theme carries `claims` (the agent's candidate
+   claims in `themes.yaml`, each with a computed evidence line and the tension it survives), the
+   opening sentence is the one the author chose from them — so the sentence in the paper and the
+   sentence the evidence was checked against are the same sentence. Rewrite the prose freely;
+   never retype the numbers.
 2. **Prevalence**, at the participant level, in one of two forms: a fraction (`9/15`, `n = 12`)
    or a phrase with the ids in parentheses ("Four participants (H1, H12, N5, N6) noted...").
    Use the fraction when the theme's weight rests on breadth; use the id list when the reader
@@ -56,8 +60,9 @@ said ..."). Never let an `intent` extract ("I would probably...") stand in for a
   A results section that is mostly block quotes has stopped analysing.
 - **Do not stack** two quotes making the same point unless the point is that different
   participants said it independently, and then say so.
-- **Every quote in the draft must pass `ta.py verify-quotes <draft.md>`** before handback.
-  Paste the summary line in the report.
+- **Every quote in the draft must pass `ta.py verify-quotes <draft.md>`** before handback
+  (with the draft registered in `study.yaml`, plain `ta.py verify-quotes` checks it). Paste the
+  summary line in the report.
 
 ## Counts and the prevalence caveat
 

@@ -1,11 +1,19 @@
-// One place that owns the data: the bundle from ta.py, the pending inbox, and the
-// staging calls. Everything else in the app reads from here, so a staged operation and
-// a live reload move every view at once.
+// One place that owns the data: the bundle from ta.py, the pending inbox, and the calls that
+// change things. Everything else in the app reads from here, so a gesture and a live reload
+// move every view at once.
+//
+// Two kinds of gesture leave this file. A *thread* (a comment or a reply) is a conversation
+// with the agent, so it is staged in the inbox for the agent to answer. Everything else the
+// researcher does is a decision, and a decision is carried out at once: the daemon runs the
+// same `ta.py` handler `apply` would use, under the same lock, and the applied log records it
+// as theirs. The agent's proposals are the other thing in the inbox, and the only thing the
+// researcher accepts (by leaving them) or rejects (by undoing them).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { deleteThreadOp, loadBundle, loadCollate, loadTranscript, setThreadStatus, stageOp, undoOp, watch } from './api';
+import { deleteThreadOp, execOp, loadBundle, loadCollate, loadTranscript, setThreadStatus, stageOp, undoOp, watch } from './api';
+import type { Applied } from './api';
 import type { Bundle, Collate, Op, TranscriptPayload } from './types';
 import type { Draft } from './ops';
-import { describe, isPending } from './ops';
+import { describe, isPending, isThread } from './ops';
 import { pendingPatch } from './overlay';
 
 export interface Workbench {
@@ -17,8 +25,9 @@ export interface Workbench {
   patch: ReturnType<typeof pendingPatch>;
   toast: string | null;
   say: (msg: string | null) => void;
-  reload: () => void;
-  stage: (d: Draft) => Promise<Op | null>;
+  reload: () => Promise<void>;
+  /** Carry out a gesture: a thread is staged for the agent; anything else is applied at once. */
+  stage: (d: Draft) => Promise<Applied | null>;
   undo: (id: string) => Promise<void>;
   thread: (id: string, status: 'resolved' | 'pending') => Promise<void>;
   deleteThread: (id: string) => Promise<void>;
@@ -30,7 +39,15 @@ export function useWorkbench(dir: string | null): Workbench {
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  // Gestures the daemon is carrying out right now. They are drawn as if staged until the file
+  // comes back changed, so a card lands where it was dropped without waiting for the round trip.
+  const [inflight, setInflight] = useState<Op[]>([]);
   const timer = useRef<number | null>(null);
+  const seq = useRef(0);
+  // Gestures run one at a time, in the order they were made. A composite gesture (retire a code:
+  // recode each extract, then retire) fires several in a row, and the script holds one lock —
+  // unqueued they would race for it and half-apply.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   const say = useCallback((msg: string | null) => {
     setToast(msg);
@@ -38,9 +55,9 @@ export function useWorkbench(dir: string | null): Workbench {
     if (msg) timer.current = window.setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const reload = useCallback(() => {
-    if (!dir) return;
-    loadBundle(dir)
+  const reload = useCallback((): Promise<void> => {
+    if (!dir) return Promise.resolve();
+    return loadBundle(dir)
       .then((b) => {
         setBundle(b);
         setError(null);
@@ -49,40 +66,73 @@ export function useWorkbench(dir: string | null): Workbench {
   }, [dir]);
 
   useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
-  // Live reload. A second tab on the same folder therefore sees this tab's staged op,
-  // and an `apply` in the terminal refreshes every open view.
+  // Live reload. A second tab on the same folder therefore sees this tab's gesture, and an
+  // `apply` in the terminal refreshes every open view.
   useEffect(() => {
     if (!dir) return;
     return watch(dir, () => {
       setVersion((v) => v + 1);
-      reload();
+      void reload();
     });
   }, [dir, reload]);
 
   const inbox = bundle?.inbox ?? [];
   const pending = useMemo(() => inbox.filter(isPending), [inbox]);
-  const patch = useMemo(() => pendingPatch(inbox, bundle?.extracts_all ?? []), [inbox, bundle?.extracts_all]);
+  const patch = useMemo(() => pendingPatch([...inbox, ...inflight], bundle?.extracts_all ?? []), [inbox, inflight, bundle?.extracts_all]);
 
   const stage = useCallback(
-    async (d: Draft): Promise<Op | null> => {
+    async (d: Draft): Promise<Applied | null> => {
       if (!dir) return null;
-      try {
-        const op = await stageOp(dir, d as unknown as Record<string, unknown>);
-        // Show it at once; the SSE reload will confirm it from the file.
-        setBundle((b) => (b ? { ...b, inbox: [...b.inbox, op] } : b));
-        // Say so. A gesture that changes nothing visible — a merge, a new theme, a
-        // re-trim — is indistinguishable from a broken button without this.
-        say(`Staged ${op.id}: ${describe(op)}`);
-        return op;
-      } catch (e) {
-        say(`Could not stage that: ${(e as Error).message}`);
-        return null;
+      if (isThread(d) || d.by === 'agent') {
+        try {
+          const op = await stageOp(dir, d as unknown as Record<string, unknown>);
+          // Show it at once; the SSE reload will confirm it from the file.
+          setBundle((b) => (b ? { ...b, inbox: [...b.inbox, op] } : b));
+          say(`Staged ${op.id}: ${describe(op)}`);
+          return op;
+        } catch (e) {
+          say(`Could not stage that: ${(e as Error).message}`);
+          return null;
+        }
       }
+      const temp: Op = {
+        id: `inflight-${++seq.current}`,
+        at: '',
+        by: 'user',
+        view: d.view ?? 'any',
+        op: d.op,
+        target: d.target ?? null,
+        args: d.args ?? {},
+        note: d.note ?? null,
+        status: 'pending',
+      };
+      setInflight((l) => [...l, temp]);
+      const run = async (): Promise<Applied | null> => {
+        try {
+          const { applied } = await execOp(dir, d as unknown as Record<string, unknown>);
+          // Refetch before the placeholder goes, so a card never flickers back to where it was.
+          await reload();
+          setInflight((l) => l.filter((o) => o.id !== temp.id));
+          const row = applied[0];
+          say(row?.result ? `Applied: ${row.result}` : `Applied: ${describe(temp)}`);
+          return row ?? null;
+        } catch (e) {
+          setInflight((l) => l.filter((o) => o.id !== temp.id));
+          // The reason is the script's — a recode that would leave no codes, a definition that
+          // moved — and it arrives now, not as a failed row found a pass later. Callers get
+          // `null`, and must not announce success on it.
+          say(`Could not apply that: ${(e as Error).message}`);
+          return null;
+        }
+      };
+      const next = queue.current.then(run, run);
+      queue.current = next;
+      return next;
     },
-    [dir, say],
+    [dir, say, reload],
   );
 
   const undo = useCallback(

@@ -204,7 +204,7 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
           <button
             className="wb-btn wb-btn-primary"
             title="stamp every live code as reviewed at this version"
-            onClick={() => wb.stage(draft('mark-reviewed', null, { codes: live.map((c) => c.id) })).then(() => wb.say('Codebook marked reviewed.'))}
+            onClick={() => wb.stage(draft('mark-reviewed', null, { codes: live.map((c) => c.id) })).then((o) => o && wb.say('Codebook marked reviewed.'))}
           >
             Done with this round
           </button>
@@ -428,7 +428,7 @@ function SplitForm({ code, extracts, onSubmit, onCancel }: {
       </ul>
       <div className="wb-actions">
         <button className="wb-btn wb-btn-primary" disabled={!id.trim() || !ids.length} onClick={() => onSubmit(id.trim(), name.trim(), def.trim(), ids)}>
-          stage the split ({ids.length} extract{ids.length === 1 ? '' : 's'})
+          split it ({ids.length} extract{ids.length === 1 ? '' : 's'})
         </button>
         <button className="wb-btn wb-btn-ghost" onClick={onCancel}>
           cancel

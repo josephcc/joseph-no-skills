@@ -56,11 +56,14 @@ kind glyph, codes and context, the definitions in the inspector beside the passa
 so a fourth round costs what changed rather than what exists. Every timestamp hovers to the frame
 `watch-recording` left beside the transcript, so a `did` claim can be checked against the screen.
 
-Reading the researcher's feedback afterwards: `ta.py inbox` groups it by view. A `recode` or
-`set-kind` op is a disputed verdict; a `retrim` is a boundary; a `new-extract` is a passage that
-should have been coded; a `comment` op is a question to answer in the thread, never an edit. In the workbench's pending drawer a thread row opens the extract, code or theme it is about, and a resolve button sits beside it, so the researcher never has to find the card first.
-`ta.py apply --all` executes them, bumps the codebook once for the pass, and prints `stale`,
-`validate` and `verify`.
+Reading the researcher's feedback afterwards: `ta.py changes` lists what they did — each already
+carried out. A `recode` or `set-kind` is a verdict they overturned; a `retrim` a boundary they
+redrew; a `new-extract` a passage that should have been coded. `ta.py inbox` lists what waits for
+you: your proposals they left standing, and the `comment` threads, which are questions to answer,
+never edits. In the workbench's pending drawer a thread row opens the extract, code or theme it is
+about, and a resolve button sits beside it, so the researcher never has to find the card first.
+`ta.py apply --all` executes the standing proposals, records codebook changes as pending (the
+version moves at the next coding pass), and prints `stale`, `validate` and `verify`.
 
 `annotate` still exists and is still worth writing for a co-author who will not open the
 workbench (its plan form exports to PDF through the plan viewer; `--plain` is readable text). It
@@ -145,9 +148,10 @@ view. Which do we call it, consistently?
 (2–5 bullets: hunches, tensions, what to watch for in the next interview)
 ```
 
-After the researcher hands the pass back: `ta.py inbox`, then `ta.py apply --all`; reply to
-threads (`ta.py reply op-0031 "..."`); convert answered policy questions into `<decision>` in the
-next round's document; run `stale` and re-read the transcripts a new or reworded code touches.
+After the researcher hands the pass back: `ta.py changes`, `ta.py inbox`, then `ta.py apply --all`
+and `ta.py changes --ack`; reply to threads (`ta.py reply op-0031 "..."`); convert answered policy
+questions into `<decision>` in the next round's document; run `stale` and re-read the transcripts a
+new or reworded code touches — that re-read is the application that versions the edits.
 
 ---
 
@@ -165,14 +169,17 @@ needs the picture, and it can never disagree with the board.
 # Candidate themes
 
 The board is at `ta.py -d <analysis> open themes`: the columns are the themes, the cards are the
-codes, and each theme's essence, story, tensions and `in_paper` are edited in its inspector. This
+codes, and each theme's essence, brief, story, tensions and `in_paper` are edited in its inspector.
+The agent's proposed codes (with a line of why each), its near misses, and its candidate claims
+(with computed evidence lines) are in the inspector too, so they are not repeated here. This
 document argues for the shape and asks the questions the board cannot.
 
 ## TH1 · Co-planning afforded steerability  (RQ1) · 11/12 participants · 47 extracts
 [open it](?analysis=…&view=themes&th=TH1)
 
 **The story.** (3–6 sentences of analytic narrative: what the pattern is, what it means, how it
-answers RQ1, what conditions produced it, why this framing and not another.)
+answers RQ1, what conditions produced it, why this framing and not another. Open with the claim
+you are recommending from the theme's `claims` block, and say which of the others it beat and why.)
 
 **Representative extracts** (the full collation is in the inspector)
 
@@ -201,12 +208,15 @@ staying for now.
 
 ## The overall story
 One paragraph: what the themes together say about the research questions, and the order in which
-they should be told. This is the thing most worth the researcher's edits.
+they should be told — against the framing the paper draft already commits to (`ta.py paper`, and
+the banner above the board). This is the thing most worth the researcher's edits.
 ```
 
-Before launching: `ta.py collate TH1` for every theme and actually read it (level 1); re-read
-every transcript with the map in hand (level 2) and code what was missed; `validate`, `verify`,
-and `verify-quotes` on the document.
+Before launching: read the registered paper draft(s) in full and write the framing; service every
+open theme errand (`theme fit`, proposals with a why, `theme propose`, `theme claim`); `ta.py
+collate TH1` for every theme and actually read it (level 1); re-read every transcript with the map
+in hand (level 2) and code what was missed; `validate`, `verify`, and `verify-quotes` on the
+document.
 
 ---
 

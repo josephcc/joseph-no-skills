@@ -149,9 +149,9 @@ describe('codeWithPatch / themeWithPatch', () => {
     family: ['trust'], participants: ['P1'], n: 1, extracts: 3, direct_extracts: 3, child_extracts: 0, kinds: { said: 3, did: 0, intent: 0 },
   };
   const theme: Theme = {
-    id: 'TH1', name: 'A claim', parent: null, status: 'candidate', in_paper: 'undecided', rq: null, essence: '', story: '',
+    id: 'TH1', name: 'A claim', parent: null, status: 'candidate', in_paper: 'undecided', rq: null, essence: '', brief: '', story: '',
     codes: ['trust'], family: ['trust'], tensions: [], selected_extracts: ['E-1'], quote_spans: {}, reviewed: null,
-    participants: ['P1'], n: 1, N: 3, extracts: 3,
+    participants: ['P1'], n: 1, N: 3, extracts: 3, claims: [], claims_written: null, claims_stale: [], proposal: null, requests: [],
   };
 
   it('overlays a definition edit but keeps the computed numbers', () => {
@@ -206,5 +206,68 @@ describe('a stalled operation', () => {
     expect(isPendingExport(stalled)).toBe(true);
     const p = pendingPatch([stalled], [extract('E-1')]);
     expect(p.extracts['E-1']).toBeUndefined();
+  });
+});
+
+describe('the agent’s proposals and the researcher’s decisions on the board', () => {
+  it('marks an agent-staged assignment as proposed and still draws it on the column', () => {
+    const p = pendingPatch([op({ id: 'op-7', op: 'assign-theme', target: 'trust', args: { theme: 'TH1', why: 'acting on the process' }, view: 'themes', by: 'agent' })], []);
+    expect(p.themes.TH1.addCodes).toEqual(['trust']);
+    expect(p.themes.TH1.proposedCodes.trust.id).toBe('op-7');
+  });
+  it('lets the researcher’s own drag turn a proposal into a decision', () => {
+    const p = pendingPatch(
+      [
+        op({ id: 'op-7', op: 'assign-theme', target: 'trust', args: { theme: 'TH1', why: 'acting on the process' }, view: 'themes', by: 'agent' }),
+        op({ id: 'op-8', op: 'assign-theme', target: 'trust', args: { theme: 'TH1' }, view: 'themes' }),
+      ],
+      [],
+    );
+    expect(p.themes.TH1.addCodes).toEqual(['trust', 'trust']);
+    expect(p.themes.TH1.proposedCodes.trust).toBeUndefined();
+  });
+  it('leaves a code in its first column when the second assignment is an add', () => {
+    const p = pendingPatch(
+      [
+        op({ id: 'op-1', op: 'assign-theme', target: 'trust', args: { theme: 'TH1' }, view: 'themes' }),
+        op({ id: 'op-2', op: 'assign-theme', target: 'trust', args: { theme: 'TH2', add: true }, view: 'themes' }),
+      ],
+      [],
+    );
+    expect(p.themes.TH1.addCodes).toEqual(['trust']);
+    expect(p.themes.TH2.addCodes).toEqual(['trust']);
+    const moved = pendingPatch(
+      [
+        op({ id: 'op-1', op: 'assign-theme', target: 'trust', args: { theme: 'TH1' }, view: 'themes' }),
+        op({ id: 'op-2', op: 'assign-theme', target: 'trust', args: { theme: 'TH2' }, view: 'themes' }),
+      ],
+      [],
+    );
+    expect(moved.themes.TH1.addCodes).toEqual([]);
+  });
+  it('moves only the membership the drag named, and shows the card leaving that column', () => {
+    const p = pendingPatch([op({ id: 'op-1', op: 'assign-theme', target: 'trust', args: { theme: 'TH3', from: 'TH1' }, view: 'themes' })], []);
+    expect(p.themes.TH3.addCodes).toEqual(['trust']);
+    expect(p.themes.TH1.removeCodes).toEqual(['trust']);
+    expect(p.themes.TH2).toBeUndefined();
+    const shown = themeWithPatch(
+      { id: 'TH1', name: 'A', parent: null, status: 'candidate', in_paper: 'undecided', rq: null, essence: '', brief: '', story: '',
+        codes: ['trust', 'control'], family: [], tensions: [], selected_extracts: [], quote_spans: {}, reviewed: null,
+        participants: [], n: 0, N: 3, extracts: 0, claims: [], claims_written: null, claims_stale: [], proposal: null, requests: [] },
+      p.themes.TH1,
+    );
+    expect(shown.codes).toEqual(['control']);
+  });
+  it('overlays a brief edit and a framing correction', () => {
+    const p = pendingPatch(
+      [
+        op({ op: 'set-theme-field', target: 'TH1', args: { field: 'brief', value: 'the rule' }, view: 'themes' }),
+        op({ id: 'op-2', op: 'set-framing', args: { value: 'The paper argues X.' }, view: 'themes' }),
+      ],
+      [],
+    );
+    expect(p.themes.TH1.brief).toBe('the rule');
+    expect(p.framing).toBe('The paper argues X.');
+    expect(p.framingOps).toHaveLength(1);
   });
 });

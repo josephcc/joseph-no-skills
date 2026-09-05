@@ -36,15 +36,15 @@ and re-verified, and coverage is computed rather than estimated.
                           │
                           ▼
     you, in     dispute a coding · accept a code · move a card · pick a quote
-    the         every gesture appends ONE operation to analysis/inbox.jsonl
-    workbench   ── nothing in the analysis has changed yet ──
+    the         every gesture is carried out AT ONCE by the script and logged as yours
+    workbench   the agent's proposals wait: leave one standing to accept it, undo to reject
                           │
                           ▼
     you, in chat ──▶ "review my feedback"
                           │
                           ▼
-    the agent   ta.py inbox      reads what you staged, grouped by view
-                ta.py apply --all executes it, cascades, archives the pass
+    the agent   ta.py changes    reads what you changed, grouped by view
+                ta.py apply --all executes the proposals you left standing, archives the pass
                 replies to your threads · re-reads what a new code touches
                           │
                           ▼
@@ -59,10 +59,18 @@ switch to chat when you want to hand a pass back.
 finished when you say it is, not when the tool decides you have clicked enough. Say
 *"review my feedback"* — the agent picks up everything you staged.
 
-**Nothing you click changes the analysis.** The browser writes exactly one file, `inbox.jsonl`,
-and `ta.py apply` is the only thing that touches `study.yaml`, `codebook.yaml`, `extracts.jsonl`
-and `themes.yaml`. If you stage something you regret, undo it in the Pending drawer before
-handing back — after that, it is a new operation.
+**Everything you click changes the analysis — through the script.** The browser never writes an
+analysis file itself; it asks the daemon to run `ta.py`, which does at once what `apply` would
+have done, and records it in `reviews/*-applied.jsonl` as yours. Change your mind by doing the
+opposite: drag the card back, flip the field again. What does *not* happen at once is the
+agent's proposals — those sit in the Pending drawer until you leave them standing (acceptance) or
+undo them.
+
+**A codebook version is an application, not an edit.** Reword a definition, accept a code, merge
+two: the header chip counts them as *unapplied* and nothing is versioned. The version moves when
+the codebook is applied to the transcripts — the next coding pass, or an explicit `bump` — and the
+edits since become one changelog entry. `stale` measures against the codebook as it stands, so it
+still tells you which transcripts the edits reach.
 
 ---
 
@@ -156,13 +164,31 @@ to ask for a re-read of that participant for that code.
 
 > Let's do themes.
 
-The Themes view is a board: codes are cards, themes are columns, dragging stages an assignment.
-Each theme's inspector holds its essence (with the two-sentence scope test), its story, its
-research question, and its tensions — the accounts that complicate it, which the write-up needs.
-The round document carries the overall story and the naming questions; the board carries the
-moving.
+The Themes view is a board: codes are cards, themes are columns, dragging moves a card. A theme
+you create exists at once, and so does everything you do to it — drop the codes you already know
+it rests on, write its brief, ask for what you might be missing.
 
-![The Themes view: two theme columns holding code cards with prevalence, a miscellaneous column and the unplaced codes beside them, and an inspector with the theme's claim, its essence, its research question, its in-the-paper decision and its extracts](docs/themes.png)
+Each theme's inspector holds, in the order the work is done: its name and essence (with the
+two-sentence scope test); its **brief** — the rule for what belongs, the near-miss that does not,
+and what you mean to write in the paper, in whatever headings you like, written early and allowed
+to be wrong; the codes the agent proposes for it, each with a line of why, its n/N and two of its
+extracts, accepted by leaving them staged and rejected with one click, and the agent's case for
+what it left out; the story, the research question and the in-the-paper call; the agent's
+**claims** — two to four sentences it thinks the evidence supports, each with an evidence line the
+script computed and the tension it survives, yours to judge when you write rather than to accept;
+and the tensions, the accounts that complicate the theme, which the write-up needs.
+
+Two buttons under the proposals — *ask for candidate codes*, *ask for claims* — stage an errand.
+On the next hand-back the agent reads every live code against your brief (not the ones it
+remembers: the script enumerates them) and comes back with a list of what belongs and a line each
+on why, plus about five near misses and the clause of your brief that excluded each. A near miss
+you disagree with is the fastest way to find out your boundary is wrong.
+
+Above the board sits **what the paper argues**, as the agent read it from the draft you registered
+(`ta.py paper --add <path>`; it reads the whole draft, not a summary). Open it, and correct it in
+place if the reading is off — before any theme is proposed against it.
+
+![The Themes view: theme columns holding code cards, two of them dashed and marked proposed by the agent; the paper's framing open above the board; and the inspector for a theme showing its brief under Rule / Not this / What I want to say headings, the agent's proposed codes with a line of why each, and its candidate claims with their computed evidence and the tension each survives](docs/themes.png)
 
 ### D. Pick the quotes
 
@@ -199,7 +225,7 @@ report inter-rater reliability.
 | carries | **operations over data** — dispute a coding, accept a code, move a card, choose a quote | **arguments and judgements** — why this code exists, what the theme means, which coding policy to adopt |
 | you | click, drag, select | read, answer, comment |
 | opens with | `ta.py … open` | the `interactive-plan` viewer |
-| written to | `inbox.jsonl`, by your clicks | the `.plan.md` itself, by your answers |
+| written to | the analysis files, by the script, as you click (the agent's proposals wait in `inbox.jsonl`) | the `.plan.md` itself, by your answers |
 
 If a question could be answered by a click, it belongs in the workbench. If answering it needs a
 sentence, it belongs in the document. The agent should never ask you something in prose that it
@@ -211,13 +237,13 @@ would then have to translate back into a command.
 
 ```
 analysis/
-├── study.yaml        who the participants are, and the analytic stance
+├── study.yaml        who the participants are, the analytic stance, the paper draft and its framing
 ├── codebook.yaml     the codes, their definitions, and the changelog   ← the source of truth
 ├── extracts.jsonl    every coded passage, verbatim, with its locator   ← written only by ta.py
-├── themes.yaml       the themes, the codes they gather, the chosen quotes
-├── inbox.jsonl       what you staged, waiting for the agent            ← written only by the browser
+├── themes.yaml       the themes, their briefs, the codes they gather, the agent's claims, the chosen quotes
+├── inbox.jsonl       the agent's proposals and your threads, waiting  ← written only by the browser
 ├── memos.md          dated notes written during the analysis
-├── reviews/          every round document, and every applied pass
+├── reviews/          every round document, and the log of every change: yours at once, the agent's per pass
 └── reports/          generated: quote bank, themes, coverage, codebook, audit
 ```
 
@@ -236,6 +262,12 @@ feedback is never lost — but the place to say it is the workbench or the round
 - *"Is this theme carried by everyone or by three people?"* — from `coverage`, as n/N.
 - *"Re-read T-04 for `trust.stakes`, I think we missed it there."* — or click the empty cell in
   the Coverage view, which stages the same request.
+- *"Which codes belong in TH4 that I haven't put there?"* — or press *ask for candidate codes* in
+  the theme's inspector; the answer is a list with a line of why each, plus the near misses.
+- *"What can I actually claim from TH4?"* — or *ask for claims*: two to four candidate claims,
+  each with the n/N and kind mix computed, and the account that complicates it.
+- *"Here is the paper draft, read it before we do themes."* — `paper --add`, read in full, and its
+  framing written above the board for you to correct.
 - *"Show me the audit."* — validate, verify, coverage and duplicate suspicions, printed.
 
 ---
@@ -252,7 +284,8 @@ uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <study>/analysis open
 node ~/.claude/skills/thematic-analysis/app/server.mjs --status
 node ~/.claude/skills/thematic-analysis/app/server.mjs --stop
 
-# what have I staged that the agent has not applied?
+# what have I changed since the agent last looked? what is it still waiting on?
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <study>/analysis changes
 uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <study>/analysis inbox
 ```
 
@@ -263,9 +296,13 @@ sessions; that is not a leak.
 
 ## When something looks wrong
 
-**A button seemed to do nothing.** Check the Pending count in the header and the toast. Every
-gesture stages exactly one operation and says so. If the count went up, it worked — the analysis
-files just have not changed yet, and will not until the agent applies it.
+**A button seemed to do nothing.** Read the toast. Every gesture is carried out at once and says
+so — *Applied: control → TH4*. If the script refused it (a recode that would leave an extract with
+no codes, a rewording of text the agent changed meanwhile, a claim that quotes), the toast says
+why, now, rather than a failed row turning up a pass later.
+
+**codebook v12 · 3 unapplied → v13.** Edits to the codebook are pending until it is applied to
+the transcripts; the next coding pass (or `bump`) makes the version. You never version an edit.
 
 **The page looks stale after the agent worked.** It reloads on its own, within a second. If it
 does not, the daemon may have been restarted under it; reload the tab.

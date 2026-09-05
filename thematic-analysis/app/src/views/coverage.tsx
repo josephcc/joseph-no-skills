@@ -89,13 +89,16 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                     const cellData = b.cells[c.id]?.[p];
                     const n = cellData?.extracts.length ?? 0;
                     const kinds = cellData?.kinds;
-                    // A staged re-read is the one gesture this view makes, so the cell it was
-                    // made on has to keep a mark. Requests name a transcript; a participant's
-                    // transcripts stand in for them here.
-                    const asked = wb.patch.rereads.some((o) => {
-                      const ar = (o.args ?? {}) as Record<string, unknown>;
-                      return ar.code === c.id && transcriptsOf(p).includes(String(ar.transcript ?? ''));
-                    });
+                    // A re-read request is the one gesture this view makes, and it lands at once in
+                    // study.yaml, so the cell reads the open requests — plus the in-flight overlay for
+                    // the moment before the file comes back. Requests name a transcript; a
+                    // participant's transcripts stand in for them here.
+                    const asked =
+                      b.stale.reread_requests.some((r) => r.code === c.id && transcriptsOf(p).includes(r.transcript)) ||
+                      wb.patch.rereads.some((o) => {
+                        const ar = (o.args ?? {}) as Record<string, unknown>;
+                        return ar.code === c.id && transcriptsOf(p).includes(String(ar.transcript ?? ''));
+                      });
                     return (
                       <td
                         key={p}
@@ -108,7 +111,7 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                           n
                             ? `${p} · ${c.id}: ${n} extract(s)${kinds ? ` (said ${kinds.said}, did ${kinds.did}, intent ${kinds.intent})` : ''}`
                             : asked
-                              ? `re-read of ${c.id} for ${p} is staged`
+                              ? `re-read of ${c.id} for ${p} is requested`
                               : `${p} has nothing under ${c.id} — click to ask for a re-read`
                         }
                         onClick={() => {
@@ -132,7 +135,7 @@ export function CoverageView({ wb, nav }: { wb: Workbench; nav: Nav }) {
                             </span>
                           </>
                         ) : asked ? (
-                          <span className="wb-heat-ask-mark" title="re-read staged">⟲</span>
+                          <span className="wb-heat-ask-mark" title="re-read requested">⟲</span>
                         ) : (
                           '·'
                         )}

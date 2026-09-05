@@ -209,7 +209,7 @@ def test_cooccur_ranks_a_big_undifferentiated_code_above_a_small_clean_one(study
     assert lump["alone"] == 4 and lump["facets"] == [] and lump["children"] == 0
 
 
-def test_merge_code_recodes_extracts_and_bumps_version(study: ta.Analysis):
+def test_merge_code_recodes_extracts_and_leaves_the_version_for_the_next_application(study: ta.Analysis):
     an = study
     an.codebook["codes"].append({"id": "agent-control", "name": "Control over the agent", "status": "candidate", "definition": "d", "parent": None})
     an.save_codebook()
@@ -218,8 +218,11 @@ def test_merge_code_recodes_extracts_and_bumps_version(study: ta.Analysis):
     an = ta.Analysis(study.root)
     assert an.extracts[0]["codes"] == ["control"]
     assert an.code("agent-control")["status"] == "merged" and an.code("agent-control")["merged_into"] == "control"
-    assert an.codebook["version"] == 2
     assert an.resolve_code("agent-control") == "control"
+    # an edit is not an application: the version waits, the change is pending, the revision moved
+    assert an.codebook["version"] == 1 and ta.next_version(an) == 2
+    assert "merged agent-control into control" in an.codebook["pending"][-1]["change"]
+    assert an.codebook["revision"] == 2
 
 
 def test_intent_kind_and_coverage_counts_per_participant(study: ta.Analysis):
@@ -234,13 +237,19 @@ def test_intent_kind_and_coverage_counts_per_participant(study: ta.Analysis):
     assert "| T-01 | P1 | 2 | 1 | current |" in rep
 
 
-def test_stale_after_bump(study: ta.Analysis):
+def test_stale_after_an_edit_and_after_the_application_that_versions_it(study: ta.Analysis):
     run(study, "mark-coded", "T-01")
     run(study, "mark-coded", "T-02")
     assert run(study, "stale") == 0
-    run(study, "bump", "added a code after P2", "--freeze")
+    assert run(study, "bump", "nothing changed") == 0               # re-applying the same codebook is not a version
+    assert ta.Analysis(study.root).codebook["version"] == 1
+    run(study, "set-field", "control", "definition", "A sharper rule.")
+    assert run(study, "stale") == 1                                   # stale against the codebook as it stands
+    run(study, "bump", "after P2", "--freeze")
+    an = ta.Analysis(study.root)
+    assert an.codebook["version"] == 2 and an.codebook["frozen"] is True and an.codebook["pending"] == []
+    assert an.codebook["changelog"][-1]["change"].startswith("after P2: ")
     assert run(study, "stale") == 1
-    assert ta.Analysis(study.root).codebook["frozen"] is True
 
 
 def test_verify_quotes_accepts_editorial_marks_and_flags_fabrication(study: ta.Analysis, tmp_path: Path):
@@ -424,10 +433,11 @@ def test_apply_executes_ops_bumps_once_and_archives_them(study: ta.Analysis):
     assert an.extract("E-0001")["kind"] == "intent"
     assert an.extract("E-0002")["codes"] == ["trust"]
     assert an.code("trust")["definition"].startswith("Whether the participant checks")
-    # one bump for the whole pass, and the reworded code is stamped with the new version
-    assert an.codebook["version"] == 2
-    assert an.code("trust")["redefined_version"] == 2
-    assert "applied 4 reviewed operation(s)" in an.codebook["changelog"][-1]["change"]
+    # a pass is not an application: the version waits, the reworded code is stamped with the
+    # version it will carry, and the pass is one pending change
+    assert an.codebook["version"] == 1
+    assert an.code("trust")["redefined_version"] == 2 == ta.next_version(an)
+    assert "applied 4 reviewed operation(s)" in an.codebook["pending"][-1]["change"]
     assert ta.read_inbox(an) == []
     log = (study.root / "reviews" / f"{ta.today()}-applied.jsonl")
     lines = [json.loads(l) for l in log.read_text().splitlines()]
@@ -803,7 +813,7 @@ def test_spread_warns_about_the_paper_not_the_data(study: ta.Analysis):
 
 
 # ------------------------------------------- the cascades the Codex audit found wrong
-def test_two_merges_in_one_pass_bump_the_codebook_once(study: ta.Analysis):
+def test_two_merges_in_one_pass_are_one_pending_change(study: ta.Analysis):
     an = ta.Analysis(study.root)
     for cid in ("agent-steering", "steering-2"):
         an.codebook["codes"].append({"id": cid, "name": cid, "status": "candidate", "definition": "d", "parent": None})
@@ -815,8 +825,8 @@ def test_two_merges_in_one_pass_bump_the_codebook_once(study: ta.Analysis):
     stage(study, "merge-code", "steering-2", into="control")
     assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
     an = ta.Analysis(study.root)
-    assert an.codebook["version"] == before + 1
-    assert len([c for c in an.codebook["changelog"] if "applied 2 reviewed" in c["change"]]) == 1
+    assert an.codebook["version"] == before
+    assert len([p for p in an.codebook["pending"] if "applied 2 reviewed" in p["change"]]) == 1
     assert an.code("agent-steering")["status"] == "merged" and an.code("steering-2")["status"] == "merged"
     assert {c for e in an.extracts for c in e["codes"]} == {"control"}
 
@@ -828,12 +838,11 @@ def test_done_in_the_same_pass_as_a_definition_edit_really_marks_it_reviewed(stu
     stage(study, "mark-reviewed", None, transcript="T-01")
     assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
     an = ta.Analysis(study.root)
-    assert an.code("control")["redefined_version"] == an.codebook["version"]
-    assert an.extracts[0]["reviewed"]["version"] == an.codebook["version"]
+    assert an.code("control")["redefined_revision"] == an.extracts[0]["reviewed"]["revision"] == an.codebook["revision"]
     assert ta.extract_state(an, an.extracts[0])["new"] is False
 
 
-def test_a_new_code_in_a_pass_with_a_merge_is_stamped_with_the_final_version(study: ta.Analysis):
+def test_a_new_code_is_stamped_with_the_version_it_will_first_appear_in(study: ta.Analysis):
     an = ta.Analysis(study.root)
     an.codebook["codes"].append({"id": "agent-steering", "name": "x", "status": "candidate", "definition": "d", "parent": None})
     an.save_codebook()
@@ -841,7 +850,10 @@ def test_a_new_code_in_a_pass_with_a_merge_is_stamped_with_the_final_version(stu
     stage(study, "new-code", None, id="verification", definition="Checking the output against the source.")
     assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
     an = ta.Analysis(study.root)
-    assert an.code("verification")["added"]["version"] == an.codebook["version"]
+    assert an.code("verification")["added"]["version"] == ta.next_version(an) == an.codebook["version"] + 1
+    run(study, "bump")
+    an = ta.Analysis(study.root)
+    assert an.code("verification")["added"]["version"] == an.codebook["version"] == 2
 
 
 def test_a_resolved_thread_is_archived_even_with_nothing_to_apply(study: ta.Analysis):
@@ -905,7 +917,7 @@ def test_a_no_op_edit_does_not_bump_the_codebook(study: ta.Analysis):
           value="Participant describes steering, fixing, or redirecting the agent's work.")  # same words
     assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
     an = ta.Analysis(study.root)
-    assert an.codebook["version"] == before
+    assert an.codebook["version"] == before and not an.codebook.get("pending")
     assert ta.stale_json(an)["stale"] == [] or all(r["severity"] == "recode" for r in ta.stale_json(an)["stale"])
 
 
@@ -1160,3 +1172,391 @@ def test_retrim_on_a_reviewed_extract_stages_a_proposal_instead(study: ta.Analys
     assert any(o["op"] == "retrim" and o["target"] == eid and o["by"] == "agent" and o["args"] == {"from": "the biggest thing", "to": "whole prompt."} for o in ta.read_inbox(an))
     assert run(study, "retrim", eid, "--from", "the biggest thing", "--to", "whole prompt.", "--force") == 0
     assert ta.Analysis(study.root).extract(eid)["text"].startswith("the biggest thing")
+
+
+def test_brief_is_a_theme_field_and_reaches_the_report(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "theme", "new", "Stepwise control was the point", "--brief", "## Rule\nActing on the process mid-run.")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    run(study, "theme", "set", "TH1", "essence", "Participants steered step by step. It mattered more than output.")
+    run(study, "theme", "set", "TH1", "brief", "## Rule\nActing on the process mid-run.\n## Not this\nOutput quality alone.")
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["brief"].endswith("Output quality alone.")
+    rep = ta.themes_report(an)
+    assert "*Brief (the researcher's rule, boundary, and intent):*" in rep and "Output quality alone." in rep
+    row = next(t for t in ta.bundle_json(an)["themes"] if t["id"] == "TH1")
+    assert row["brief"].startswith("## Rule") and row["claims"] == [] and row["requests"] == []
+
+
+def test_theme_fit_lists_every_live_code_with_its_numbers(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control,trust")     # rides along
+    run(study, "extract", "T-01", "19", "--codes", "trust")
+    run(study, "extract", "T-02", "13", "--codes", "trust")
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "new", "Checking is a habit")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    run(study, "theme", "assign", "trust", "--to", "TH2")
+    data = ta.theme_fit_json(ta.Analysis(study.root), ta.Analysis(study.root).theme("TH1"))
+    assert data["family"] == ["control", "control.rerun"] and data["theme_participants"] == 1
+    rows = {r["code"]: r for r in data["codes"]}
+    assert set(rows) == {"trust"}                                      # the family is excluded, everything else listed
+    assert rows["trust"]["extracts"] == 3 and rows["trust"]["cooccur"] == 1 and rows["trust"]["cooccur_share"] == round(1 / 3, 3)
+    assert rows["trust"]["shared_participants"] == 1 and rows["trust"]["participants"] == 2
+    assert rows["trust"]["placed_in"] == ["TH2"]                       # a proposal here would be a challenge to TH2
+    assert run(study, "theme", "fit", "TH1") == 0
+
+
+def test_theme_request_is_recorded_reported_and_closed(study: ta.Analysis, capsys):
+    run(study, "theme", "new", "A claim")
+    stage(study, "theme-request", "TH1", kind="claim", note="I think trust belongs here too")   # `claim` is accepted as `claims`
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    an = ta.Analysis(study.root)
+    reqs = ta.stale_json(an)["theme_requests"]
+    assert reqs == [{"theme": "TH1", "name": "A claim", "kind": "claims", "note": "I think trust belongs here too",
+                     "asked": reqs[0]["asked"], "by": "user", "status": "open"}]
+    capsys.readouterr()
+    ta.main(["-d", str(study.root), "inbox"])
+    assert "theme errands (1 open" in capsys.readouterr().out
+    run(study, "theme", "request", "TH1", "--done")
+    assert ta.stale_json(ta.Analysis(study.root))["theme_requests"] == []
+
+
+def _theme_with_evidence(study: ta.Analysis) -> None:
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "extract", "T-01", "13", "--codes", "control", "--kind", "did")
+    run(study, "extract", "T-02", "9", "--codes", "control")             # P2 preferring chat: the tension
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    run(study, "theme", "set", "TH1", "essence", "Participants steered step by step. It mattered more than output.")
+
+
+def test_theme_claim_requires_a_tension_computes_evidence_and_refuses_quotes(study: ta.Analysis):
+    _theme_with_evidence(study)
+    with pytest.raises(SystemExit, match="has no tensions"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text", "Stepwise control gave participants a handle mid-process (E-0001, E-0002)."])
+    run(study, "theme", "tension", "TH1", "--add", "E-0003")
+    with pytest.raises(SystemExit, match="contains a quotation"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text",
+                 'Participants valued "being able to go back to a step and rerun just that step" over output quality.'])
+    with pytest.raises(SystemExit, match="cites E-0099, which does not exist"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text", "Control mattered more than output quality (E-0099)."])
+    assert ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--tension", "E-0003",
+                    "--text", "Stepwise control gave participants a handle on the process mid-run, not merely a better result (E-0001, E-0002)."]) == 0
+    an = ta.Analysis(study.root)
+    th = an.theme("TH1")
+    assert len(th["claims"]) == 1 and th["claims_written"]["by"] == "agent"
+    ev = th["claims"][0]["evidence"]
+    assert (ev["n"], ev["N"], ev["said"], ev["did"], ev["intent"], ev["codes"]) == (2, 2, 2, 1, 0, ["control", "control.rerun"])
+    assert th["claims"][0]["tension"] == "E-0003"
+    assert ta.claims_stale(an, th) == []
+    _, warnings = ta.validate(an)
+    assert not any("claims" in w for w in warnings)
+    rep = ta.themes_report(an)
+    assert "*Candidate claims" in rep and "evidence: 2/2 participants · said 2 / did 1 / intent 0" in rep
+    assert 'tension: E-0003 (P2): "That said, for quick questions' in rep         # the words come from the record
+    # the evidence moves under the claim: stale, not wrong — and said so where the numbers are
+    run(study, "extract", "T-01", "15", "--codes", "control", "--kind", "intent")
+    an = ta.Analysis(study.root)
+    stale = ta.claims_stale(an, an.theme("TH1"))
+    assert stale and "intent" in stale[0]
+    _, warnings = ta.validate(an)
+    assert any("TH1 claims —" in w for w in warnings)
+    assert ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--check"]) == 1
+    assert next(t for t in ta.bundle_json(an)["themes"] if t["id"] == "TH1")["claims_stale"] == stale
+
+
+def test_claims_are_two_to_four_per_theme(study: ta.Analysis, tmp_path: Path):
+    _theme_with_evidence(study)
+    run(study, "theme", "tension", "TH1", "--add", "E-0003")
+    many = [{"text": f"Claim number {i} about stepwise control and what it afforded participants.", "tension": "E-0003"} for i in range(5)]
+    f = tmp_path / "claims.json"
+    f.write_text(json.dumps(many), encoding="utf-8")
+    with pytest.raises(SystemExit, match="two to four"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--file", str(f)])
+    f.write_text(json.dumps(many[:3]), encoding="utf-8")
+    assert ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--file", str(f)]) == 0
+    assert len(ta.Analysis(study.root).theme("TH1")["claims"]) == 3
+    # and a claim the researcher has not asked for is refused, until the tension it names is theirs
+    with pytest.raises(SystemExit, match="is not in TH1's tensions"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--tension", "E-0001", "--text", "A claim naming the wrong tension for the theme."])
+    assert ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--clear"]) == 0
+    assert "claims" not in ta.Analysis(study.root).theme("TH1")
+
+
+def test_paper_registration_digest_framing_and_default_verify_quotes(study: ta.Analysis, tmp_path: Path, capsys):
+    _theme_with_evidence(study)
+    draft = tmp_path / "paper" / "main.md"
+    draft.parent.mkdir()
+    draft.write_text(
+        "# Co-planning as a steering surface\n\n## Abstract\n\nWe argue that plan-level interaction changes what steering is.\n\n"
+        "## Results\n\nStepwise control was the point for most participants (RQ1). "
+        "P1 valued \"being able to go back to a step and rerun just that step\" (P1). "
+        "P2 said \"the plan view made me feel like a real researcher again\" (P2).\n",
+        encoding="utf-8",
+    )
+    assert ta.main(["-d", str(study.root), "paper", "--add", str(draft)]) == 0
+    an = ta.Analysis(study.root)
+    assert an.study["paper"] == [{"path": "../paper/main.md"}]
+    papers = ta.registered_papers(an)
+    assert papers[0]["exists"] and papers[0]["words"] > 20
+    _, warnings = ta.validate(an)
+    assert any("`framing` is empty" in w for w in warnings)
+    assert ta.main(["-d", str(study.root), "paper", "--framing", "The paper argues that plan-level interaction changes what steering is."]) == 0
+    an = ta.Analysis(study.root)
+    assert an.study["framing"].startswith("The paper argues")
+    assert "framing written from the paper draft" in (study.root / "memos.md").read_text()
+    _, warnings = ta.validate(an)
+    assert not any("framing" in w for w in warnings)
+    digest = ta.paper_digest(an)
+    assert "**Title:** Co-planning as a steering surface" in digest
+    assert "**Abstract:** We argue that plan-level interaction" in digest
+    assert "- Results" in digest
+    assert "[RQ1, TH1] Stepwise control was the point for most participants (RQ1)." in digest
+    assert ta.bundle_json(an)["framing"].startswith("The paper argues") and ta.bundle_json(an)["paper"][0]["path"] == "../paper/main.md"
+    # no file named: the registered draft is what gets checked, and the fabricated quote is caught
+    capsys.readouterr()
+    assert ta.main(["-d", str(study.root), "verify-quotes"]) == 1
+    out = capsys.readouterr().out
+    assert "UNMATCHED" in out and "real researcher" in out and "2 quote(s) checked, 1 problem(s)" in out
+    assert ta.main(["-d", str(study.root), "paper", "--check"]) == 1
+    with pytest.raises(SystemExit, match="needs a FILE, or a paper draft"):
+        ta.main(["-d", str(tmp_path / "nowhere"), "init"]) if False else ta.main(["-d", str(_fresh_study(study, tmp_path).root), "verify-quotes"])
+
+
+def _fresh_study(study: ta.Analysis, tmp_path: Path) -> ta.Analysis:
+    """A second analysis folder beside the fixture's, with no paper registered."""
+    root = tmp_path / "analysis-2"
+    ta.main(["-d", str(root), "init", "--study", "other", "--transcripts", str(tmp_path / "p1/transcript.md")])
+    return ta.Analysis(root)
+
+
+def test_validate_warns_on_a_code_in_two_themes_and_coverage_names_them(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "new", "Intervening mid-process was the value")
+    an = ta.Analysis(study.root)
+    for tid in ("TH1", "TH2"):
+        an.theme(tid)["codes"] = ["control"]
+        an.theme(tid)["essence"] = "Two sentences. Here."
+    an.save_themes()
+    an = ta.Analysis(study.root)
+    assert ta.codes_in_several_themes(an) == {"control": ["TH1", "TH2"]}
+    errors, warnings = ta.validate(an)
+    assert errors == []
+    assert any("`control` counts toward TH1, TH2; its extracts count toward each" in w for w in warnings)
+    assert "Codes in more than one theme" in ta.coverage_report(an) and "`control` in TH1, TH2 (1 participant(s))" in ta.coverage_report(an)
+
+
+def test_theme_propose_records_near_misses_and_closes_the_errand(study: ta.Analysis):
+    run(study, "theme", "new", "A claim")
+    stage(study, "theme-request", "TH1", kind="codes")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    assert ta.main(["-d", str(study.root), "theme", "propose", "TH1",
+                    "--near-miss", "trust", "judgements of the output with no reference to intervening",
+                    "--reading", "The inclusive reading takes trust too: verification is a form of steering after the fact.",
+                    "--round", "1", "--close-request"]) == 0
+    an = ta.Analysis(study.root)
+    prop = an.theme("TH1")["proposal"]
+    assert prop["near_misses"] == [{"code": "trust", "why_not": "judgements of the output with no reference to intervening"}]
+    assert prop["second_reading"].startswith("The inclusive reading") and prop["round"] == "1"
+    assert ta.stale_json(an)["theme_requests"] == []
+    with pytest.raises(SystemExit, match="no code nonsense"):
+        ta.main(["-d", str(study.root), "theme", "propose", "TH1", "--near-miss", "nonsense", "why"])
+
+
+def test_set_framing_is_an_operation_the_researcher_can_stage_and_a_stale_edit_is_refused(study: ta.Analysis):
+    stage(study, "set-framing", None, value="The paper argues X.", old="something that was never there")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 1
+    an = ta.Analysis(study.root)
+    assert not an.study.get("framing")
+    assert "changed since you edited it" in ta.read_inbox(an)[0]["error"]
+    ta.write_inbox(an, [])
+    stage(study, "set-framing", None, value="The paper argues X.", old="")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    assert ta.Analysis(study.root).study["framing"] == "The paper argues X."
+
+
+# ------------------------------------------------------------- after the Codex audit (2026-09-04)
+def test_assign_theme_add_keeps_the_code_where_it_already_sits(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "new", "Intervening mid-process was the value")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    stage(study, "assign-theme", "control", theme="TH2", add=True, why="it is also about the process mid-run")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["codes"] == ["control"] and an.theme("TH2")["codes"] == ["control"]
+    _, warnings = ta.validate(an)
+    assert any("`control` counts toward TH1, TH2" in w for w in warnings)
+    # without `add`, an assignment is a move — what a drag on the board means
+    stage(study, "assign-theme", "control", theme="TH2")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["codes"] == [] and an.theme("TH2")["codes"] == ["control"]
+
+
+def test_a_child_placed_directly_counts_toward_the_theme_holding_its_parent(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control.rerun")
+    run(study, "theme", "new", "Stepwise control was the point")
+    run(study, "theme", "new", "Rerunning was the move")
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    run(study, "theme", "assign", "control.rerun", "--to", "TH2")
+    an = ta.Analysis(study.root)
+    assert ta.codes_in_several_themes(an) == {"control.rerun": ["TH1", "TH2"]}
+    _, warnings = ta.validate(an)
+    assert any("`control.rerun` counts toward TH1 (via `control`), TH2" in w for w in warnings)
+    # a parent shared by both themes implies its children; they are not reported twice
+    run(study, "theme", "assign", "control", "--to", "TH2")
+    an = ta.Analysis(study.root)
+    an.theme("TH1")["codes"] = ["control"]
+    an.save_themes()
+    assert ta.codes_in_several_themes(ta.Analysis(study.root)) == {"control": ["TH1", "TH2"]}
+
+
+def test_servicing_one_half_of_a_both_errand_leaves_the_other_open(study: ta.Analysis):
+    run(study, "theme", "new", "A claim")
+    stage(study, "theme-request", "TH1", kind="both")
+    assert ta.main(["-d", str(study.root), "apply", "--all"]) == 0
+    assert ta.main(["-d", str(study.root), "theme", "propose", "TH1", "--near-miss", "trust", "content, not scale", "--close-request"]) == 0
+    reqs = ta.Analysis(study.root).theme("TH1")["requests"]
+    assert reqs[0]["status"] == "open" and reqs[0]["kind"] == "claims"       # narrowed, not closed
+    assert ta.stale_json(ta.Analysis(study.root))["theme_requests"][0]["kind"] == "claims"
+    run(study, "theme", "request", "TH1", "--done", "--kind", "claims")
+    assert ta.stale_json(ta.Analysis(study.root))["theme_requests"] == []
+
+
+def test_a_short_quotation_is_still_a_quotation_in_a_claim(study: ta.Analysis):
+    _theme_with_evidence(study)
+    run(study, "theme", "tension", "TH1", "--add", "E-0003")
+    with pytest.raises(SystemExit, match="contains a quotation"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text", 'Participants felt like a "real researcher again" when steering the plan (E-0001).'])
+    with pytest.raises(SystemExit, match="contains a quotation"):
+        ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text", "> being able to go back to a step and rerun just that step, as P1 put it (E-0001)."])
+    # a single quoted term is a term, not a participant's words
+    assert ta.main(["-d", str(study.root), "theme", "claim", "TH1", "--text", 'Participants read "steerability" as intervening mid-process rather than as output quality (E-0001, E-0002).']) == 0
+
+
+# ------------------------------------------------- direct manipulation: the researcher's gestures run at once
+def test_exec_carries_out_a_gesture_at_once_and_archives_it_as_the_researchers(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "new-theme", "args": {"name": "Stepwise control was the point"}})]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1") is not None                              # exists now, not on the next pass
+    assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps(
+        {"op": "assign-theme", "target": "control", "args": {"theme": "TH1", "why": "acting on the process mid-run"}})]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["codes"] == ["control"]
+    assert "acting on the process mid-run" in (study.root / "memos.md").read_text()
+    log = [json.loads(l) for l in (study.root / "reviews" / f"{ta.today()}-applied.jsonl").read_text().splitlines()]
+    assert [(o["op"], o["by"], o["status"]) for o in log] == [("new-theme", "user", "applied"), ("assign-theme", "user", "applied")]
+    assert log[0]["created"] == "TH1" and log[1]["result"].startswith("control: unplaced -> TH1")
+    assert ta.read_inbox(an) == []                                  # nothing waited in the inbox
+    with pytest.raises(SystemExit, match="no theme TH9"):
+        ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "set-theme-field", "target": "TH9", "args": {"field": "brief", "value": "x"}})])
+
+
+def test_codebook_edits_are_pending_until_the_codebook_is_applied(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "mark-coded", "T-01")
+    run(study, "mark-coded", "T-02")
+    for i in range(3):   # small edits, one after another: no version marks
+        assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps(
+            {"op": "set-field", "target": "control", "args": {"field": "definition", "value": f"rule, take {i}"}})]) == 0
+    an = ta.Analysis(study.root)
+    assert an.codebook["version"] == 1 and len(an.codebook["pending"]) == 3 and an.codebook["revision"] == 4
+    assert an.code("control")["redefined_version"] == 2                # the version it will carry
+    rows = ta.stale_json(an)
+    assert rows["next_version"] == 2 and [r["transcript"] for r in rows["stale"]] == ["T-01", "T-02"]
+    assert rows["stale"][0]["codes_since"] == ["control"] and "unapplied changes" in rows["stale"][0]["reason"]
+    assert any("unapplied" in w for w in ta.validate(an)[1]) is False   # not frozen: nothing to warn about
+    # applying the codebook to a transcript is what makes the version
+    run(study, "mark-coded", "T-01")
+    an = ta.Analysis(study.root)
+    assert an.codebook["version"] == 2 and an.codebook["pending"] == []
+    assert an.codebook["changelog"][-1]["version"] == 2 and an.codebook["changelog"][-1]["change"].count("control.definition reworded") == 3
+    assert an.transcript("T-01")["coded_with_version"] == 2
+    assert [r["transcript"] for r in ta.stale_json(an)["stale"]] == ["T-02"]
+    run(study, "mark-coded", "T-02")                                     # same pass, same version
+    an = ta.Analysis(study.root)
+    assert an.codebook["version"] == 2 and ta.stale_json(an)["stale"] == []
+    # frozen with edits pending is worth a warning
+    run(study, "bump", "--freeze")
+    run(study, "set-field", "control", "definition", "a later rewording")
+    assert any("frozen, but carrying 1 unapplied change" in w for w in ta.validate(ta.Analysis(study.root))[1])
+
+
+def test_changes_lists_the_researchers_direct_edits_until_acknowledged(study: ta.Analysis, capsys):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    for op in ({"op": "set-kind", "target": "E-0001", "args": {"kind": "did"}},
+               {"op": "new-theme", "args": {"name": "A claim"}}):
+        ta.main(["-d", str(study.root), "exec", "--op", json.dumps(op)])
+    run(study, "theme", "set", "TH1", "essence", "The agent's own edit is not a researcher change.")
+    an = ta.Analysis(study.root)
+    assert [o["op"] for o in ta.direct_changes(an)] == ["set-kind", "new-theme"]
+    capsys.readouterr()
+    assert ta.main(["-d", str(study.root), "changes"]) == 0
+    out = capsys.readouterr().out
+    assert "## transcript (1)" in out and "## themes (1)" in out and "2 direct change(s)" in out
+    capsys.readouterr()
+    ta.main(["-d", str(study.root), "inbox"])
+    assert "own changes since you last looked (2)" in capsys.readouterr().out
+    assert ta.main(["-d", str(study.root), "changes", "--ack"]) == 0
+    assert ta.direct_changes(ta.Analysis(study.root)) == []
+    ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "set-theme-field", "target": "TH1", "args": {"field": "in_paper", "value": "headline"}})])
+    assert [o["op"] for o in ta.direct_changes(ta.Analysis(study.root))] == ["set-theme-field"]
+
+
+def test_review_stamps_use_revisions_so_a_second_edit_in_one_session_still_shows(study: ta.Analysis):
+    """Versions no longer move on an edit, so two edits in one editing session share a version;
+    the delta review has to tell them apart anyway."""
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    run(study, "set-field", "control", "definition", "first rewording")
+    run(study, "mark-reviewed", "--transcript", "T-01")
+    an = ta.Analysis(study.root)
+    assert ta.extract_state(an, an.extracts[0])["new"] is False
+    run(study, "set-field", "control", "definition", "second rewording, same version")
+    an = ta.Analysis(study.root)
+    assert an.codebook["version"] == 1                                # still no application
+    assert ta.extract_state(an, an.extracts[0])["new"] is True        # but the extract knows
+    assert an.code("control")["redefined_revision"] > an.extracts[0]["reviewed"]["revision"]
+
+
+# ------------------------------------------------- after the second Codex audit (2026-09-04)
+def test_a_direct_op_spends_its_id_under_the_inbox_lock(study: ta.Analysis, monkeypatch):
+    """A comment staged while a gesture is in flight must not be handed the same op id."""
+    seen = {}
+    real = ta.HANDLERS["new-theme"]
+
+    def spy(an, op, ctx):
+        seen["locked"] = (an.root / ta.LOCK_NAME).exists()
+        return real(an, op, ctx)
+
+    monkeypatch.setitem(ta.HANDLERS, "new-theme", spy)
+    assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "new-theme", "args": {"name": "A claim"}})]) == 0
+    assert seen["locked"] is True
+    assert not (study.root / ta.LOCK_NAME).exists()          # and released afterwards
+    assert stage(study, "comment", "TH1", text="a question")["id"] == "op-0002"
+
+
+def test_a_drag_moves_only_the_membership_it_left(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control")
+    for name in ("One", "Two", "Three"):
+        run(study, "theme", "new", name)
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "assign-theme", "target": "control", "args": {"theme": "TH2", "add": True}})])
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["codes"] == ["control"] and an.theme("TH2")["codes"] == ["control"]
+    # dragging TH1's card to TH3 leaves TH2's membership alone
+    ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "assign-theme", "target": "control", "args": {"theme": "TH3", "from": "TH1"}})])
+    an = ta.Analysis(study.root)
+    assert (an.theme("TH1")["codes"], an.theme("TH2")["codes"], an.theme("TH3")["codes"]) == ([], ["control"], ["control"])
+    # dragging TH2's card to unplaced un-places only that one
+    ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "assign-theme", "target": "control", "args": {"theme": None, "from": "TH2"}})])
+    an = ta.Analysis(study.root)
+    assert (an.theme("TH2")["codes"], an.theme("TH3")["codes"]) == ([], ["control"])
+    # without `from`, the CLI's assignment still un-places everywhere first
+    run(study, "theme", "assign", "control", "--to", "TH1")
+    an = ta.Analysis(study.root)
+    assert (an.theme("TH1")["codes"], an.theme("TH3")["codes"]) == (["control"], [])
+    with pytest.raises(SystemExit, match="no theme TH9"):
+        ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "assign-theme", "target": "control", "args": {"theme": "TH2", "from": "TH9"}})])

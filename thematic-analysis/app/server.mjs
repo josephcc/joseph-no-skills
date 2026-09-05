@@ -481,6 +481,35 @@ async function runServer() {
       .catch(fail(res));
   });
 
+  // The researcher's own gesture, carried out at once. The daemon runs `ta.py exec` — the same
+  // handler `apply` uses, under the same lock — and the applied log records it as theirs. Only
+  // a thread, and the agent's proposals, wait in the inbox. The script's refusal (a recode that
+  // would leave no codes, a definition that moved) comes straight back as the error.
+  // One gesture at a time per analysis folder, in arrival order: two tabs, or one tab's
+  // composite gesture, must not race each other for the script's lock and half-apply.
+  const execQueues = new Map();
+  const queued = (dir, fn) => {
+    const prev = execQueues.get(dir) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    execQueues.set(dir, next.catch(() => {}));
+    return next;
+  };
+  app.post('/api/do', (req, res) => {
+    const dir = need(req, res, 'body');
+    if (!dir) return;
+    const op = req.body?.op;
+    if (!op || typeof op.op !== 'string') return res.status(400).json({ error: 'op name required' });
+    if (op.args !== undefined && (typeof op.args !== 'object' || op.args === null || Array.isArray(op.args)))
+      return res.status(400).json({ error: 'args must be an object' });
+    const payload = { op: op.op, target: op.target ?? null, args: op.args ?? {}, note: op.note ?? null, by: 'user' };
+    queued(dir, () => runTa(dir, ['exec', '--op', JSON.stringify(payload), '--json']))
+      .then((out) => {
+        invalidate(dir);
+        res.json(out);
+      })
+      .catch(fail(res));
+  });
+
   // Undo before hand-off: drop a pending line the researcher staged by mistake — or discard
   // a whole comment thread, which resolving deliberately does not do.
   app.delete('/api/inbox', (req, res) => {

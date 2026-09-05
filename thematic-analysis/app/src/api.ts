@@ -33,6 +33,10 @@ export const loadAudit = (dir: string) =>
 export const stageOp = (dir: string, op: Omit<Op, 'id' | 'at' | 'status'> | Record<string, unknown>) =>
   send<Op>('POST', '/api/inbox', { analysis: dir, op });
 export const undoOp = (dir: string, id: string) => send<{ removed: string[] }>('DELETE', '/api/inbox', { analysis: dir, id });
+export type Applied = Op & { result?: string; created?: string };
+/** Carry out one of the researcher's gestures at once: the daemon runs `ta.py exec` — the same
+ *  handler `apply` uses, under the same lock — and the applied log records it as theirs. */
+export const execOp = (dir: string, op: Record<string, unknown>) => send<{ applied: Applied[] }>('POST', '/api/do', { analysis: dir, op });
 /** Discard a whole thread — the root and every reply on it. Resolving keeps it; this does not. */
 export const deleteThreadOp = (dir: string, id: string) =>
   send<{ removed: string[] }>('DELETE', '/api/inbox', { analysis: dir, id, withReplies: true });

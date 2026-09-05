@@ -72,6 +72,42 @@ export interface Code {
   kinds: Record<Kind, number>;
 }
 
+/** The numbers a claim was written against — computed by ta.py at the time, never typed. */
+export interface ClaimEvidence {
+  n: number;
+  N: number;
+  said: number;
+  did: number;
+  intent: number;
+  extracts?: number;
+  codes?: string[];
+  computed?: string;
+}
+
+/** One of the agent's candidate claims for a theme: a sentence, the tension it survives, its evidence. */
+export interface Claim {
+  text: string;
+  tension: string | null;
+  evidence: ClaimEvidence | null;
+}
+
+/** The agent's case for a theme's edge: what it did not propose, and why, plus a second reading. */
+export interface ThemeProposal {
+  near_misses?: { code: string; why_not: string }[];
+  second_reading?: string;
+  round?: string | number | null;
+  at?: string;
+}
+
+/** An errand the researcher asked of the agent from the theme's inspector. */
+export interface ThemeRequest {
+  kind: 'codes' | 'claims' | 'both';
+  note: string | null;
+  asked: string;
+  by: string;
+  status: string;
+}
+
 export interface Theme {
   id: string;
   name: string;
@@ -80,6 +116,8 @@ export interface Theme {
   in_paper: InPaper;
   rq: string | null;
   essence: string;
+  /** The researcher's: the rule, the near-miss, and what they want to say. Markdown; nothing parses it. */
+  brief: string;
   story: string;
   codes: string[];
   family: string[];
@@ -91,6 +129,12 @@ export interface Theme {
   n: number;
   N: number;
   extracts: number;
+  /** The agent's: derived from the evidence, so they can go stale; never staged for acceptance. */
+  claims: Claim[];
+  claims_written: { by: string; at: string; version: number } | null;
+  claims_stale: string[];
+  proposal: ThemeProposal | null;
+  requests: ThemeRequest[];
 }
 
 export interface ParticipantRow {
@@ -156,13 +200,27 @@ export interface Spread {
   warnings: { kind: string; text: string; theme?: string; participant?: string }[];
 }
 
+export interface PaperDraft {
+  path: string;
+  abs: string;
+  exists: boolean;
+  words: number | null;
+}
+
 export interface Bundle {
   cooccur: Cooccur;
   root: string;
   study: string;
   approach: Record<string, string>;
+  /** The paper draft(s) registered in study.yaml, and the agent's one-paragraph reading of them. */
+  paper: PaperDraft[];
+  framing: string;
   research_questions: { id: string; text: string }[];
   codebook_version: number;
+  /** Ticks on every codebook change; the version only moves when the codebook is applied to transcripts. */
+  codebook_revision: number;
+  codebook_pending: { date: string; revision?: number; change: string }[];
+  codebook_next_version: number;
   frozen: boolean;
   N: number;
   total_extracts: number;
@@ -175,7 +233,15 @@ export interface Bundle {
   zero_codes: string[];
   silent_participants: string[];
   dupes: Dupe[];
-  stale: { codebook_version: number; transcripts: number; stale: StaleRow[]; reread_requests: { transcript: string; code: string | null; note: string | null; asked: string; status: string }[] };
+  stale: {
+    codebook_version: number;
+    next_version: number;
+    pending: { date: string; revision?: number; change: string }[];
+    transcripts: number;
+    stale: StaleRow[];
+    reread_requests: { transcript: string; code: string | null; note: string | null; asked: string; status: string }[];
+    theme_requests: (ThemeRequest & { theme: string; name: string })[];
+  };
   extracts_all: Extract[];
   changelog: { version: number; date: string; change: string }[];
   inbox: Op[];

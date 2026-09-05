@@ -152,8 +152,17 @@ export function App() {
         <div className="wb-header-main">
           <h1>{b.study}</h1>
           <div className="wb-chips">
-            <span className="wb-chip">
+            <span
+              className={`wb-chip ${b.codebook_pending.length ? 'wb-chip-warn' : ''}`}
+              title={
+                b.codebook_pending.length
+                  ? `unapplied since v${b.codebook_version} — the next coding pass makes v${b.codebook_next_version}:\n` +
+                    b.codebook_pending.map((p) => `• ${p.change}`).join('\n')
+                  : 'the version moves when the codebook is applied to the transcripts, not when a code is edited'
+              }
+            >
               <b>codebook</b> v{b.codebook_version} {b.frozen ? '· frozen' : ''}
+              {b.codebook_pending.length ? ` · ${b.codebook_pending.length} unapplied → v${b.codebook_next_version}` : ''}
             </span>
             <span className="wb-chip">
               <b>coded</b> {coded}/{b.transcripts.length}

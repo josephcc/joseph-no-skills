@@ -280,7 +280,7 @@ export function QuotesView({ wb, nav }: { wb: Workbench; nav: Nav }) {
             </ul>
           )}
           <p className="wb-muted">
-            Counted from what is on disk plus what you have staged. The warnings are the skill's: nobody should carry the section alone, and
+            Counted from what is on disk, the agent's proposals included. The warnings are the skill's: nobody should carry the section alone, and
             a behavioural claim wants a `did` beside the `said`.
           </p>
         </section>
@@ -358,7 +358,7 @@ function TrimPane({ extract, existing, onSubmit, onCancel }: {
       )}
       <div className="wb-actions">
         <button className="wb-btn wb-btn-primary" disabled={!range} onClick={() => range && onSubmit(range.start, range.end)}>
-          stage the trim
+          trim it
         </button>
         <button className="wb-btn wb-btn-ghost" onClick={onCancel}>
           cancel

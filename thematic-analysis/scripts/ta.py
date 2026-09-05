@@ -47,6 +47,9 @@ PARTICIPANT_REF_RE = re.compile(r"\(?\b([A-Z]{1,3}\d{1,3})\b\)?")
 CODE_STATUSES = {"candidate", "accepted", "merged", "retired"}
 THEME_STATUSES = {"candidate", "accepted", "merged", "dropped"}
 IN_PAPER = {"undecided", "headline", "secondary", "no"}
+# What a researcher can ask the agent for from a theme's inspector (a `theme-request` op).
+THEME_REQUEST_KINDS = {"codes", "claims", "both"}
+
 EXTRACT_KINDS = {"said", "did", "intent"}
 ROLES = {"participant", "interviewer", "researcher", "other", "unknown"}
 
@@ -56,6 +59,45 @@ STOPWORDS = {
     "versus", "about", "from", "their", "they", "user", "users", "participant",
     "participants", "system", "agent",
 }
+
+
+# ------------------------------------------------------------------- versions
+# The codebook version is the count of *applications*: it moves when the codebook is applied to
+# transcripts (`bump`, or the first `mark-coded` after edits), never on an edit. Edits between
+# applications accumulate as `pending` and are stamped with the version they will become, so
+# `stale` tells the truth in between. A separate `revision` ticks on every change, because the
+# delta review ("new since you reviewed it") has to tell two edits in one editing session apart,
+# and versions cannot.
+def codebook_revision(an: "Analysis") -> int:
+    return int(an.codebook.get("revision") or an.codebook.get("version") or 1)
+
+
+def codebook_pending(an: "Analysis") -> list[dict]:
+    return list(an.codebook.get("pending") or [])
+
+
+def next_version(an: "Analysis") -> int:
+    """The version the codebook will carry at its next application: the current one, or one
+    more if anything has changed since."""
+    return int(an.codebook.get("version", 1)) + (1 if an.codebook.get("pending") else 0)
+
+
+def mark_application(an: "Analysis", change: str | None = None) -> int | None:
+    """Mark that the codebook is being applied to the transcripts: the pending changes become
+    one changelog entry and the version moves. Returns the new version, or None when nothing
+    had changed (re-applying the same codebook is not a new version)."""
+    pending = codebook_pending(an)
+    if not pending:
+        return None
+    an.codebook["version"] = int(an.codebook.get("version", 1)) + 1
+    body = "; ".join(str(p.get("change") or "") for p in pending if p.get("change"))
+    an.codebook.setdefault("changelog", []).append({
+        "version": an.codebook["version"], "date": today(),
+        "change": (f"{change}: {body}" if change and body else (change or body or "codebook applied")),
+        "applied": today(),
+    })
+    an.codebook["pending"] = []
+    return an.codebook["version"]
 
 
 # --------------------------------------------------------------------------- io
@@ -529,8 +571,13 @@ def validate(an: Analysis) -> tuple[list[str], list[str]]:
             elif pt.get("parent"):
                 errors.append(f"themes: {tid} -> {parent} -> {pt.get('parent')}: themes may have at most two levels")
         if th.get("status") in ("candidate", "accepted"):
+            # A theme is created from the board with a name and nothing else; its essence is
+            # phase-5 work. So a candidate without one is a reminder, and only an *accepted*
+            # theme without one is an error — otherwise `+ theme` puts the analysis in an error
+            # state that refuses to open the workbench until the researcher has written a sentence.
             if not (th.get("essence") or "").strip():
-                errors.append(f"themes: {tid} has no essence (the two-sentence scope statement)")
+                (errors if th.get("status") == "accepted" else warnings).append(
+                    f"themes: {tid} has no essence (the two-sentence scope statement)")
             if not th.get("codes") and not parent:
                 warnings.append(f"themes: {tid} gathers no codes")
             ess = norm(th.get("essence") or "")
@@ -551,6 +598,37 @@ def validate(an: Analysis) -> tuple[list[str], list[str]]:
                 errors.append(f"themes: {tid} references missing extract {eid}")
             elif theme_codes and not (theme_codes & {an.resolve_code(x) for x in ex.get("codes", [])}):
                 warnings.append(f"themes: {tid} selects {eid}, which carries none of the theme's codes")
+        # The agent's claims are derived from the evidence, so they can go stale (the data moved
+        # under them) and they must name the exception they survive. Both are facts about the
+        # data, not readings of the sentence; nothing here judges the prose.
+        claims = th.get("claims") or []
+        if claims and th.get("status") in ("candidate", "accepted"):
+            if not (th.get("tensions") or []):
+                warnings.append(f"themes: {tid} has {len(claims)} claim(s) but no tensions; a claim should name the account that complicates it")
+            for why in claims_stale(an, th):
+                warnings.append(f"themes: {tid} claims — {why}")
+            for i, cl in enumerate(claims, 1):
+                for eid in sorted(set(re.findall(r"\bE-\d{4,}\b", str(cl.get("text") or "")))):
+                    if an.extract(eid) is None:
+                        warnings.append(f"themes: {tid} claim {i} cites {eid}, which does not exist")
+                t_eid = cl.get("tension")
+                if t_eid and an.extract(str(t_eid)) is None:
+                    errors.append(f"themes: {tid} claim {i} names tension {t_eid}, which does not exist")
+    # A code may sit in two themes (the researcher's call), but then its extracts count toward
+    # both, and two themes that each claim P4 on the strength of the same sentence are less
+    # independent than their n/N suggests. Say so wherever the numbers are.
+    for cid, tids in codes_in_several_themes(an).items():
+        warnings.append(f"themes: `{cid}` counts toward {shared_code_note(an, cid, tids)}; its extracts count toward each (coverage prints the overlap)")
+
+    if an.codebook.get("frozen") and an.codebook.get("pending"):
+        warnings.append(f"codebook: frozen, but carrying {len(an.codebook['pending'])} unapplied change(s); re-code and `bump --freeze`, or unfreeze")
+
+    # the paper draft, when one is registered
+    for p in registered_papers(an):
+        if not p["exists"]:
+            warnings.append(f"study.yaml: paper draft not found at {p['abs']}")
+    if registered_papers(an) and not str(an.study.get("framing") or "").strip():
+        warnings.append("study.yaml: a paper draft is registered but `framing` is empty; read the draft in full and write `paper --framing`")
 
     # spans the workbench (and `annotate`) cannot place on the transcript itself
     for e in an.extracts:
@@ -970,8 +1048,9 @@ def locate_segment(an: Analysis, seg: str) -> list[tuple[str, str | None, int]]:
     return hits
 
 
-def cmd_verify_quotes(an: Analysis, args) -> int:
-    md = Path(args.file).read_text(encoding="utf-8")
+def verify_quotes_file(an: Analysis, path: Path, quiet: bool = False) -> tuple[int, int]:
+    """Check every quote one document presents. Returns (quotes checked, problems)."""
+    md = path.read_text(encoding="utf-8")
     quotes = find_quotes_in_markdown(md)
     bad = 0
     for q in quotes:
@@ -999,11 +1078,30 @@ def cmd_verify_quotes(an: Analysis, args) -> int:
         if len(who) > 1:
             print(f"ambiguous  {label}: segments match several participants {sorted(who)}; check the join: {q['text'][:80]!r}")
             continue
-        if not args.quiet:
+        if not quiet:
             src = ", ".join(f"{t}:{ln}" for t, _, ln in seg_hits[0][:2])
             print(f"ok        {label}: {sorted(who) or ['?']} {src}")
-    print(f"verify-quotes: {len(quotes)} quote(s) checked, {bad} problem(s)")
-    return 1 if bad else 0
+    return len(quotes), bad
+
+
+def cmd_verify_quotes(an: Analysis, args) -> int:
+    if args.file:
+        files = [Path(args.file)]
+    else:
+        # No file named: the registered paper drafts are what this exists to check.
+        files = [Path(p["abs"]) for p in registered_papers(an) if p["exists"]]
+        if not files:
+            raise SystemExit("verify-quotes needs a FILE, or a paper draft registered in study.yaml (`paper --add <path>`)")
+    total = problems = 0
+    for path in files:
+        if len(files) > 1:
+            print(f"## {path}")
+        n, bad = verify_quotes_file(an, path, quiet=args.quiet)
+        total += n
+        problems += bad
+    print(f"verify-quotes: {total} quote(s) checked, {problems} problem(s)"
+          + (f" across {len(files)} file(s)" if len(files) > 1 else ""))
+    return 1 if problems else 0
 
 
 # ------------------------------------------------------------------ coverage
@@ -1032,7 +1130,9 @@ def coverage_report(an: Analysis) -> str:
     N = len(pids)
     codes = an.live_codes()
     out = [f"# Coverage ({today()})", ""]
-    out.append(f"Participants (role=participant): {N}. Extracts: {len(an.extracts)}. Codebook v{an.codebook.get('version')} ({'frozen' if an.codebook.get('frozen') else 'open'}), {len(codes)} live code(s).")
+    pend = codebook_pending(an)
+    out.append(f"Participants (role=participant): {N}. Extracts: {len(an.extracts)}. Codebook v{an.codebook.get('version')} ({'frozen' if an.codebook.get('frozen') else 'open'}"
+               + (f", {len(pend)} unapplied change(s) → v{next_version(an)} at the next coding pass" if pend else "") + f"), {len(codes)} live code(s).")
     out.append("")
     # per code
     out += ["## Codes: prevalence at the participant level", "", "| code | status | participants | n/N | extracts | said/did/intent |", "|---|---|---|---|---|---|"]
@@ -1100,6 +1200,12 @@ def coverage_report(an: Analysis) -> str:
             indent = "└ " if th.get("parent") else ""
             out.append(f"| {indent}{th.get('id')} {th.get('name','')} | {th.get('status')} | {th.get('in_paper','undecided')} | {', '.join(th.get('codes') or []) or '-'} | {', '.join(ps) or '-'} | {len(ps)}/{N} | {n_ex} | {len(th.get('tensions') or [])} | {len(th.get('selected_extracts') or [])} |")
         out.append("")
+        shared = codes_in_several_themes(an)
+        if shared:
+            out.append("Codes in more than one theme, whose extracts therefore count toward each: "
+                       + "; ".join(f"`{cid}` in {shared_code_note(an, cid, tids)} ({len(participants_for_codes(an, code_family(an, cid)))} participant(s))"
+                                   for cid, tids in shared.items()) + ".")
+            out.append("")
     out.append("Prevalence is counted per participant (Braun & Clarke: pick one unit and keep it). Frequency does not determine value; a 3/12 theme can carry the paper if it answers the research question.")
     return "\n".join(out) + "\n"
 
@@ -1311,13 +1417,9 @@ def cmd_dupes(an: Analysis, args) -> int:
 
 
 # ---------------------------------------------------------------- code admin
-def do_merge_code(an: Analysis, src: str, dst: str, why: str | None = None, bump: bool = True) -> int:
-    """Fold SOURCE into TARGET everywhere. Mutates; does not save.
-
-    `bump=False` when this runs inside a pass of staged operations: the pass bumps the
-    codebook once at the end and owns the changelog entry, so two merges in one review do
-    not move the version twice and leave a later code's `added.version` ahead of it.
-    """
+def do_merge_code(an: Analysis, src: str, dst: str, why: str | None = None) -> int:
+    """Fold SOURCE into TARGET everywhere. Mutates; does not save. The change is recorded by
+    the caller's `save_ctx` as pending; the version moves at the next application."""
     a, b = an.code(src), an.code(dst)
     if a is None or b is None:
         raise SystemExit(f"both codes must exist: {src} -> {dst}")
@@ -1343,17 +1445,11 @@ def do_merge_code(an: Analysis, src: str, dst: str, why: str | None = None, bump
     b["examples"] = sorted(set(b.get("examples") or []) | set(a.get("examples") or []))
     a["status"] = "merged"
     a["merged_into"] = dst
-    if bump:
-        an.codebook["version"] = int(an.codebook.get("version", 1)) + 1
-        an.codebook["changelog"].append({"version": an.codebook["version"], "date": today(), "change": f"merged {src} into {dst} ({n} extracts recoded){': ' + why if why else ''}"})
     return n
 
 
 def cmd_merge_code(an: Analysis, args) -> int:
-    n = do_merge_code(an, args.source, args.target, args.why)
-    an.save_codebook(); an.save_extracts(); an.save_themes()
-    print(f"merged {args.source} -> {args.target}; {n} extract(s) recoded; codebook now v{an.codebook['version']}")
-    return 0
+    return run_op_now(an, {"op": "merge-code", "target": args.source, "args": {"into": args.target, "why": args.why}})
 
 
 def rename_everywhere(an: Analysis, old: str, new: str) -> int:
@@ -1389,24 +1485,28 @@ def do_rename_code(an: Analysis, old: str, new: str) -> int:
             new_child = new + "." + child["id"].split(".", 1)[1]
             rename_everywhere(an, child["id"], new_child)
             child["id"] = new_child
-    an.codebook["changelog"].append({"version": an.codebook.get("version", 1), "date": today(), "change": f"renamed {old} -> {new} ({n} extracts)"})
     return n
 
 
 def cmd_rename_code(an: Analysis, args) -> int:
-    n = do_rename_code(an, args.old, args.new)
-    an.save_codebook(); an.save_extracts(); an.save_themes()
-    print(f"renamed {args.old} -> {args.new}; {n} extract(s) updated")
-    return 0
+    return run_op_now(an, {"op": "rename-code", "target": args.old, "args": {"new_id": args.new}})
 
 
 def cmd_bump(an: Analysis, args) -> int:
-    an.codebook["version"] = int(an.codebook.get("version", 1)) + 1
+    """Mark an application of the codebook. This is the only thing that moves the version:
+    editing a code records a pending change, applying the codebook to the transcripts turns
+    the pending changes into a version. Nothing pending, nothing to mark."""
+    new = mark_application(an, args.change)
     if args.freeze:
         an.codebook["frozen"] = True
-    an.codebook["changelog"].append({"version": an.codebook["version"], "date": today(), "change": args.change})
+    if new is None and not args.freeze:
+        print(f"codebook unchanged since v{an.codebook.get('version', 1)}; nothing to mark. Edits are versioned when the codebook is next applied.")
+        return 0
     an.save_codebook()
-    print(f"codebook v{an.codebook['version']}{' (frozen)' if an.codebook.get('frozen') else ''}: {args.change}")
+    if new is None:
+        print(f"codebook v{an.codebook.get('version', 1)} frozen; no changes were pending")
+    else:
+        print(f"codebook v{new}{' (frozen)' if an.codebook.get('frozen') else ''}: {an.codebook['changelog'][-1]['change']}")
     return 0
 
 
@@ -1414,7 +1514,13 @@ def cmd_mark_coded(an: Analysis, args) -> int:
     t = an.transcript(args.transcript)
     if t is None:
         raise SystemExit(f"no transcript {args.transcript}")
+    # Coding a transcript *is* applying the codebook: if edits are pending, this is where they
+    # become a version — the first transcript of the pass marks it, the rest share it.
+    new = mark_application(an)
+    if new is not None:
+        print(f"codebook v{new}: {an.codebook['changelog'][-1]['change']}")
     t["coded_with_version"] = int(an.codebook.get("version", 1))
+    an.save_codebook()
     an.save_study()
     print(f"{t['id']} marked coded with codebook v{t['coded_with_version']}")
     return 0
@@ -1424,18 +1530,15 @@ def cmd_stale(an: Analysis, args) -> int:
     if getattr(args, "json", False):
         print(json.dumps(stale_json(an), ensure_ascii=False, indent=2, default=json_safe))
         return 0
-    v = int(an.codebook.get("version", 1))
-    stale = []
-    for t in an.study.get("transcripts", []):
-        cv = t.get("coded_with_version")
-        if cv is None:
-            stale.append((t["id"], "never coded"))
-        elif int(cv) < v:
-            stale.append((t["id"], f"coded with v{cv}, codebook is v{v}"))
-    for tid, why in stale:
-        print(f"- {tid}: {why}")
-    print(f"stale: {len(stale)} of {len(an.study.get('transcripts', []))} transcript(s) need a (re)coding pass")
-    return 1 if stale else 0
+    rows = stale_rows(an)
+    for r in rows:
+        print(f"- {r['transcript']}: {r['reason']}" + (f" (codes: {', '.join(r['codes_since'])})" if r["codes_since"] else ""))
+    pend = codebook_pending(an)
+    if pend:
+        print(f"codebook: {len(pend)} unapplied change(s) → v{next_version(an)} at the next coding pass: "
+              + "; ".join(str(p.get("change") or "") for p in pend))
+    print(f"stale: {len(rows)} of {len(an.study.get('transcripts', []))} transcript(s) need a (re)coding pass")
+    return 1 if rows else 0
 
 
 # ------------------------------------------------------------------- collate
@@ -1673,8 +1776,23 @@ def theme_block(an: Analysis, th: dict, pids: list[str], N: int, level: int) -> 
     out.append(f"*Essence:* {th.get('essence','')}")
     out.append(f"*Codes:* {', '.join(th.get('codes') or []) or '-'}")
     out.append(f"*Participants:* {len(ps)}/{N} ({', '.join(ps) or '-'}); {sum(len(v) for k, v in pmap.items() if k in pids)} extracts")
+    if (th.get("brief") or "").strip():
+        out += ["", "*Brief (the researcher's rule, boundary, and intent):*", "", th["brief"].strip()]
     if th.get("story"):
         out += ["", th["story"].strip()]
+    if th.get("claims"):
+        stale = claims_stale(an, th)
+        out += ["", "*Candidate claims (the agent's summary of what the evidence supports; the write-up decides which is warranted):*"]
+        if stale:
+            out.append(f"  _stale: {'; '.join(stale)}_")
+        for i, cl in enumerate(th["claims"], 1):
+            ev = cl.get("evidence") or {}
+            out.append(f"{i}. {str(cl.get('text') or '').strip()}")
+            out.append(f"   - evidence: {ev.get('n', '?')}/{ev.get('N', '?')} participants · said {ev.get('said', '?')} / did {ev.get('did', '?')} / intent {ev.get('intent', '?')}"
+                       + (f" · codes: {', '.join(ev.get('codes') or [])}" if ev.get("codes") else ""))
+            t_e = an.extract(str(cl.get("tension") or ""))
+            if t_e:
+                out.append(f"   - tension: {t_e['id']} ({t_e['participant']}): \"{t_e['text']}\"")
     if th.get("selected_extracts"):
         out += ["", "*Selected quotes:*"]
         for eid in th["selected_extracts"]:
@@ -1775,11 +1893,23 @@ def cmd_report(an: Analysis, args) -> int:
 # One computation, two renderings: every table the terminal prints has a --json
 # twin the workbench reads, so a number never gets derived twice (principle 6).
 def code_change_version(an: Analysis, cid: str) -> int:
-    """The codebook version at which this code last changed meaning."""
+    """The codebook version at which this code last changed meaning — the version it will
+    carry at the next application, while the change is still pending."""
     c = an.code(an.resolve_code(cid)) or {}
     added = int((c.get("added") or {}).get("version") or 0)
     redefined = int(c.get("redefined_version") or 0)
     return max(added, redefined)
+
+
+def code_change_revision(an: Analysis, cid: str) -> int:
+    """The codebook revision at which this code last changed meaning. Revisions count every
+    change; versions count applications. A record from before revisions existed carries only a
+    version, which is read as its revision — revisions start where the versions were."""
+    c = an.code(an.resolve_code(cid)) or {}
+    added = c.get("added") or {}
+    a = int(added.get("revision") or added.get("version") or 0)
+    r = int(c.get("redefined_revision") or c.get("redefined_version") or 0)
+    return max(a, r)
 
 
 def extract_state(an: Analysis, e: dict) -> dict:
@@ -1787,14 +1917,15 @@ def extract_state(an: Analysis, e: dict) -> dict:
 
     Delta reviewing (principle 2) rests on three facts: it was never reviewed, the agent
     changed it since (which clears the stamp), or one of its codes was added or redefined
-    after the review — the same reason `stale` sends you back to a transcript. Nothing
-    here compares two clock strings, so two changes in the same second cannot hide one.
+    after the review — the same reason `stale` sends you back to a transcript. The comparison
+    is on codebook *revisions*, which tick on every change: nothing here compares two clock
+    strings, and two edits in one editing session cannot hide behind one version number.
     """
     rev = e.get("reviewed") or None
     if not rev:
         return {"new": True, "reason": "changed since you reviewed it" if e.get("updated") else "not reviewed yet"}
-    rver = int(rev.get("version") or 0)
-    late = sorted({c for c in e.get("codes", []) if code_change_version(an, c) > rver})
+    rrev = int(rev.get("revision") or rev.get("version") or 0)
+    late = sorted({c for c in e.get("codes", []) if code_change_revision(an, c) > rrev})
     if late:
         return {"new": True, "reason": "code(s) added or redefined since: " + ", ".join(late)}
     return {"new": False, "reason": None}
@@ -1852,7 +1983,7 @@ def extract_public(an: Analysis, e: dict) -> dict:
 
 
 def transcript_state(an: Analysis, t: dict) -> str:
-    v = int(an.codebook.get("version", 1))
+    v = next_version(an)
     cv = t.get("coded_with_version")
     if cv is None:
         return "uncoded"
@@ -1912,17 +2043,30 @@ def coverage_json(an: Analysis) -> dict:
             "id": th.get("id"), "name": th.get("name") or "", "parent": th.get("parent"),
             "status": th.get("status"), "in_paper": th.get("in_paper", "undecided"),
             "rq": th.get("rq"), "essence": th.get("essence") or "", "story": th.get("story") or "",
+            "brief": th.get("brief") or "",
             "codes": th.get("codes") or [], "family": sorted(fam),
             "tensions": th.get("tensions") or [], "selected_extracts": th.get("selected_extracts") or [],
             "quote_spans": th.get("quote_spans") or {}, "reviewed": th.get("reviewed") or None,
             "participants": ps, "n": len(ps), "N": N,
             "extracts": sum(len(v) for k, v in pmap.items() if k in pids),
+            # the agent's side of the theme: its claims (derived, so they can go stale), its case
+            # for the codes it did not propose, and the errands the researcher has asked of it
+            "claims": th.get("claims") or [],
+            "claims_written": th.get("claims_written") or None,
+            "claims_stale": claims_stale(an, th),
+            "proposal": th.get("proposal") or None,
+            "requests": [r for r in (th.get("requests") or []) if r.get("status") != "done"],
         })
     return {
         "study": an.study.get("study") or "",
         "approach": an.study.get("approach") or {},
+        "paper": registered_papers(an),
+        "framing": str(an.study.get("framing") or ""),
         "research_questions": an.study.get("research_questions") or [],
         "codebook_version": int(an.codebook.get("version", 1)),
+        "codebook_revision": codebook_revision(an),
+        "codebook_pending": codebook_pending(an),
+        "codebook_next_version": next_version(an),
         "frozen": bool(an.codebook.get("frozen")),
         "N": N,
         "total_extracts": len(an.extracts),
@@ -1947,6 +2091,103 @@ def theme_family(an: Analysis, th: dict) -> set[str]:
             for c in sub.get("codes") or []:
                 fam |= code_family(an, an.resolve_code(c))
     return fam
+
+
+def codes_in_several_themes(an: Analysis) -> dict[str, list[str]]:
+    """code id -> the live themes whose gathered codes include it, for every code more than one counts.
+
+    A theme that gathers a parent gathers its children with it, so a child placed directly in one
+    theme and reached through its parent in another counts toward both — `theme_family` counts it
+    that way, and so must this. A child whose parent is already shared by the same themes is
+    implied and left out. Only a theme's own `codes` are read, not its sub-themes': a sub-theme
+    sharing with its parent theme is the structure, not a double placement."""
+    where: dict[str, list[str]] = defaultdict(list)
+    for th in an.themes["themes"]:
+        if th.get("status") in ("merged", "dropped"):
+            continue
+        fam: set[str] = set()
+        for cid in th.get("codes") or []:
+            fam |= code_family(an, an.resolve_code(cid))
+        for cid in sorted(fam):
+            where[cid].append(str(th.get("id")))
+    shared = {cid: tids for cid, tids in where.items() if len(tids) > 1}
+    for cid in list(shared):
+        parent = (an.code(cid) or {}).get("parent")
+        if parent and shared.get(parent) == shared[cid]:
+            del shared[cid]
+    return shared
+
+
+def shared_code_note(an: Analysis, cid: str, tids: list[str]) -> str:
+    """How each theme comes to count a shared code: directly, or through a parent it gathers."""
+    parts = []
+    for tid in tids:
+        th = an.theme(tid) or {}
+        if cid in (th.get("codes") or []):
+            parts.append(tid)
+        else:
+            parts.append(f"{tid} (via `{(an.code(cid) or {}).get('parent')}`)")
+    return ", ".join(parts)
+
+
+def claim_evidence(an: Analysis, th: dict) -> dict:
+    """The numbers a claim rests on, computed from the theme's extracts — never typed."""
+    pids = [p["id"] for p in an.participants()]
+    fam = theme_family(an, th)
+    pmap = participants_for_codes(an, fam)
+    kinds: Counter = Counter()
+    for e in an.extracts:
+        if e.get("participant") in pids and {an.resolve_code(c) for c in e.get("codes", [])} & fam:
+            kinds[e.get("kind", "said")] += 1
+    return {"n": len([p for p in pids if p in pmap]), "N": len(pids),
+            "said": kinds["said"], "did": kinds["did"], "intent": kinds["intent"],
+            "extracts": sum(kinds.values()), "codes": sorted(fam), "computed": today()}
+
+
+def claims_stale(an: Analysis, th: dict) -> list[str]:
+    """Why a theme's claims no longer describe its evidence, if they do not.
+
+    Claims are the agent's, derived from the extracts at the time of writing. When the codes
+    or the extracts move, the claims are *stale* rather than wrong — and the difference is
+    worth one line each, in the place the numbers are read."""
+    claims = th.get("claims") or []
+    if not claims:
+        return []
+    now = claim_evidence(an, th)
+    reasons: list[str] = []
+    for i, cl in enumerate(claims, 1):
+        ev = cl.get("evidence") or {}
+        if not ev:
+            reasons.append(f"claim {i} carries no evidence line; rewrite it with `theme claim`")
+            continue
+        if (ev.get("n"), ev.get("N")) != (now["n"], now["N"]):
+            reasons.append(f"claim {i} was written against {ev.get('n')}/{ev.get('N')} participants; the theme now has {now['n']}/{now['N']}")
+        for k in ("said", "did", "intent"):
+            if ev.get(k) is not None and int(ev.get(k) or 0) != now[k]:
+                reasons.append(f"claim {i} was written when the theme had {ev.get(k)} `{k}` extract(s); it now has {now[k]}")
+                break
+        if ev.get("codes") is not None and sorted(ev.get("codes") or []) != now["codes"]:
+            reasons.append(f"claim {i} was written when the theme gathered {', '.join(ev.get('codes') or []) or 'no codes'}; it now gathers {', '.join(now['codes']) or 'none'}")
+    return reasons
+
+
+def registered_papers(an: Analysis) -> list[dict]:
+    """The paper drafts `study.yaml` names, resolved. Each entry is a path or `{path: ...}`."""
+    out = []
+    for raw in an.study.get("paper") or []:
+        p = raw.get("path") if isinstance(raw, dict) else raw
+        if not p:
+            continue
+        path = Path(str(p))
+        abs_path = path if path.is_absolute() else (an.root / path).resolve()
+        words = None
+        if abs_path.exists() and abs_path.is_file():
+            try:
+                words = len(abs_path.read_text(encoding="utf-8", errors="replace").split())
+            except OSError:
+                words = None
+        out.append({"path": str(p), "abs": str(abs_path), "exists": abs_path.is_file(), "words": words})
+    return out
 
 
 def dupes_json(an: Analysis) -> dict:
@@ -1986,7 +2227,10 @@ def dupes_json(an: Analysis) -> dict:
 
 
 def stale_rows(an: Analysis) -> list[dict]:
-    v = int(an.codebook.get("version", 1))
+    # A transcript is stale against the codebook as it *stands* — pending edits included — not
+    # against the last version mark, which is only made when the codebook is next applied.
+    v = next_version(an)
+    pending = bool(an.codebook.get("pending"))
     rows = []
     for t in an.study.get("transcripts", []):
         cv = t.get("coded_with_version")
@@ -1995,17 +2239,32 @@ def stale_rows(an: Analysis) -> list[dict]:
                          "codes_since": [], "severity": "recode"})
         elif int(cv) < v:
             since = sorted({c["id"] for c in an.live_codes() if code_change_version(an, c["id"]) > int(cv)})
+            reason = (f"coded with v{cv}; the codebook has unapplied changes that will make v{v}" if pending and int(cv) == v - 1
+                      else f"coded with v{cv}, codebook is v{v}")
             rows.append({"transcript": t["id"], "coded_with_version": int(cv),
-                         "reason": f"coded with v{cv}, codebook is v{v}", "codes_since": since,
+                         "reason": reason, "codes_since": since,
                          "severity": "recode" if since else "version-only"})
     return rows
 
 
+def open_theme_requests(an: Analysis) -> list[dict]:
+    """Every errand a researcher has asked of the agent from a theme, not yet closed."""
+    out = []
+    for th in an.themes["themes"]:
+        for r in th.get("requests") or []:
+            if r.get("status") != "done":
+                out.append({"theme": th.get("id"), "name": th.get("name") or "", **r})
+    return out
+
+
 def stale_json(an: Analysis) -> dict:
     return {"codebook_version": int(an.codebook.get("version", 1)),
+            "next_version": next_version(an),
+            "pending": codebook_pending(an),
             "transcripts": len(an.study.get("transcripts", [])),
             "stale": stale_rows(an),
-            "reread_requests": [r for r in (an.study.get("reread_requests") or []) if r.get("status") != "done"]}
+            "reread_requests": [r for r in (an.study.get("reread_requests") or []) if r.get("status") != "done"],
+            "theme_requests": open_theme_requests(an)}
 
 
 def collate_json(an: Analysis, target: str) -> dict:
@@ -2382,10 +2641,10 @@ def inbox_unlock(an: Analysis) -> None:
     release_lock(an, LOCK_NAME)
 
 
-def apply_lock(an: Analysis):
+def apply_lock(an: Analysis, timeout: float = 1.0):
     """Held for a whole pass: two passes must not load, mutate and rewrite the same
     analysis files from different snapshots, or the later save silently wins."""
-    return take_lock(an, APPLY_LOCK_NAME, CLAIM_STALE_MINUTES * 60.0, timeout=1.0,
+    return take_lock(an, APPLY_LOCK_NAME, CLAIM_STALE_MINUTES * 60.0, timeout=timeout,
                      whose="another `apply` on this folder")
 
 
@@ -2605,11 +2864,16 @@ OP_SPECS: dict[str, dict] = {
     # coverage view
     "reread-request": {"view": "coverage", "target": "none", "required": ["transcript"], "optional": ["code", "note"]},
     # themes view
-    "new-theme":      {"view": "themes", "target": "none", "required": ["name"], "optional": ["parent", "rq", "essence", "id"]},
-    "assign-theme":   {"view": "themes", "target": "code", "required": [], "optional": ["theme"]},
+    "new-theme":      {"view": "themes", "target": "none", "required": ["name"], "optional": ["parent", "rq", "essence", "brief", "id"]},
+    "assign-theme":   {"view": "themes", "target": "code", "required": [], "optional": ["theme", "why", "add", "from"]},
     "set-theme-field": {"view": "themes", "target": "theme", "required": ["field", "value"], "optional": ["old", "force"]},
     "merge-theme":    {"view": "themes", "target": "theme", "required": ["into"], "optional": []},
     "set-tension":    {"view": "themes", "target": "theme", "required": [], "optional": ["add", "remove"]},
+    # the errand from the board: "propose the codes that belong here" / "draft the claims"
+    "theme-request":  {"view": "themes", "target": "theme", "required": ["kind"], "optional": ["note"]},
+    # the agent's one-paragraph reading of the paper draft, shown above the board; the
+    # researcher corrects it here, the agent writes it with `paper --framing`
+    "set-framing":    {"view": "themes", "target": "none", "required": ["value"], "optional": ["old", "force"]},
     # quotes view
     "select-quote":   {"view": "quotes", "target": "theme", "required": ["extract"], "optional": ["at"]},
     "deselect-quote": {"view": "quotes", "target": "theme", "required": ["extract"], "optional": []},
@@ -2986,7 +3250,7 @@ def op_merge_code(an, op, ctx):
     dst = (op.get("args") or {}).get("into")
     _need_code(an, src), _need_code(an, dst)
     why = (op.get("args") or {}).get("why")
-    n = do_merge_code(an, src, dst, why, bump=False)
+    n = do_merge_code(an, src, dst, why)
     ctx["codebook"] = ctx["extracts"] = ctx["themes"] = True
     ctx["changes"].append(f"merged {src} into {dst}" + (f" ({why})" if why else ""))
     return f"merged {src} -> {dst} ({n} extract(s) recoded)"
@@ -3082,8 +3346,8 @@ def op_new_theme(an, op, ctx):
             raise OpError(f"{parent} is itself a sub-theme; themes may have at most two levels")
     an.themes["themes"].append({
         "id": tid, "name": str(a["name"]), "parent": parent, "rq": a.get("rq"),
-        "essence": a.get("essence") or "", "story": "", "codes": [], "status": "candidate",
-        "merged_into": None, "in_paper": "undecided", "tensions": [], "selected_extracts": [],
+        "essence": a.get("essence") or "", "brief": a.get("brief") or "", "story": "", "codes": [],
+        "status": "candidate", "merged_into": None, "in_paper": "undecided", "tensions": [], "selected_extracts": [],
     })
     ctx["themes"] = True
     op["created"] = tid
@@ -3115,19 +3379,41 @@ def op_assign_theme(an, op, ctx):
         })
     if dest:
         _need_theme(an, dest)
+    # A drag on the board is a move: the card leaves the column it was in. `add` is the other
+    # meaning — a code may sit in two themes — and is what a proposal for a code already gathered
+    # elsewhere carries, so accepting it adds rather than silently un-places.
+    add = bool((op.get("args") or {}).get("add")) and bool(dest)
+    # A code may sit in several themes, so a drag names the column it left (`from`) and only
+    # that membership moves; without `from` (the CLI, an older client) the code is un-placed
+    # everywhere first, as it always was.
+    src = (op.get("args") or {}).get("from") or None
+    if src and an.theme(src) is None:
+        raise OpError(f"no theme {src}")
     was = []
     for th in an.themes["themes"]:
-        if cid in (th.get("codes") or []):
+        if cid in (th.get("codes") or []) and th.get("id") != dest:
+            if src and th.get("id") != src:
+                continue
             was.append(th["id"])
-            th["codes"] = [c for c in th["codes"] if c != cid]
+            if not add:
+                th["codes"] = [c for c in th["codes"] if c != cid]
     if dest:
         th = an.theme(dest)
         th["codes"] = sorted(set(th.get("codes") or []) | {cid})
     ctx["themes"] = True
-    return f"{cid}: {' , '.join(was) or 'unplaced'} -> {dest or 'unplaced'}"
+    # The agent's one-line case for a placement is reasoning, and reasoning lives in memos.md
+    # between rounds; the applied log keeps the operation itself.
+    why = (op.get("args") or {}).get("why")
+    if why:
+        ctx["memos"].append(f"`{cid}` {'+' if add else '->'} {dest or 'unplaced'} ({op.get('by', 'user')}): {why}")
+    if add:
+        return f"{cid}: added to {dest}" + (f", still in {', '.join(was)}" if was else "") + (f" — {why}" if why else "")
+    return f"{cid}: {' , '.join(was) or 'unplaced'} -> {dest or 'unplaced'}" + (f" — {why}" if why else "")
 
 
-THEME_FIELDS = {"name", "essence", "story", "rq", "in_paper", "status"}
+# `claims` is deliberately not here: it is the agent's field, written by `theme claim` and never
+# staged for acceptance (the researcher judges it when writing the paper, not by a click).
+THEME_FIELDS = {"name", "essence", "brief", "story", "rq", "in_paper", "status"}
 
 
 def op_set_theme_field(an, op, ctx):
@@ -3174,6 +3460,39 @@ def op_merge_theme(an, op, ctx):
     src["merged_into"] = dst["id"]
     ctx["themes"] = True
     return f"merged {src['id']} into {dst['id']}"
+
+
+def op_theme_request(an, op, ctx):
+    """The errand from the board: the researcher asks the agent, from a theme's inspector, to
+    propose the codes that belong in it and/or to draft its claims. Recorded on the theme, listed
+    by `stale` and `theme request` until the agent closes it."""
+    th = _need_theme(an, op.get("target"))
+    a = op.get("args") or {}
+    kind = str(a.get("kind") or "both").strip().lower()
+    if kind == "claim":
+        kind = "claims"
+    if kind not in THEME_REQUEST_KINDS:
+        raise OpError(f"kind must be one of {', '.join(sorted(THEME_REQUEST_KINDS))}")
+    reqs = th.setdefault("requests", [])
+    reqs.append({"kind": kind, "note": a.get("note") or None, "asked": op.get("at") or today(),
+                 "by": op.get("by", "user"), "status": "open"})
+    ctx["themes"] = True
+    ctx["memos"].append(f"{th['id']}: asked for {kind}" + (f" — {a['note']}" if a.get("note") else ""))
+    return f"{th['id']}: asked the agent for {kind}"
+
+
+def op_set_framing(an, op, ctx):
+    a = op.get("args") or {}
+    value = str(a.get("value") or "")
+    old = a.get("old")
+    current = str(an.study.get("framing") or "")
+    if old is not None and not a.get("force") and fold(old) != fold(current):
+        raise OpError(f"the framing changed since you edited it; on disk now: {current[:120]!r}")
+    if fold(value) == fold(current):
+        return "framing is already that wording; nothing changed"
+    an.study["framing"] = value
+    ctx["study"] = True
+    return f"framing updated ({len(value.split())} words)"
 
 
 def op_set_tension(an, op, ctx):
@@ -3347,6 +3666,7 @@ HANDLERS = {
     "merge-theme": op_merge_theme, "set-tension": op_set_tension, "select-quote": op_select_quote,
     "deselect-quote": op_deselect_quote, "quote-span": op_quote_span, "set-participant": op_set_participant,
     "set-transcript": op_set_transcript, "set-stance": op_set_stance, "set-rq": op_set_rq,
+    "theme-request": op_theme_request, "set-framing": op_set_framing,
 }
 
 
@@ -3377,7 +3697,9 @@ def cmd_inbox(an: Analysis, args) -> int:
     if getattr(args, "json", False):
         print(json.dumps({"pending": pending, "failed": failed, "malformed": malformed,
                           "applying": applying, "stalled": stalled,
-                          "problems": [p for o in pending for p in validate_op(an, o)]},
+                          "problems": [p for o in pending for p in validate_op(an, o)],
+                          "theme_requests": open_theme_requests(an),
+                          "direct_changes": len(direct_changes(an))},
                          ensure_ascii=False, indent=2, default=json_safe))
         return 0
     actionable = [o for o in pending if o.get("op") not in THREAD_OPS]
@@ -3421,9 +3743,20 @@ def cmd_inbox(an: Analysis, args) -> int:
     problems = [p for o in actionable for p in validate_op(an, o)]
     for p in problems:
         print(f"warning: {p}")
+    direct = direct_changes(an)
+    if direct:
+        print(f"## the researcher's own changes since you last looked ({len(direct)}) — `changes` lists them; `changes --ack` when read")
+        print()
+    errands = open_theme_requests(an)
+    if errands:
+        print(f"## theme errands ({len(errands)} open — service with `theme fit`, `theme propose`, `theme claim`; close with `theme request <TH> --done`)")
+        for r in errands:
+            print(f"  {r['theme']} {r['name']}: {r['kind']}" + (f" — {r['note']}" if r.get("note") else "") + f"  (asked {r.get('asked')})")
+        print()
     print(f"inbox: {len(actionable)} operation(s) to apply, {len(open_threads)} open thread(s), "
           f"{len(failed) + len(malformed) + len(stalled)} needing attention"
-          + (f", {len(applying)} in flight" if applying else ""))
+          + (f", {len(applying)} in flight" if applying else "")
+          + (f", {len(errands)} theme errand(s) open" if errands else ""))
     if actionable:
         print("apply with: apply --all   (or `apply op-0031 op-0032`)")
     return 0
@@ -3510,10 +3843,7 @@ def cmd_apply(an: Analysis, args) -> int:
     # ---- 2. apply, outside the lock
     # mark-reviewed last: it stamps whatever the other operations leave behind.
     chosen.sort(key=lambda o: (1 if o.get("op") == "mark-reviewed" else 0, str(o.get("id"))))
-    version = int(an.codebook.get("version", 1))
-    if any(str(o.get("op")) in CODEBOOK_OPS for o in chosen):
-        version += 1
-    ctx = fresh_ctx(version)
+    ctx = fresh_ctx()
     applied, failed = [], []
     for o in chosen:
         name = str(o.get("op"))
@@ -3540,7 +3870,7 @@ def cmd_apply(an: Analysis, args) -> int:
         print(f"apply --dry-run: {len(applied)} would apply, {len(failed)} would fail. Nothing written.")
         return 1 if (failed or invalid) else 0
     change = "; ".join(ctx["changes"][:6]) + ("; ..." if len(ctx["changes"]) > 6 else "")
-    save_ctx(an, ctx, bump_message=f"applied {len(applied)} reviewed operation(s): {change}")
+    save_ctx(an, ctx, note=f"applied {len(applied)} reviewed operation(s): {change}")
 
     # ---- 3. settle the inbox against a fresh read, under the lock
     applied_by_id = {str(o.get("id")): o for o in applied}
@@ -3591,8 +3921,10 @@ def cmd_apply(an: Analysis, args) -> int:
         inbox_unlock(an)
 
     print()
+    pend = codebook_pending(an)
     print(f"apply: {len(applied)} applied, {len(failed) + len(invalid)} failed; codebook v{an.codebook.get('version')}"
-          f"{' (frozen)' if an.codebook.get('frozen') else ''}")
+          f"{' (frozen)' if an.codebook.get('frozen') else ''}"
+          + (f", {len(pend)} unapplied change(s) → v{next_version(an)} at the next coding pass" if pend else ""))
     if ctx["codebook"]:
         rows_stale = stale_rows(an)
         for r in rows_stale:
@@ -3606,6 +3938,11 @@ def cmd_apply(an: Analysis, args) -> int:
         print(f"  ERROR: {e}")
     print(f"  validate: {len(errors)} error(s), {len(warnings)} warning(s) · "
           f"verify: {len(an.extracts)} extract(s), {len(verrors)} not verbatim/misattributed, {len(vwarnings)} warning(s)")
+    errands = open_theme_requests(an)
+    if errands:
+        print(f"  {len(errands)} theme errand(s) open: "
+              + "; ".join(f"{r['theme']} wants {r['kind']}" for r in errands)
+              + " — `theme fit`, `theme propose`, `theme claim`, then `theme request <TH> --done`")
     return 1 if (failed or invalid or errors or verrors) else 0
 
 
@@ -3653,10 +3990,9 @@ def cmd_reply(an: Analysis, args) -> int:
 # The CLI and the workbench must not be able to diverge: a command run here goes
 # through the same handler `apply` would use, so a fix typed in the terminal and a
 # fix clicked in the browser leave identical records.
-def fresh_ctx(version: int | None = None) -> dict:
+def fresh_ctx() -> dict:
     return {"extracts": False, "codebook": False, "codebook_meta": False, "themes": False,
-            "study": False, "redefined": set(), "changes": [], "memos": [], "version": version,
-            "stamps": []}
+            "study": False, "redefined": set(), "changes": [], "memos": [], "stamps": []}
 
 
 def stamped(ctx: dict | None, stamp: dict) -> dict:
@@ -3667,34 +4003,31 @@ def stamped(ctx: dict | None, stamp: dict) -> dict:
 
 
 def ctx_version(an: Analysis, ctx: dict | None) -> int:
-    """The codebook version this pass will *end* at.
-
-    A pass bumps the codebook once, at the end, but handlers stamp things as they go —
-    `reviewed` on an extract, `added` on a new code. Stamping with the version the pass
-    started at would leave an extract the researcher just reviewed looking unreviewed (its
-    code changed at a version later than its own stamp), so every stamp reads this.
-    """
-    v = (ctx or {}).get("version")
-    return int(v) if v else int(an.codebook.get("version", 1))
+    """The version the codebook will carry at its next application. Handlers stamp with it as
+    they go; `save_ctx` corrects every stamp once it knows whether this pass changed anything."""
+    return next_version(an)
 
 
-def save_ctx(an: Analysis, ctx: dict, bump_message: str | None = None) -> None:
-    if ctx["codebook"]:
-        an.codebook["version"] = ctx_version(an, ctx)
-        an.codebook.setdefault("changelog", []).append(
-            {"version": an.codebook["version"], "date": today(),
-             "change": bump_message or ("; ".join(ctx["changes"]) or "codebook edited")})
-    # Handlers stamp as they go, against the version the pass *expected* to end at. If the
-    # codebook did not move after all (every codebook op no-opped or failed), a stamp
-    # claiming the next version would make a future edit at that version invisible to the
-    # delta check, so every stamp is corrected to the version that actually holds.
-    final = int(an.codebook.get("version", 1))
+def save_ctx(an: Analysis, ctx: dict, note: str | None = None) -> None:
+    """Persist a pass. A codebook change is recorded as *pending* and ticks the revision; the
+    version does not move here — it moves when the codebook is next applied to transcripts."""
+    if ctx["codebook"] or ctx["redefined"]:
+        an.codebook["revision"] = codebook_revision(an) + 1
+        an.codebook.setdefault("pending", []).append(
+            {"date": today(), "revision": an.codebook["revision"],
+             "change": note or ("; ".join(ctx["changes"]) or "codebook edited")})
+    # Every stamp made during the pass is corrected here, once it is known whether the pass
+    # changed the codebook: `version` is the one the codebook will carry at its next
+    # application, `revision` the one it has now.
+    ver, rev = next_version(an), codebook_revision(an)
     for stamp in ctx.get("stamps") or []:
-        stamp["version"] = final
+        stamp["version"] = ver
+        stamp["revision"] = rev
     for cid in ctx["redefined"]:
         c = an.code(cid)
         if c is not None:
-            c["redefined_version"] = int(an.codebook.get("version", 1))
+            c["redefined_version"] = ver
+            c["redefined_revision"] = rev
     if ctx["extracts"]:
         an.save_extracts()
     if ctx["codebook"] or ctx["codebook_meta"] or ctx["redefined"]:
@@ -3710,23 +4043,129 @@ def save_ctx(an: Analysis, ctx: dict, bump_message: str | None = None) -> None:
                         encoding="utf-8")
 
 
+def run_op(an: Analysis, op: dict) -> dict:
+    """Execute one operation immediately — the researcher's own hand from the workbench
+    (`exec`), or the agent's from the CLI — through the same handler `apply` would use.
+    The row is archived to the applied log with its result, so the log is the history of
+    everything that changed the analysis, whoever did it."""
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    # The id is spent and the row archived under `.inbox.lock` — the lock every inbox writer
+    # (the daemon, `stage`, `apply`) takes to hand out ids — so a comment staged while this
+    # gesture is in flight cannot be given the same number. Handlers never take this lock.
+    inbox_lock(an)
+    try:
+        row = {"id": op.get("id") or next_op_id(an), "at": op.get("at") or now, "by": op.get("by") or "agent",
+               "view": (OP_SPECS.get(str(op.get("op"))) or {}).get("view", "any"), "op": op.get("op"),
+               "target": op.get("target"), "args": op.get("args") or {}, "note": op.get("note"), "status": "pending"}
+        problems = validate_op(an, row)
+        if problems:
+            raise SystemExit("; ".join(problems))
+        ctx = fresh_ctx()
+        try:
+            summary = HANDLERS[str(row["op"])](an, row, ctx)
+        except OpError as exc:
+            raise SystemExit(str(exc))
+        save_ctx(an, ctx)
+        row["status"], row["applied_at"], row["result"] = "applied", now, summary
+        row["codebook_changed"] = bool(ctx["codebook"] or ctx["redefined"])
+        archive_ops(an, [row])
+    finally:
+        inbox_unlock(an)
+    return row
+
+
 def run_op_now(an: Analysis, op: dict, quiet: bool = False) -> int:
     """Execute one operation immediately, as the agent's own hand on the data."""
-    op = {**op, "by": op.get("by") or "agent", "status": "applied"}
-    problems = validate_op(an, op)
-    if problems:
-        raise SystemExit("; ".join(problems))
-    v = int(an.codebook.get("version", 1))
-    ctx = fresh_ctx(v + 1 if str(op["op"]) in CODEBOOK_OPS else v)
-    try:
-        summary = HANDLERS[str(op["op"])](an, op, ctx)
-    except OpError as exc:
-        raise SystemExit(str(exc))
-    save_ctx(an, ctx)
+    row = run_op(an, {**op, "by": op.get("by") or "agent"})
     if not quiet:
-        print(summary)
-        if ctx["codebook"]:
-            print(f"codebook now v{an.codebook.get('version')}; run `stale` to see which transcripts need a pass")
+        print(row["result"])
+        if row.get("codebook_changed"):
+            print(f"codebook: {len(codebook_pending(an))} unapplied change(s) → v{next_version(an)} at the next coding pass; "
+                  "run `stale` to see which transcripts need it")
+    return 0
+
+
+def cmd_exec(an: Analysis, args) -> int:
+    """Carry out the researcher's gestures at once — the daemon's path for everything that is
+    not a thread. Same handlers as `apply`, same lock, same applied log."""
+    try:
+        payload = json.loads(args.op)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--op must be JSON: {exc}")
+    if isinstance(payload, dict):
+        payload = [payload]
+    rows = []
+    for raw in payload:
+        rows.append(run_op(an, {"op": raw.get("op"), "target": raw.get("target"), "args": raw.get("args") or {},
+                                "note": raw.get("note"), "by": raw.get("by") or "user"}))
+    if getattr(args, "json", False):
+        print(json.dumps({"applied": rows}, ensure_ascii=False, default=json_safe))
+        return 0
+    for r in rows:
+        print(f"applied {r['id']} {r['op']}: {r['result']}")
+    return 0
+
+
+def op_number(oid: object) -> int:
+    m = re.fullmatch(r"op-(\d+)", str(oid or ""))
+    return int(m.group(1)) if m else 0
+
+
+def direct_changes(an: Analysis) -> list[dict]:
+    """The researcher's own operations, carried out at once from the workbench, since the agent
+    last acknowledged them (`changes --ack`). Read from the applied logs, in id order — ids are
+    monotonic and never reused, so no clock is compared."""
+    seen = op_number(an.study.get("agent_seen_op"))
+    rows = []
+    for path in applied_log_paths(an):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                o = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if o.get("by") != "user" or o.get("status") != "applied" or o.get("op") in THREAD_OPS:
+                continue
+            if op_number(o.get("id")) > seen:
+                rows.append(o)
+    rows.sort(key=lambda o: op_number(o.get("id")))
+    return rows
+
+
+def cmd_changes(an: Analysis, args) -> int:
+    """What the researcher did directly since you last looked: the delta review, read from the
+    applied logs rather than from a queue of proposals."""
+    rows = direct_changes(an)
+    if getattr(args, "json", False):
+        print(json.dumps({"since": an.study.get("agent_seen_until"), "changes": rows}, ensure_ascii=False, indent=2, default=json_safe))
+    else:
+        by_view: dict[str, list[dict]] = defaultdict(list)
+        for o in rows:
+            by_view[str(o.get("view") or "?")].append(o)
+        for view in ("transcript", "codebook", "coverage", "themes", "quotes", "study", "any", "?"):
+            if not by_view.get(view):
+                continue
+            print(f"## {view} ({len(by_view[view])})")
+            for o in by_view[view]:
+                print(f"  {o.get('applied_at', '')[:16]}  {op_one_line(an, o)}")
+                if o.get("result"):
+                    print(f"      → {o['result']}")
+            print()
+        pend = codebook_pending(an)
+        if pend:
+            print(f"codebook: {len(pend)} unapplied change(s) → v{next_version(an)} at the next coding pass")
+        print(f"changes: {len(rows)} direct change(s) by the researcher since {an.study.get('agent_seen_op') or 'the start'}")
+    if getattr(args, "ack", False):
+        last = max([op_number(o.get("id")) for o in rows] + [op_number(an.study.get("agent_seen_op"))])
+        an.study["agent_seen_op"] = f"op-{last:04d}" if last else None
+        an.study["agent_seen_until"] = dt.datetime.now().isoformat(timespec="seconds")
+        an.save_study()
+        print(f"acknowledged through {an.study['agent_seen_op'] or 'nothing yet'}")
     return 0
 
 
@@ -3794,7 +4233,363 @@ def cmd_reread(an: Analysis, args) -> int:
 
 # ------------------------------------------------------------ theme commands
 def cmd_theme_new(an: Analysis, args) -> int:
-    return run_op_now(an, {"op": "new-theme", "args": {"name": args.name, "parent": args.parent, "rq": args.rq, "id": args.id}})
+    return run_op_now(an, {"op": "new-theme", "args": {"name": args.name, "parent": args.parent, "rq": args.rq,
+                                                       "id": args.id, "brief": args.brief}})
+
+
+def theme_fit_json(an: Analysis, th: dict) -> dict:
+    """Every live code the theme does not already gather, against the theme: the agent's recall check.
+
+    Not a ranking to accept — a guarantee about what was looked at. For each code: how many of
+    its extracts also carry a code already in the theme, how much of its cast the theme already
+    has, how much its wording shares with the theme's name, essence and brief, and where it is
+    currently placed. The agent reads the extracts behind each row against the brief before
+    proposing; the numbers only order the reading.
+    """
+    pids = {p["id"] for p in an.participants()}
+    fam = theme_family(an, th)
+    theme_ex = {e["id"] for e in an.extracts if {an.resolve_code(c) for c in e.get("codes", [])} & fam}
+    theme_ps = {e["participant"] for e in an.extracts if e["id"] in theme_ex}
+    theme_tokens = token_set(" ".join(str(th.get(k) or "") for k in ("name", "essence", "brief")))
+    rows = []
+    for c in an.live_codes():
+        if c["id"] in fam:
+            continue
+        cfam = code_family(an, c["id"]) if not c.get("parent") else {c["id"]}
+        mine = [e for e in an.extracts if e.get("participant") in pids and {an.resolve_code(x) for x in e.get("codes", [])} & cfam]
+        both = [e for e in mine if e["id"] in theme_ex]
+        cps = {e["participant"] for e in mine}
+        kinds = Counter(e.get("kind", "said") for e in mine)
+        placed = [str(t.get("id")) for t in an.themes["themes"]
+                  if c["id"] in (t.get("codes") or []) and t.get("status") not in ("merged", "dropped")]
+        ctoks = token_set(" ".join([c["id"].replace(".", " ").replace("-", " "), c.get("name") or "", c.get("definition") or ""]))
+        rows.append({
+            "code": c["id"], "name": c.get("name") or "", "parent": c.get("parent"), "status": c.get("status"),
+            "extracts": len(mine), "participants": len(cps),
+            "cooccur": len(both), "cooccur_share": round(len(both) / len(mine), 3) if mine else 0.0,
+            "shared_participants": len(cps & theme_ps),
+            "lexical": round(jaccard(ctoks, theme_tokens), 3),
+            "kinds": {"said": kinds["said"], "did": kinds["did"], "intent": kinds["intent"]},
+            "placed_in": placed,
+        })
+    rows.sort(key=lambda r: (-r["cooccur_share"], -r["cooccur"], -r["shared_participants"], -r["lexical"], r["code"]))
+    return {"theme": th.get("id"), "name": th.get("name") or "", "family": sorted(fam),
+            "theme_extracts": len(theme_ex), "theme_participants": len(theme_ps), "N": len(pids),
+            "brief": th.get("brief") or "", "codes": rows}
+
+
+def cmd_theme_fit(an: Analysis, args) -> int:
+    th = an.theme(args.theme)
+    if th is None:
+        raise SystemExit(f"no theme {args.theme}")
+    data = theme_fit_json(an, th)
+    if getattr(args, "json", False):
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=json_safe))
+        return 0
+    print(f"# {data['theme']} · {data['name']}: every live code, against the theme ({today()})\n")
+    print(f"The theme gathers {', '.join(data['family']) or 'no codes yet'}: {data['theme_extracts']} extract(s) from "
+          f"{data['theme_participants']}/{data['N']} participant(s).")
+    if data["brief"].strip():
+        print("\nBrief:\n" + "\n".join("  " + l for l in data["brief"].strip().splitlines()))
+    else:
+        print("\nThe theme has no brief yet; read its name and essence as the rule, and say so in the proposal.")
+    print("\n| code | n/N | extracts | ride along with the theme | shared participants | wording | said/did/intent | placed in |")
+    print("|---|---|---|---|---|---|---|---|")
+    for r in data["codes"]:
+        ride = f"{r['cooccur']} ({r['cooccur_share']:.0%})" if r["extracts"] else "-"
+        k = r["kinds"]
+        print(f"| `{r['code']}` {r['name']} | {r['participants']}/{data['N']} | {r['extracts']} | {ride} | {r['shared_participants']} | {r['lexical']:.2f} | {k['said']}/{k['did']}/{k['intent']} | {', '.join(r['placed_in']) or '-'} |")
+    print(f"\n{len(data['codes'])} code(s) listed — all of them, not a shortlist. This is a recall check, not a ranking to accept: "
+          "read the extracts behind each row (`collate CODE`) against the brief before proposing, and propose with a line of why "
+          f"(`stage --op '{{\"op\": \"assign-theme\", \"target\": \"CODE\", \"args\": {{\"theme\": \"{data['theme']}\", \"why\": \"...\"}}}}'`; "
+          "add `\"add\": true` for a code already placed in another theme, so accepting adds it here rather than moving it). "
+          "A code that never rides along can still belong; a code that always does can still be a different claim.")
+    return 0
+
+
+def close_theme_request(th: dict, kind: str) -> int:
+    """Close a theme's open errands of one kind. A `both` request is *narrowed* to its other half
+    rather than closed, so servicing the claims never hides a code proposal still owed (or vice
+    versa). Returns how many requests moved."""
+    other = {"codes": "claims", "claims": "codes"}[kind]
+    n = 0
+    for r in th.get("requests") or []:
+        if r.get("status") != "open":
+            continue
+        if r.get("kind") == kind:
+            r["status"] = "done"
+            r["closed"] = today()
+            n += 1
+        elif r.get("kind") == "both":
+            r["kind"] = other
+            r["narrowed"] = today()
+            n += 1
+    return n
+
+
+# Two or more words between double quotes: a participant's words typed into a claim, whatever their
+# length. The paper verifier's five-word heuristic is for finding quotes to check, not for this.
+QUOTED_WORDS_RE = re.compile(r'["“][^"”\n]*\S\s+\S[^"”\n]*["”]')
+
+
+def cmd_theme_claim(an: Analysis, args) -> int:
+    """Write the agent's candidate claims for a theme — its field, never staged for acceptance.
+
+    Each claim is a sentence, the tension it survives, and an evidence line the script computes
+    here (n/N, the kind mix, the codes) so it can never drift from `coverage` unnoticed. Quotes
+    are cited by extract id; the words are rendered by the inspector and the report."""
+    th = an.theme(args.theme)
+    if th is None:
+        raise SystemExit(f"no theme {args.theme}")
+    if args.clear:
+        th.pop("claims", None)
+        th.pop("claims_written", None)
+        an.save_themes()
+        print(f"{th['id']}: claims cleared")
+        return 0
+    if args.check:
+        stale = claims_stale(an, th)
+        for why in stale:
+            print(f"stale: {why}")
+        ev = claim_evidence(an, th)
+        print(f"{th['id']}: {len(th.get('claims') or [])} claim(s); evidence now {ev['n']}/{ev['N']} · said {ev['said']} / did {ev['did']} / intent {ev['intent']}"
+              + ("; rewrite them" if stale else "; current"))
+        return 1 if stale else 0
+    incoming: list[dict] = []
+    if args.file:
+        raw = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            raw = [raw]
+        incoming = [dict(x) for x in raw]
+    if args.text:
+        incoming.append({"text": args.text, "tension": args.tension})
+    if not incoming:
+        raise SystemExit("theme claim needs --text (with --tension) or --file claims.json, or --check / --clear")
+    tensions = list(th.get("tensions") or [])
+    if not tensions:
+        raise SystemExit(f"{th['id']} has no tensions. A claim names the account that complicates it, so record one first "
+                         f"(`theme tension {th['id']} --add E-...`); a pattern with no exceptions is one you have not looked at hard enough.")
+    cleaned = []
+    for i, cl in enumerate(incoming, 1):
+        text = norm(str(cl.get("text") or ""))
+        if len(text.split()) < 5:
+            raise SystemExit(f"claim {i}: a claim is a sentence a reader could disagree with; this one has {len(text.split())} word(s)")
+        # A claim may cite an extract by id; it may not carry a participant's words. The inspector
+        # and the report render the quote from the extract, which is the only place words come from.
+        if find_quotes_in_markdown(text) or QUOTED_WORDS_RE.search(text) or text.lstrip().startswith(">"):
+            raise SystemExit(f"claim {i} contains a quotation. Cite the extract by id (E-0041) instead; the words are rendered from the record")
+        t_eid = str(cl.get("tension") or "") or tensions[0]
+        if t_eid not in tensions:
+            raise SystemExit(f"claim {i}: tension {t_eid} is not in {th['id']}'s tensions ({', '.join(tensions)}); add it there first")
+        for eid in sorted(set(re.findall(r"\bE-\d{4,}\b", text))):
+            if an.extract(eid) is None:
+                raise SystemExit(f"claim {i} cites {eid}, which does not exist")
+        cleaned.append({"text": text, "tension": t_eid, "evidence": claim_evidence(an, th)})
+    if len(cleaned) > 4:
+        raise SystemExit("two to four candidate claims per theme; more is a list nobody reads")
+    th["claims"] = cleaned if args.replace or not th.get("claims") else list(th["claims"]) + cleaned
+    if len(th["claims"]) > 4:
+        raise SystemExit(f"{th['id']} would carry {len(th['claims'])} claims; pass --replace, or keep it to four")
+    th["claims_written"] = {"by": "agent", "at": dt.datetime.now().isoformat(timespec="seconds"),
+                            "version": int(an.codebook.get("version", 1))}
+    if args.close_request:
+        close_theme_request(th, "claims")
+    an.save_themes()
+    ev = th["claims"][-1]["evidence"]
+    print(f"{th['id']}: {len(th['claims'])} claim(s) written against {ev['n']}/{ev['N']} participants · "
+          f"said {ev['said']} / did {ev['did']} / intent {ev['intent']}")
+    return 0
+
+
+def cmd_theme_propose(an: Analysis, args) -> int:
+    """The agent's case for what it did *not* propose: the near misses, each with the clause of
+    the brief that excluded it, and a second reading of the theme's edge where one exists."""
+    th = an.theme(args.theme)
+    if th is None:
+        raise SystemExit(f"no theme {args.theme}")
+    if args.clear:
+        th.pop("proposal", None)
+        an.save_themes()
+        print(f"{th['id']}: proposal cleared")
+        return 0
+    near = []
+    for cid, why in args.near_miss or []:
+        if an.code(cid) is None:
+            raise SystemExit(f"no code {cid}")
+        near.append({"code": cid, "why_not": why})
+    if len(near) > 6:
+        raise SystemExit("near misses: about five, not every code you passed over")
+    if not near and not args.reading:
+        raise SystemExit("theme propose needs --near-miss CODE WHY (repeatable) and/or --reading TEXT, or --clear")
+    prop = dict(th.get("proposal") or {})
+    if near:
+        prop["near_misses"] = near
+    if args.reading:
+        prop["second_reading"] = args.reading
+    prop["round"] = args.round or prop.get("round")
+    prop["at"] = today()
+    th["proposal"] = prop
+    if args.close_request:
+        close_theme_request(th, "codes")
+    an.save_themes()
+    print(f"{th['id']}: proposal recorded — {len(near)} near miss(es)" + (", a second reading" if args.reading else ""))
+    return 0
+
+
+def cmd_theme_request(an: Analysis, args) -> int:
+    th = an.theme(args.theme) if args.theme else None
+    if args.theme and th is None:
+        raise SystemExit(f"no theme {args.theme}")
+    if args.done:
+        if th is None:
+            raise SystemExit("theme request --done needs a theme id")
+        if args.kind:
+            if args.kind not in ("codes", "claims"):
+                raise SystemExit("--kind must be codes or claims")
+            n = close_theme_request(th, args.kind)
+        else:
+            n = 0
+            for r in th.get("requests") or []:
+                if r.get("status") == "open":
+                    r["status"] = "done"
+                    r["closed"] = today()
+                    n += 1
+        an.save_themes()
+        print(f"{args.theme}: closed {n} request(s)")
+        return 0
+    if th and (args.codes or args.claims):
+        kind = "both" if (args.codes and args.claims) else ("codes" if args.codes else "claims")
+        return run_op_now(an, {"op": "theme-request", "target": th["id"], "args": {"kind": kind, "note": args.note}})
+    open_reqs = open_theme_requests(an)
+    for r in open_reqs:
+        if not th or r["theme"] == th["id"]:
+            print(f"- {r['theme']} {r['name']}: {r['kind']}" + (f" — {r['note']}" if r.get("note") else "") + f"  (asked {r.get('asked')})")
+    print(f"theme request: {len(open_reqs)} open")
+    return 0
+
+
+# ------------------------------------------------------------------ the paper
+TEX_TITLE_RE = re.compile(r"\\title\*?\{(.+?)\}", re.S)
+TEX_SECTION_RE = re.compile(r"\\(sub)*section\*?\{(.+?)\}")
+TEX_ABSTRACT_RE = re.compile(r"\\begin\{abstract\}(.+?)\\end\{abstract\}", re.S)
+
+
+def paper_digest(an: Analysis) -> str:
+    """A cheap refresher between full reads: title, abstract, headings, and every sentence that
+    mentions a research question or a theme by name. Not a substitute for reading the draft."""
+    themes = [t for t in an.themes["themes"] if t.get("status") not in ("merged", "dropped") and t.get("id") != MISC_THEME]
+    rq_ids = [str(r.get("id")) for r in an.study.get("research_questions") or []]
+    out = [f"# Paper digest ({today()})", ""]
+    papers = registered_papers(an)
+    if not papers:
+        out.append("No paper draft is registered. `paper --add <path>` names one (relative to the analysis folder).")
+        return "\n".join(out) + "\n"
+    for p in papers:
+        out.append(f"## {p['path']}" + ("" if p["exists"] else "  (missing)"))
+        if not p["exists"]:
+            out.append("")
+            continue
+        text = Path(p["abs"]).read_text(encoding="utf-8", errors="replace")
+        is_tex = p["abs"].endswith(".tex") or "\\section" in text
+        out.append(f"{p['words']} words")
+        m = TEX_TITLE_RE.search(text) if is_tex else re.search(r"^#\s+(.+)$", text, re.M)
+        if m:
+            out.append(f"**Title:** {norm(m.group(1))}")
+        if is_tex:
+            am = TEX_ABSTRACT_RE.search(text)
+            abstract = norm(re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?", " ", am.group(1)).replace("{", " ").replace("}", " ")) if am else ""
+            heads = [("  " if h[0] else "") + norm(h[1]) for h in TEX_SECTION_RE.findall(text)]
+        else:
+            am = re.search(r"^##?\s+Abstract\s*$(.+?)(?=^#)", text, re.M | re.S)
+            abstract = norm(am.group(1)) if am else ""
+            heads = [norm(h) for h in re.findall(r"^#{1,3}\s+(.+)$", text, re.M)]
+        if abstract:
+            out += ["", "**Abstract:** " + abstract]
+        if heads:
+            out += ["", "**Headings:**"] + [f"- {h}" for h in heads]
+        body = re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?", " ", text).replace("{", " ").replace("}", " ") if is_tex else text
+        # a heading has no full stop, so it would glue itself onto the sentence after it
+        body = re.sub(r"^#{1,6}\s.*$", "", body, flags=re.M)
+        sentences = [norm(x) for x in re.split(r"(?<=[.!?])\s+|\n{2,}", body) if len(x.split()) >= 5]
+        hits = []
+        for sent in sentences:
+            why = []
+            for rid in rq_ids:
+                if re.search(rf"\b{re.escape(rid)}\b", sent):
+                    why.append(rid)
+            stoks = token_set(sent)
+            for t in themes:
+                ntoks = token_set(str(t.get("name") or ""))
+                if ntoks and len(ntoks & stoks) >= max(2, (len(ntoks) + 1) // 2):
+                    why.append(str(t.get("id")))
+            if why:
+                hits.append((sent, sorted(set(why))))
+        if hits:
+            out += ["", f"**Sentences that touch a research question or a theme ({len(hits)}):**"]
+            for sent, why in hits[:60]:
+                out.append(f"- [{', '.join(why)}] {sent[:240]}{'…' if len(sent) > 240 else ''}")
+        out.append("")
+    framing = str(an.study.get("framing") or "").strip()
+    out += ["## Framing (the agent's reading, shown above the Themes board)", "", framing or "_not written yet — read the draft in full, then `paper --framing \"...\"`_", ""]
+    return "\n".join(out) + "\n"
+
+
+def cmd_paper(an: Analysis, args) -> int:
+    if args.add:
+        path = Path(args.add)
+        path = (path if path.is_absolute() else Path.cwd() / path).resolve()
+        try:
+            rel = str(path.relative_to(an.root.resolve()))
+        except ValueError:
+            try:
+                rel = str(Path("..") / path.relative_to(an.root.resolve().parent))
+            except ValueError:
+                rel = str(path)
+        papers = an.study.setdefault("paper", [])
+        if any((p.get("path") if isinstance(p, dict) else p) == rel for p in papers):
+            print(f"{rel} is already registered")
+        else:
+            papers.append({"path": rel})
+            an.save_study()
+            print(f"registered {rel}" + ("" if path.exists() else "  (warning: the file does not exist yet)"))
+            if not str(an.study.get("framing") or "").strip():
+                print("next: read it in full, then `paper --framing \"...\"` so the board carries what the paper is arguing")
+        return 0
+    if args.framing is not None:
+        an.study["framing"] = str(args.framing)
+        an.save_study()
+        memo = an.root / "memos.md"
+        body = memo.read_text(encoding="utf-8") if memo.exists() else "# Analytic memos\n"
+        memo.write_text(body.rstrip("\n") + f"\n\n## {today()}\n\n- framing written from the paper draft(s): "
+                        + "; ".join(p["path"] for p in registered_papers(an)) + "\n", encoding="utf-8")
+        print(f"framing written ({len(str(args.framing).split())} words)")
+        return 0
+    if args.digest:
+        print(paper_digest(an))
+        return 0
+    if args.check:
+        files = [Path(p["abs"]) for p in registered_papers(an) if p["exists"]]
+        if not files:
+            raise SystemExit("no registered paper draft exists on disk")
+        total = problems = 0
+        for path in files:
+            print(f"## {path}")
+            n, bad = verify_quotes_file(an, path, quiet=True)
+            total += n
+            problems += bad
+        print(f"paper --check: {total} quote(s) checked across {len(files)} draft(s), {problems} problem(s)")
+        return 1 if problems else 0
+    papers = registered_papers(an)
+    if not papers:
+        print("No paper draft registered. `paper --add <path>` names one; the agent then reads it in full at the start of "
+              "theme work and writes what it took as `framing`.")
+        return 0
+    for p in papers:
+        print(f"- {p['path']}  " + (f"{p['words']} words" if p["exists"] else "MISSING") + f"  ({p['abs']})")
+    framing = str(an.study.get("framing") or "").strip()
+    print("\nframing: " + (framing if framing else "not written yet"))
+    print("\n`paper --digest` for a refresher; the theme operation reads the draft(s) in full.")
+    return 0
 
 
 def cmd_theme_assign(an: Analysis, args) -> int:
@@ -3946,7 +4741,7 @@ def cmd_serve(an: Analysis, args) -> int:
 WRITING_COMMANDS = {
     "extract", "recode", "retrim", "drop", "mark-coded", "mark-reviewed", "bump",
     "merge-code", "rename-code", "reparent", "split-code", "set-field", "code-status",
-    "new-code", "reread", "theme", "apply", "report",
+    "new-code", "reread", "theme", "apply", "report", "paper", "exec", "changes",
 }
 
 
@@ -4005,9 +4800,16 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_drop)
 
     p = sub.add_parser("verify-quotes", help="every quote in a markdown file (review plan, paper draft) is verbatim and attributed correctly")
-    p.add_argument("file")
+    p.add_argument("file", nargs="?", help="a markdown/tex file; default: the paper draft(s) registered in study.yaml")
     p.add_argument("--quiet", action="store_true", help="only print problems")
     p.set_defaults(fn=cmd_verify_quotes)
+
+    p = sub.add_parser("paper", help="the paper draft(s) the themes have to land in: register, digest, check, and the agent's framing")
+    p.add_argument("--add", metavar="PATH", help="register a draft (path relative to the analysis folder is stored)")
+    p.add_argument("--framing", metavar="TEXT", help="write the agent's one-paragraph reading of what the paper argues (shown above the board)")
+    p.add_argument("--digest", action="store_true", help="title, abstract, headings, and every sentence touching an RQ or a theme")
+    p.add_argument("--check", action="store_true", help="verify-quotes over every registered draft")
+    p.set_defaults(fn=cmd_paper)
 
     p = sub.add_parser("coverage", help="participants x codes x themes, zero-coverage warnings, stale transcripts")
     p.add_argument("--json", action="store_true")
@@ -4034,8 +4836,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("old"); p.add_argument("new")
     p.set_defaults(fn=cmd_rename_code)
 
-    p = sub.add_parser("bump", help="record a codebook change (new/edited codes) as a new version; --freeze after the last interview")
-    p.add_argument("change"); p.add_argument("--freeze", action="store_true")
+    p = sub.add_parser("bump", help="mark an application of the codebook: pending edits become a version (mark-coded does this too); --freeze after the last interview")
+    p.add_argument("change", nargs="?", help="a label for the changelog entry; the pending changes are listed after it")
+    p.add_argument("--freeze", action="store_true")
     p.set_defaults(fn=cmd_bump)
 
     p = sub.add_parser("mark-coded", help="record that a transcript was fully coded with the current codebook version")
@@ -4077,6 +4880,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--all", action="store_true", help="apply every pending operation")
     p.add_argument("--dry-run", action="store_true", help="say what would happen; write nothing")
     p.set_defaults(fn=cmd_apply)
+
+    p = sub.add_parser("exec", help="carry out operation(s) at once (the daemon's path for the researcher's gestures; JSON as `stage` takes)")
+    p.add_argument("--op", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_exec)
+
+    p = sub.add_parser("changes", help="what the researcher changed directly since you last acknowledged (`--ack`)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--ack", action="store_true", help="record that you have read them")
+    p.set_defaults(fn=cmd_changes)
 
     p = sub.add_parser("stage", help="stage an operation as a proposal for the researcher (JSON, as the workbench writes it)")
     p.add_argument("--op", required=True, help='{"op": "merge-code", "target": "a", "args": {"into": "b"}, "note": "why"} or a JSON list')
@@ -4148,14 +4961,50 @@ def main(argv: list[str] | None = None) -> int:
 
     q = tsub.add_parser("new", help="create a theme (a claim, not a topic)")
     q.add_argument("name"); q.add_argument("--parent"); q.add_argument("--rq"); q.add_argument("--id")
+    q.add_argument("--brief", help="the researcher's rule, boundary, and intent, as markdown")
     q.set_defaults(fn=cmd_theme_new)
+
+    q = tsub.add_parser("fit", help="every live code against a theme, with the numbers: the agent's recall check before proposing")
+    q.add_argument("theme")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_theme_fit)
+
+    q = tsub.add_parser("claim", help="write the agent's candidate claims for a theme (its field; the evidence line is computed here)")
+    q.add_argument("theme")
+    q.add_argument("--text", help="one claim, a sentence a reader could disagree with; cite extracts by id, never quote")
+    q.add_argument("--tension", help="the extract id that complicates this claim (must be in the theme's tensions)")
+    q.add_argument("--file", help="JSON list of {text, tension} for several claims at once")
+    q.add_argument("--replace", action="store_true", help="replace the existing claims instead of appending")
+    q.add_argument("--check", action="store_true", help="has the evidence moved under the claims?")
+    q.add_argument("--clear", action="store_true")
+    q.add_argument("--close-request", action="store_true", help="also close the theme's open `claims` errand")
+    q.set_defaults(fn=cmd_theme_claim)
+
+    q = tsub.add_parser("propose", help="record the agent's case for a theme's edge: the near misses and a second reading")
+    q.add_argument("theme")
+    q.add_argument("--near-miss", nargs=2, action="append", metavar=("CODE", "WHY_NOT"),
+                   help="a code considered and not proposed, with the clause of the brief that excluded it (repeatable)")
+    q.add_argument("--reading", help="the other defensible boundary — tight or inclusive — and what it takes and costs")
+    q.add_argument("--round")
+    q.add_argument("--clear", action="store_true")
+    q.add_argument("--close-request", action="store_true", help="also close the theme's open `codes` errand")
+    q.set_defaults(fn=cmd_theme_propose)
+
+    q = tsub.add_parser("request", help="the errands a researcher asked of the agent from a theme: list, record, or close")
+    q.add_argument("theme", nargs="?")
+    q.add_argument("--codes", action="store_true", help="ask for the codes that belong in this theme")
+    q.add_argument("--claims", action="store_true", help="ask for candidate claims")
+    q.add_argument("--note")
+    q.add_argument("--kind", help="with --done: close only this kind")
+    q.add_argument("--done", action="store_true", help="close the theme's open request(s)")
+    q.set_defaults(fn=cmd_theme_request)
 
     q = tsub.add_parser("assign", help="place a code in a theme, in the miscellaneous pile, or nowhere")
     q.add_argument("code")
     q.add_argument("--to"); q.add_argument("--misc", action="store_true"); q.add_argument("--unplaced", action="store_true")
     q.set_defaults(fn=cmd_theme_assign)
 
-    q = tsub.add_parser("set", help="edit name / essence / story / rq / in_paper / status")
+    q = tsub.add_parser("set", help="edit name / essence / brief / story / rq / in_paper / status")
     q.add_argument("theme"); q.add_argument("field", choices=sorted(THEME_FIELDS)); q.add_argument("value")
     q.add_argument("--old"); q.add_argument("--force", action="store_true")
     q.set_defaults(fn=cmd_theme_set)
@@ -4190,8 +5039,9 @@ def main(argv: list[str] | None = None) -> int:
         # Every command that rewrites a data file holds the pass lock, and re-reads the files
         # after taking it: two writers loading, mutating and saving whole files from two
         # snapshots would silently keep only the second one's work. Deciding this here, once,
-        # is the only way it stays true as commands are added.
-        apply_lock(an)
+        # is the only way it stays true as commands are added. A gesture from the workbench
+        # (`exec`) waits for a running pass rather than failing at once.
+        apply_lock(an, timeout=20.0 if args.cmd == "exec" else 1.0)
         an.reload()
         try:
             return args.fn(an, args)

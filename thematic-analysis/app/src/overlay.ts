@@ -39,17 +39,22 @@ export interface ThemePatch {
   reviewed?: boolean;
   name?: string;
   essence?: string;
+  brief?: string;
   story?: string;
   rq?: string;
   in_paper?: string;
   status?: string;
   addCodes: string[];
   removeCodes: string[];
+  /** Assignments the *agent* staged, by code: shown as proposed on the card, argued in the tray. */
+  proposedCodes: Record<string, Op>;
   addQuotes: string[];
   removeQuotes: string[];
   addTensions: string[];
   removeTensions: string[];
   trims: string[];
+  /** The kinds of errand staged against this theme and not yet applied. */
+  requests: string[];
   ops: Op[];
 }
 
@@ -61,6 +66,9 @@ export interface Patch {
   newCodes: Op[];
   newThemes: Op[];
   rereads: Op[];
+  /** A staged rewording of the paper's framing, shown above the board until applied. */
+  framing?: string;
+  framingOps: Op[];
   study: {
     participants: Record<string, { id?: string; role?: string; group?: string; speakers?: string[]; notes?: string; ops: Op[] }>;
     transcripts: Record<string, { participants?: string[]; ops: Op[] }>;
@@ -74,12 +82,12 @@ const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
 export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
-  const patch: Patch = { extracts: {}, codes: {}, themes: {}, newExtracts: [], newCodes: [], newThemes: [], rereads: [], study: { participants: {}, transcripts: {}, stance: {}, stanceOps: [] }, countsWillChange: false };
+  const patch: Patch = { extracts: {}, codes: {}, themes: {}, newExtracts: [], newCodes: [], newThemes: [], rereads: [], framingOps: [], study: { participants: {}, transcripts: {}, stance: {}, stanceOps: [] }, countsWillChange: false };
   const byId = new Map(extracts.map((e) => [e.id, e]));
   const ex = (id: string): ExtractPatch => (patch.extracts[id] ??= { ops: [] });
   const co = (id: string): CodePatch => (patch.codes[id] ??= { ops: [] });
   const th = (id: string): ThemePatch => (patch.themes[id] ??= {
-    addCodes: [], removeCodes: [], addQuotes: [], removeQuotes: [], addTensions: [], removeTensions: [], trims: [], ops: [],
+    addCodes: [], removeCodes: [], proposedCodes: {}, addQuotes: [], removeQuotes: [], addTensions: [], removeTensions: [], trims: [], requests: [], ops: [],
   });
 
   // Staged order is the researcher's order, so a later op overrides an earlier one.
@@ -199,15 +207,27 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
         patch.newThemes.push(o);
         break;
       case 'assign-theme': {
+        // `dest` may be a theme id or the op id of a staged `new-theme`; the patch is keyed by
+        // whichever it is, and `provisionalTheme` reads the ghost's entry under its op id.
         const dest = (str(a.theme) ?? null) || null;
         if (dest) {
           const p = th(dest);
           p.addCodes.push(t);
+          // An agent's placement is a proposal: it is drawn on the column so the board says what
+          // the next pass would do, and marked so it is never mistaken for a decision already made.
+          if (o.by === 'agent') p.proposedCodes[t] = o;
+          else delete p.proposedCodes[t];
           p.ops.push(o);
         }
-        // Leaving a theme is shown on the theme that loses the card, when we know it.
-        for (const [tid, p] of Object.entries(patch.themes)) {
-          if (tid !== dest && p.addCodes.includes(t)) p.addCodes = p.addCodes.filter((c) => c !== t);
+        // Leaving a theme is shown on the column that loses the card — the one the drag named
+        // (`from`), or every one we know of when it did not — unless this is an `add`, which
+        // leaves the code where it already sits.
+        if (!a.add) {
+          const from = str(a.from);
+          for (const [tid, p] of Object.entries(patch.themes)) {
+            if (tid !== dest && p.addCodes.includes(t) && (!from || tid === from)) p.addCodes = p.addCodes.filter((c) => c !== t);
+          }
+          if (from && from !== dest) th(from).removeCodes.push(t);
         }
         patch.countsWillChange = true;
         break;
@@ -215,9 +235,20 @@ export function pendingPatch(inbox: Op[], extracts: Extract[]): Patch {
       case 'set-theme-field': {
         const p = th(t);
         const field = str(a.field);
-        if (field === 'name' || field === 'essence' || field === 'story' || field === 'rq' || field === 'in_paper' || field === 'status')
+        if (field === 'name' || field === 'essence' || field === 'brief' || field === 'story' || field === 'rq' || field === 'in_paper' || field === 'status')
           p[field] = str(a.value) ?? '';
         p.ops.push(o);
+        break;
+      }
+      case 'theme-request': {
+        const p = th(t);
+        p.requests.push(str(a.kind) ?? 'both');
+        p.ops.push(o);
+        break;
+      }
+      case 'set-framing': {
+        patch.framing = str(a.value) ?? '';
+        patch.framingOps.push(o);
         break;
       }
       case 'select-quote': {
@@ -326,6 +357,7 @@ export function themeWithPatch(t: Theme, p?: ThemePatch): Theme & { pending: boo
     reviewed: p.reviewed ? { at: 'staged', version: 0 } as unknown as Theme['reviewed'] : t.reviewed,
     name: p.name ?? t.name,
     essence: p.essence ?? t.essence,
+    brief: p.brief ?? t.brief,
     story: p.story ?? t.story,
     rq: p.rq ?? t.rq,
     in_paper: (p.in_paper as Theme['in_paper']) ?? t.in_paper,

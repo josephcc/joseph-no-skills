@@ -8,7 +8,7 @@ export type OpName =
   | 'recode' | 'set-kind' | 'set-context' | 'set-note' | 'retrim' | 'drop' | 'new-extract' | 'highlight' | 'mark-reviewed'
   | 'code-status' | 'set-field' | 'reparent' | 'rename-code' | 'merge-code' | 'split-code' | 'new-code'
   | 'reread-request'
-  | 'new-theme' | 'assign-theme' | 'set-theme-field' | 'merge-theme' | 'set-tension'
+  | 'new-theme' | 'assign-theme' | 'set-theme-field' | 'merge-theme' | 'set-tension' | 'theme-request' | 'set-framing'
   | 'select-quote' | 'deselect-quote' | 'quote-span'
   | 'set-participant' | 'set-transcript' | 'set-stance' | 'set-rq'
   | 'comment' | 'reply';
@@ -21,7 +21,7 @@ export const OP_VIEW: Record<OpName, string> = {
   'merge-code': 'codebook', 'split-code': 'codebook', 'new-code': 'codebook',
   'reread-request': 'coverage',
   'new-theme': 'themes', 'assign-theme': 'themes', 'set-theme-field': 'themes', 'merge-theme': 'themes',
-  'set-tension': 'themes',
+  'set-tension': 'themes', 'theme-request': 'themes', 'set-framing': 'themes',
   'select-quote': 'quotes', 'deselect-quote': 'quotes', 'quote-span': 'quotes',
   'set-participant': 'study', 'set-transcript': 'study', 'set-stance': 'study', 'set-rq': 'study',
   comment: 'any', reply: 'any',
@@ -78,7 +78,9 @@ export function describe(o: Pick<Op, 'op' | 'target' | 'args' | 'note'>): string
     case 'new-code': return `new code ${a.id}`;
     case 'reread-request': return `re-read ${a.transcript}${a.code ? ` for ${a.code}` : ''}`;
     case 'new-theme': return `new theme “${short(a.name, 40)}”`;
-    case 'assign-theme': return `${t} → ${a.theme ?? 'unplaced'}`;
+    case 'assign-theme': return `${t}${a.from ? ` (from ${a.from})` : ''} → ${a.theme ?? 'unplaced'}${a.add ? ' (added; stays where it is too)' : ''}${a.why ? ` — ${short(a.why, 50)}` : ''}`;
+    case 'theme-request': return `${t}: ask the agent for ${a.kind === 'both' || !a.kind ? 'codes and claims' : a.kind}`;
+    case 'set-framing': return 'the paper’s framing reworded';
     case 'set-theme-field': return `${t}.${a.field} updated`;
     case 'merge-theme': return `merge ${t} into ${a.into}`;
     case 'set-tension': return `${t}: tensions ${arr(a.add).length ? `+${arr(a.add).join(' +')}` : ''}${arr(a.remove).length ? ` −${arr(a.remove).join(' −')}` : ''}`;
@@ -104,7 +106,7 @@ export type TargetKind = 'extract' | 'theme' | 'code' | 'none';
 export function targetKind(target: string | null | undefined, codeIds: Iterable<string>): TargetKind {
   if (!target || target === 'any' || target === 'none') return 'none';
   if (/^E-\d+$/.test(target)) return 'extract';
-  if (/^TH\d+$/.test(target)) return 'theme';
+  if (/^TH\d+$/.test(target) || target === 'MISC') return 'theme';
   for (const id of codeIds) if (id === target) return 'code';
   return 'none';
 }

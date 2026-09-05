@@ -56,7 +56,7 @@ export function ExtractInspector({
         {pending.length > 0 && <span className="wb-staged">{pending.length} staged</span>}
       </header>
 
-      {dropped && <p className="wb-warn">Staged to be dropped. Undo it in the pending drawer to keep it.</p>}
+      {dropped && <p className="wb-warn">Dropping…</p>}
       {extract.reason && <p className="wb-muted wb-why-new">{extract.reason}</p>}
 
       <blockquote className="wb-insp-quote">{extract.text}</blockquote>
@@ -190,7 +190,7 @@ export function ExtractInspector({
         </button>
         <p className="wb-muted">
           {retrimming
-            ? 'Now select the words to keep, inside this extract’s own turn. The button in the bar at the bottom stages it.'
+            ? 'Now select the words to keep, inside this extract’s own turn. The button in the bar at the bottom applies it.'
             : 'Select the words in the turn and re-trim: the text is cut out of the transcript by the script, never retyped.'}
         </p>
       </div>

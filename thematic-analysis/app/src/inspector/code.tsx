@@ -50,7 +50,7 @@ function EditableField({ label, value, onSave, onComment, multiline = true }: {
             setEditing(false);
           }}
         >
-          stage the rewording
+          save the rewording
         </button>
         <button className="wb-btn wb-btn-ghost" onClick={() => setEditing(false)}>
           cancel
@@ -58,7 +58,7 @@ function EditableField({ label, value, onSave, onComment, multiline = true }: {
         <CommentComposer label="ask instead" onSubmit={(text) => (onComment(text), setEditing(false))} />
       </div>
       <p className="wb-muted">
-        The operation carries the text you edited against, so if the agent reworded it meanwhile, `apply` refuses rather than overwrites.
+        The edit carries the text you edited against, so if the agent reworded it meanwhile, the script refuses rather than overwrites.
       </p>
     </div>
   );
@@ -242,7 +242,7 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
                   setRenaming(null);
                 }}
               >
-                stage
+                rename
               </button>
               <button className="wb-btn wb-btn-ghost" onClick={() => setRenaming(null)}>
                 cancel
@@ -258,8 +258,8 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
                 decision, and that decision is the researcher's. */}
             <label>retire {code.id}</label>
             <p className="wb-muted">
-              {users.length} extract(s) carry it. Retiring stages one recode each, then the retirement — nothing is
-              written until you hand the pass back.
+              {users.length} extract(s) carry it. Retiring recodes each of them and then retires the code, at once — one
+              operation each in the log.
             </p>
             <ul className="wb-retire-list">
               {users.map((e) => {
@@ -308,7 +308,7 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
                   setOrphanPlan('');
                 }}
               >
-                stage all of it
+                retire it, recoding those
               </button>
               <button
                 className="wb-btn wb-btn-ghost"
@@ -345,7 +345,7 @@ export function CodeInspector({ code, codes, dupes, wb, N, users, onCompare, onS
           <label>move or fold this code</label>
           {leaving ? (
             <p className="wb-warn">
-              Staged to be folded away already. Undo that in the pending drawer before moving it anywhere else.
+              The agent has proposed folding this code away. Undo that proposal in the pending drawer before moving it anywhere else.
             </p>
           ) : (
             <>

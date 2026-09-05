@@ -224,7 +224,12 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
   border-bottom: 2px dashed hsl(calc(var(--hue) * 47deg) 62% 48%);
 }
 .wb-echip-id { font-family: ui-monospace, monospace; font-weight: 700; color: var(--asta-teal); white-space: nowrap; }
-.wb-echip-codes { font-family: ui-monospace, monospace; }
+.wb-echip-codes { font-family: ui-monospace, monospace; min-width: 0; }
+/* Break between codes, never inside one: a squeezed chip was splitting `curation.prior-knowledge`
+   at its hyphen and stacking the halves, because a hyphen is a legal break point and the codes
+   cell had no floor. Each id is its own nowrap token; the separator may wrap. */
+.wb-code-tok { white-space: nowrap; }
+.wb-code-sep { white-space: normal; }
 /* The context is the part that may be long, so it is the part that gives way — an id that
    wraps mid-token reads as a broken chip. */
 .wb-echip-ctx { color: var(--muted); font-style: italic; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
@@ -598,3 +603,34 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
 .wb-op-open:hover .wb-op-text { text-decoration: underline; }
 .wb-op-note { font-size: 0.7rem; color: var(--muted); font-style: italic; }
 .wb-drawer h4 { margin: 0.7rem 0 0.3rem; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
+/* A finished transcript should read as finished: the counter that said "8 new" says so instead. */
+.wb-reviewed-flag { color: var(--asta-green); font-weight: 600; }
+.wb-btn-done { background: var(--asta-green-20); border-color: var(--asta-green); color: var(--asta-teal); cursor: default; opacity: 1; }
+
+/* ---- themes: staged themes, proposed cards, the agent's tray, claims, the paper's framing ---- */
+.wb-card-proposed { border-style: dashed; background: #fffdf4; }
+.wb-card-tag { flex: 1 1 100%; font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.04em; color: #8a5b00; font-weight: 700; }
+.wb-tray { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.3rem 0; }
+.wb-tray-card { border: 1px dashed var(--asta-amber); background: #fffdf4; border-radius: 8px; padding: 0.4rem 0.55rem; font-size: 0.8rem; }
+.wb-tray-card header { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; }
+.wb-tray-card header b { font-family: ui-monospace, monospace; }
+.wb-tray-why { margin: 0.2rem 0; font-size: 0.8rem; }
+.wb-tray-ex { font-size: 0.74rem; color: var(--muted); margin: 0.1rem 0; line-height: 1.4; }
+.wb-tray-ex .wb-cl-p { margin-right: 0.25rem; }
+.wb-errands { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin-top: 0.35rem; }
+.wb-errand { font-size: 0.68rem; background: #fff2cc; color: #8a5b00; border-radius: 999px; padding: 0.05rem 0.45rem; font-weight: 700; }
+.wb-errand-staged { background: #fffdf4; border: 1px dashed var(--asta-amber); }
+.wb-case { background: var(--asta-cream); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.6rem; margin: 0.4rem 0; font-size: 0.8rem; }
+.wb-case h4 { margin: 0 0 0.2rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--asta-teal); }
+.wb-case ul { margin: 0.2rem 0; padding-left: 1.1rem; }
+.wb-claim { border: 1px solid var(--border); border-left: 3px solid var(--asta-teal); border-radius: 8px; padding: 0.4rem 0.6rem; margin: 0.35rem 0; background: var(--surface); font-size: 0.84rem; }
+.wb-claim-evidence { font-family: ui-monospace, monospace; font-size: 0.7rem; color: var(--muted); display: block; margin-top: 0.2rem; }
+.wb-claim-tension { font-size: 0.76rem; margin-top: 0.25rem; }
+.wb-claim-cites { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.wb-claim-cite { font-size: 0.72rem; color: var(--muted); }
+.wb-claims-meta { font-size: 0.7rem; color: var(--muted); margin: 0.2rem 0; }
+.wb-framing { background: var(--asta-cream); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.45rem 0.75rem; margin-bottom: 0.6rem; font-size: 0.85rem; }
+.wb-framing > header { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.wb-framing > header b { flex: 1; font-size: 0.82rem; color: var(--asta-dark-teal); }
+.wb-framing-drafts { font-size: 0.72rem; color: var(--muted); font-family: ui-monospace, monospace; }
+.wb-framing-body { margin-top: 0.35rem; }

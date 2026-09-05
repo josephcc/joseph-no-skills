@@ -31,6 +31,12 @@ describe('describe', () => {
     expect(describeOp(op({ op: 'reparent', target: 'x', args: { parent: 'trust' } }))).toBe('x → child of trust');
     expect(describeOp(op({ op: 'mark-reviewed', args: { transcript: 'T-07' } }))).toBe('mark T-07 reviewed');
     expect(describeOp(op({ op: 'quote-span', target: 'TH1', args: { extract: 'E-1' } }))).toContain('trim E-1');
+    expect(describeOp(op({ op: 'assign-theme', target: 'trust', args: { theme: 'op-0031', why: 'acting on the process' } })))
+      .toBe('trust → op-0031 — acting on the process');
+    expect(describeOp(op({ op: 'assign-theme', target: 'trust', args: { theme: 'TH3', from: 'TH1' } }))).toBe('trust (from TH1) → TH3');
+    expect(describeOp(op({ op: 'theme-request', target: 'TH1', args: { kind: 'codes' } }))).toBe('TH1: ask the agent for codes');
+    expect(describeOp(op({ op: 'theme-request', target: 'op-0031', args: { kind: 'both' } }))).toBe('op-0031: ask the agent for codes and claims');
+    expect(describeOp(op({ op: 'set-framing', args: { value: 'x' } }))).toBe('the paper’s framing reworded');
   });
   it('shortens long text instead of spilling it', () => {
     const long = 'x'.repeat(200);
@@ -69,6 +75,10 @@ describe('targetKind', () => {
     expect(targetKind('TH1', codes)).toBe('theme');
     expect(targetKind('iterate', codes)).toBe('code');
     expect(targetKind('triage.coverage', codes)).toBe('code');
+  });
+  it('treats the miscellaneous pile as a theme', () => {
+    expect(targetKind('MISC', [])).toBe('theme');
+    expect(targetKind('op-0031', ['iterate'])).toBe('none');
   });
   it('has nowhere to go for a coverage cell, an unknown id, or no target', () => {
     expect(targetKind(null, ['iterate'])).toBe('none');
