@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { marked } from 'marked';
+import { configureMarked } from './markedSetup';
 import { decodeEntities, protectedRanges } from './parser';
 import { planPathFromUrl } from './api';
 
-marked.setOptions({ gfm: true, breaks: false });
+configureMarked();
 
 const escapeHtmlText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -160,6 +161,31 @@ export function resolvePlanHref(raw: string, base: string | null): string | null
   return `?plan=${encodeURIComponent(absPath)}${frag}`;
 }
 
+// Route a markdown image (`![d](figures/d.png)`) through the daemon, which serves
+// it from the plan's own repo: the SPA has no static route for arbitrary files,
+// so a relative <img src> would otherwise resolve to the app shell and never
+// load. Absolute file-system paths are routed too; anything with a scheme
+// (http:, data:, file:) or already under /api/ is left alone. Pure + exported
+// for unit tests.
+export function resolveAssetSrc(raw: string, base: string | null): string | null {
+  if (!raw || !base) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null;
+  if (raw.startsWith('/api/')) return null;
+  return `/api/asset?plan=${encodeURIComponent(base)}&src=${encodeURIComponent(raw)}`;
+}
+
+function rewriteImageSrcs(root: HTMLElement): void {
+  const base = planPathFromUrl();
+  root.querySelectorAll('img[src]').forEach((img) => {
+    const raw = img.getAttribute('src') ?? '';
+    const src = resolveAssetSrc(raw, base);
+    if (!src) return;
+    img.setAttribute('src', src);
+    img.setAttribute('data-src', raw);
+    img.classList.add('ip-asset');
+  });
+}
+
 // Catch relative links to other .md plans and point them at the viewer, opening
 // in a new tab — so the wiki of interlinked plan files navigates in-app without
 // changing the authored markdown (plain relative links stay plain).
@@ -209,6 +235,7 @@ export function Markdown({
     decorateCodeBlocks(ref.current);
     if (escapeHtml) scrubLinks(ref.current);
     rewritePlanLinks(ref.current);
+    rewriteImageSrcs(ref.current);
   }, [html, escapeHtml]);
   return <div className="ip-md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
 }

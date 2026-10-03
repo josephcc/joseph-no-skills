@@ -10,11 +10,12 @@
 // here as well as in the React blocks.
 
 import { marked } from 'marked';
+import { configureMarked } from './markedSetup';
 import { anchorHref } from './anchor';
 import { decodeEntities, parsePlan, protectedRanges } from './parser';
 import type { Block, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
-marked.setOptions({ gfm: true, breaks: false });
+configureMarked();
 
 /**
  * How comment threads are carried into the document.
@@ -27,6 +28,13 @@ marked.setOptions({ gfm: true, breaks: false });
  * - `none` — dropped entirely.
  */
 export type CommentMode = 'inline' | 'annotations' | 'both' | 'none';
+
+/**
+ * How an answered question prints. `chosen` shows only the option(s) picked, so a settled
+ * question reads as a decision; `all` keeps every option and marks the chosen ones, for readers
+ * who should be able to review the alternatives that were passed over.
+ */
+export type AnsweredMode = 'chosen' | 'all';
 
 /** The mode in effect, honouring the older `noComments` flag. */
 export function commentMode(opts: PrintOptions): CommentMode {
@@ -43,6 +51,8 @@ export interface PrintOptions {
   noQuestions?: boolean;
   /** Drop checklists. */
   noChecks?: boolean;
+  /** Answered questions: only the chosen option (default) or every option with the chosen one marked. */
+  answered?: AnsweredMode;
   /**
    * `file://` URL of the plan's directory, emitted as `<base href>`.
    *
@@ -271,7 +281,7 @@ function finding(f: FindingBlock): string {
   ].join('');
 }
 
-function question(q: QuestionBlock): string {
+function question(q: QuestionBlock, answered: AnsweredMode = 'chosen'): string {
   const parts = [`<section class="pcall pcall-q">`];
   parts.push(
     `<div class="phead">${badge(q.status === 'answered' ? 'answered' : 'open question', q.status === 'answered' ? 'answered' : 'open')}` +
@@ -280,7 +290,25 @@ function question(q: QuestionBlock): string {
   parts.push(`<h4>${inline2html(q.title)}</h4>`);
   parts.push(md2html(q.body));
   const a = q.answer;
-  if (a) {
+  if (a && answered === 'all' && q.options.length) {
+    // Review mode: every option stays on the page with the chosen one(s) marked, so a reader
+    // can weigh the alternatives that were passed over.
+    const chosenIds = new Set(a.chose);
+    parts.push('<ul class="popts popts-review">');
+    for (const o of q.options) {
+      const on = chosenIds.has(o.id);
+      parts.push(
+        `<li class="${on ? 'pchosen' : 'pother'}"><b>${esc(o.id)}</b>` +
+          `${on ? '<span class="pchosen-mark">✓ chosen</span>' : ''} ${md2html(o.body)}</li>`,
+      );
+    }
+    if (chosenIds.has('other')) parts.push('<li class="pchosen"><b>other</b><span class="pchosen-mark">✓ chosen</span></li>');
+    parts.push('</ul>');
+    const label = a.chose.includes('other') ? 'Other' : a.chose.join(', ');
+    parts.push(`<div class="pans"><b>Answer${label ? ` — ${esc(label)}` : ''}</b>`);
+    if (a.text.trim()) parts.push(userMd2html(a.text));
+    parts.push(`</div>`);
+  } else if (a) {
     // Answered: show only what was chosen. Reprinting every rejected option turns a
     // settled decision back into an open menu for the reader.
     const chosen = q.options.filter((o) => a.chose.includes(o.id));
@@ -317,7 +345,9 @@ function checklist(items: { id: string; status: string; label: string }[]): stri
     .map(
       (c) =>
         `<li class="${c.status === 'done' ? 'pdone' : ''}">` +
-        `<span class="pbox">${c.status === 'done' ? '&#10003;' : ''}</span>${inline2html(c.label)}</li>`,
+        // The label is one flex child: left as loose inline nodes, every text run and code
+        // chip would become its own flex item and spread across the row.
+        `<span class="pbox">${c.status === 'done' ? '&#10003;' : ''}</span><span class="plabel">${inline2html(c.label)}</span></li>`,
     )
     .join('');
   return `<ul class="pchecks">${rows}</ul>`;
@@ -352,7 +382,7 @@ export function renderBlocks(blocks: Block[], opts: PrintOptions = {}): string {
         out.push(finding(b));
         break;
       case 'question':
-        if (!(opts.noQuestions && b.status !== 'answered')) out.push(question(b));
+        if (!(opts.noQuestions && b.status !== 'answered')) out.push(question(b, opts.answered ?? 'chosen'));
         break;
       case 'comment':
         if (inlineComments) out.push(comment(b));
@@ -389,6 +419,7 @@ tr:nth-child(even) td { background: #fafcfc; }
 code { font: 9pt "SF Mono", Menlo, monospace; background: #eef4f5; padding: 1px 4px;
        border-radius: 3px; color: #0a4f55; }
 pre { background: #f7fafa; border: 1px solid #dde7e9; border-radius: 4px; padding: 10px 12px;
+      white-space: pre-wrap; overflow-wrap: anywhere;
       font: 9pt "SF Mono", Menlo, monospace; overflow: hidden; break-inside: avoid; }
 pre code { background: none; padding: 0; }
 .pmetacard { border-left: 3px solid var(--accent); background: var(--wash); padding: 10px 14px;
@@ -419,6 +450,10 @@ pre code { background: none; padding: 0; }
 .popts { list-style: none; margin: 6px 0 0; } .popts > li { margin: 5px 0; padding-left: 10px;
   border-left: 2px solid #e4ebed; }
 .popts > li > b { font: 8.5pt "SF Mono", Menlo, monospace; color: #7d8f96; }
+.popts-review > li.pchosen { border-left: 3px solid var(--accent); background: var(--wash); }
+.popts-review > li.pother { opacity: .78; }
+.pchosen-mark { display: inline-block; margin-left: 6px; font-size: 7.5pt; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase; color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; }
 .pnote { margin: 5px 0; font-size: 9.5pt; } .pnote b { color: var(--accent); }
 mark.phl { background: #fff3bf; color: inherit; padding: 0 1px; border-radius: 2px; }
 /* The anchor is machinery, not a link — it must leave no trace on the page. Its only job is to
@@ -432,6 +467,7 @@ sup.phlref { font-size: 7pt; color: var(--accent); background: #eef4f5; padding:
              border-radius: 2px; margin-left: 1px; }
 .pchecks { list-style: none; margin: 8px 0; }
 .pchecks li { display: flex; gap: 7px; align-items: baseline; margin: 3px 0; }
+.pchecks .plabel { flex: 1; min-width: 0; }
 .pbox { flex: 0 0 11px; height: 11px; border: 1px solid #9bb0b5; border-radius: 2px;
         font-size: 8pt; line-height: 10px; text-align: center; color: var(--accent); }
 .pdone { color: #7d8f96; text-decoration: line-through; }

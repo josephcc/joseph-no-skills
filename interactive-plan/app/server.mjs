@@ -211,6 +211,59 @@ function runServer() {
   });
 
 
+  // Serve an image a plan references (`![caption](figures/x.png)`), resolved
+  // against the plan's directory. The SPA has no static route for arbitrary
+  // files, so without this a relative <img src> resolves to the app shell and
+  // the figure never renders. Confined to files inside the plan's repo (or its
+  // directory when it is not in a repo) and to image types, so it cannot become
+  // a general file reader; symlinks are resolved before the containment check.
+  const ASSET_TYPES = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+  };
+  app.get('/api/asset', (req, res) => {
+    const planPath = validatePlanPath(req.query.plan);
+    const src = typeof req.query.src === 'string' ? req.query.src : '';
+    if (!planPath || !src) return res.status(400).json({ error: 'plan and src required' });
+    const planDir = path.dirname(planPath);
+    const roots = [planDir];
+    try {
+      const top = execFileSync('git', ['-C', planDir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+      if (top) roots.unshift(top);
+    } catch {
+      /* not a git repo: the plan's directory is the only root */
+    }
+    let abs;
+    try {
+      abs = fs.realpathSync(path.resolve(planDir, src));
+    } catch {
+      return res.status(404).json({ error: 'image not found' });
+    }
+    const realRoots = roots.map((r) => {
+      try {
+        return fs.realpathSync(r);
+      } catch {
+        return r;
+      }
+    });
+    const inside = realRoots.some((base) => abs === base || abs.startsWith(base + path.sep));
+    const type = ASSET_TYPES[path.extname(abs).toLowerCase()];
+    if (!inside || !type || !fs.statSync(abs).isFile()) {
+      return res.status(404).json({ error: 'not an image under the plan repo/dir' });
+    }
+    res.setHeader('Content-Type', type);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // An SVG served inline can carry script; as an <img> it never runs, but
+    // deny it anyway in case the URL is opened directly.
+    if (type === 'image/svg+xml') res.setHeader('Content-Security-Policy', "script-src 'none'");
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(abs).pipe(res);
+  });
+
   // Render the plan to a PDF and stream it back as a download. The rendering itself lives in
   // pdf.ts (bun + TS, sharing the viewer's parser), so this only validates, spawns, and pipes.
   app.get('/api/pdf', (req, res) => {
@@ -227,6 +280,13 @@ function runServer() {
         return res.status(400).json({ error: 'bad comments mode' });
       }
       args.push(`--comments=${comments}`);
+    }
+    // Answered questions: only the chosen option (default) or every option with the chosen
+    // one marked, for reviewers. Allow-listed for the same reason as `comments`.
+    const answered = req.query?.answered;
+    if (typeof answered === 'string') {
+      if (!['chosen', 'all'].includes(answered)) return res.status(400).json({ error: 'bad answered mode' });
+      args.push(`--answered=${answered}`);
     }
     const out = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), 'ip-pdf-route-')),

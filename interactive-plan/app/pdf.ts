@@ -23,7 +23,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { annotatePdf } from './src/annotate';
 import { parsePlan } from './src/parser';
-import { planToPrintHtml, type CommentMode, type PrintOptions } from './src/print';
+import { planToPrintHtml, type AnsweredMode, type CommentMode, type PrintOptions } from './src/print';
 
 // Ordered by how reliably each one produces a PDF headlessly. Chrome is last on purpose:
 // its --headless=new --print-to-pdf hangs indefinitely on some macOS builds, where the
@@ -121,7 +121,8 @@ async function printToPdf(browser: string, htmlPath: string, out: string, timeou
 
 const USAGE =
   'usage: bun pdf.ts <plan.md> [out.pdf] [--comments=annotations|inline|both|none]\n' +
-  '                            [--no-comments] [--no-questions] [--no-checks] [--html]';
+  '                            [--answered=chosen|all] [--no-comments] [--no-questions]\n' +
+  '                            [--no-checks] [--html]';
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
@@ -144,6 +145,14 @@ if (modeFlag && !MODES.includes(modeFlag as CommentMode)) {
 const mode: CommentMode = flags.has('--no-comments')
   ? 'none'
   : ((modeFlag as CommentMode | undefined) ?? (flags.has('--html') ? 'inline' : 'annotations'));
+// Answered questions print only what was chosen unless the reader should see the rejected
+// options too (`--answered=all` marks the chosen ones instead of dropping the rest).
+const ANSWERED: AnsweredMode[] = ['chosen', 'all'];
+const answeredFlag = argv.find((a) => a.startsWith('--answered='))?.split('=')[1];
+if (answeredFlag && !ANSWERED.includes(answeredFlag as AnsweredMode)) {
+  console.error(`unknown --answered mode: ${answeredFlag}\n${USAGE}`);
+  process.exit(2);
+}
 const srcPath = resolve(src);
 if (!existsSync(srcPath)) {
   console.error(`not found: ${srcPath}`);
@@ -154,6 +163,7 @@ const opts: PrintOptions = {
   comments: mode,
   noQuestions: flags.has('--no-questions'),
   noChecks: flags.has('--no-checks'),
+  answered: (answeredFlag as AnsweredMode | undefined) ?? 'chosen',
   // Relative images/links in the plan must resolve against the plan's directory, not
   // wherever the HTML happens to be written.
   baseHref: pathToFileURL(dirname(srcPath) + '/').href,

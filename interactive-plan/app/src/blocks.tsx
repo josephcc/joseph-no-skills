@@ -152,11 +152,21 @@ export function QuestionCard({
             <div className="ip-answer-label">Your answer</div>
             {q.answer?.chose.length ? (
               <div className="ip-answer-chose">
-                {q.answer.chose.map((c) => (
-                  <span key={c} className="ip-chip">
-                    {q.options.find((o) => o.id === c)?.id ?? c}
-                  </span>
-                ))}
+                {q.answer.chose.map((c) => {
+                  // Show the option's full text, not just its id: the id is the stable handle
+                  // for the file, but a reader wants to see what was actually chosen.
+                  const opt = q.options.find((o) => o.id === c);
+                  return (
+                    <div key={c} className="ip-answer-option">
+                      <span className="ip-chip">{c === 'other' ? 'Other' : c}</span>
+                      {opt ? (
+                        <div className="ip-option-body">
+                          <Markdown source={opt.body} />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
             {q.answer?.text ? <Markdown source={q.answer.text} escapeHtml /> : null}

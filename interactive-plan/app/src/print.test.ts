@@ -310,6 +310,30 @@ describe('block rendering', () => {
     expect(html).not.toContain('Throw it away.');
   });
 
+  it('keeps every option and marks the chosen one under answered=all', () => {
+    const raw = [
+      '# T',
+      '',
+      '<open-question id="Q-A" title="Which?" status="answered">',
+      'Pick one.',
+      '<options select="single">',
+      '  <option id="keep">Keep it as is.</option>',
+      '  <option id="drop">Throw it away.</option>',
+      '</options>',
+      '<answer by="user" at="2026-08-01T00:00" chose="keep">agreed</answer>',
+      '</open-question>',
+    ].join('\n');
+    // Render blocks only: the full document inlines the stylesheet, which also names the class.
+    const html = renderBlocks(parsePlan(raw).blocks, { answered: 'all' });
+    expect(html).toContain('Keep it as is.');
+    expect(html).toContain('Throw it away.');
+    expect(html).toContain('agreed');
+    // Exactly one option carries the chosen mark, and it is the chosen one.
+    expect(html.match(/pchosen-mark/g)).toHaveLength(1);
+    expect(html).toMatch(/<li class="pchosen"><b>keep<\/b>/);
+    expect(html).toMatch(/<li class="pother"><b>drop<\/b>/);
+  });
+
   it('lists the options for an unanswered question, and can omit it entirely', () => {
     const raw = [
       '# T',
@@ -335,6 +359,8 @@ describe('block rendering', () => {
     const html = blocks(raw);
     expect(html.match(/<ul class="pchecks">/g)).toHaveLength(1);
     expect(html).toContain('pdone');
+    // Each label is wrapped so it stays one flex child (inline code must not spread the row).
+    expect(html.match(/class="plabel"/g)).toHaveLength(2);
     expect(html).toContain('first thing');
     expect(html).toContain('second thing');
   });

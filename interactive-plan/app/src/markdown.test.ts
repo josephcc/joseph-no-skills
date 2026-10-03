@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { preprocessHighlights, resolvePlanHref } from './markdown';
+import { preprocessHighlights, resolveAssetSrc, resolvePlanHref } from './markdown';
 
 const NO_META: Record<string, { status: string; kind: string | null }> = {};
 
@@ -67,5 +67,31 @@ describe('resolvePlanHref', () => {
   it('skips a relative link when there is no base plan path', () => {
     expect(resolvePlanHref('new-domains.md', null)).toBeNull();
     expect(resolvePlanHref('/abs/other.md', null)).toBe(enc('/abs/other.md')); // absolute still works
+  });
+});
+
+describe('resolveAssetSrc', () => {
+  const BASE = '/Users/j/proj/notebook/hci/main.md';
+  const routed = (src: string) => `/api/asset?plan=${encodeURIComponent(BASE)}&src=${encodeURIComponent(src)}`;
+
+  it('routes a relative image through the daemon, keyed by the plan it appears in', () => {
+    expect(resolveAssetSrc('figures/x.png', BASE)).toBe(routed('figures/x.png'));
+    expect(resolveAssetSrc('../out/model/fig.png', BASE)).toBe(routed('../out/model/fig.png'));
+  });
+
+  it('routes an absolute file-system path too (the server decides whether it is inside the repo)', () => {
+    expect(resolveAssetSrc('/Users/j/proj/notebook/figs/a.png', BASE)).toBe(routed('/Users/j/proj/notebook/figs/a.png'));
+  });
+
+  it('leaves images with a scheme alone', () => {
+    expect(resolveAssetSrc('https://example.com/a.png', BASE)).toBeNull();
+    expect(resolveAssetSrc('data:image/png;base64,AAAA', BASE)).toBeNull();
+    expect(resolveAssetSrc('file:///tmp/a.png', BASE)).toBeNull();
+  });
+
+  it('leaves an already-routed src alone and needs a plan to resolve against', () => {
+    expect(resolveAssetSrc('/api/asset?plan=x&src=y', BASE)).toBeNull();
+    expect(resolveAssetSrc('figures/x.png', null)).toBeNull();
+    expect(resolveAssetSrc('', BASE)).toBeNull();
   });
 });

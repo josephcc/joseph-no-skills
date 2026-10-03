@@ -13,7 +13,8 @@ clean interactive web page instead of raw markdown.
 
 **Always author plans in this format** (the user's standing decision). When the user asks you to
 write or substantially revise a plan, spec, or design doc: load this skill, author in the tagged
-syntax below, lint it, and launch the viewer so they can review.
+syntax below, lint it, and launch the viewer so they can review. The plan opens with the user's own
+instruction, quoted verbatim (see "The brief" below).
 
 Need a shareable copy for people who won't open the viewer? See
 [Export a PDF to share](#export-a-pdf-to-share).
@@ -26,7 +27,7 @@ The skill lives at `~/.claude/skills/interactive-plan/`:
 
 ## Authoring cheatsheet (the six tags)
 
-Everything not in a tag is plain markdown (rendered with code-ref linkifying + highlighted code
+Everything not in a tag is plain markdown, GitHub-flavored except that strikethrough needs `~~` (a lone `~`, as in LaTeX `Table~\ref{tab:x}`, stays literal; rendered with code-ref linkifying + highlighted code
 blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
 
 **Plans interlink like a wiki.** A plain relative markdown link to another `.md` plan
@@ -34,6 +35,11 @@ blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
 rewritten to open that file **in a new viewer tab** (`?plan=<abs>`) — no special syntax, just a normal
 link. Use this to build a portal/thread structure across many plan files. External URLs, in-page
 `#anchors`, and non-`.md` links are left as ordinary links.
+
+**Figures render from the plan's repo.** A plain markdown image (`![caption](out/figures/x.png)`,
+relative to the plan file, or an absolute path) is served by the viewer through `/api/asset`, so
+figures show in the browser without embedding. Only image types (png, jpg, gif, svg, webp) inside the
+plan's repository (or its directory, outside a repo) are served; `http(s)` images work as usual.
 
 **Open question** — a fork awaiting the user. Options carry rich markdown; the viewer auto-adds an
 "Other" choice + a freeform box, so list only real candidates.
@@ -94,7 +100,31 @@ struck-through.
 ```
 `status`: `todo` | `done` (omit ⇒ `todo`). The label is inline markdown (code refs, `code`, bold).
 
+### The brief: keep the user's words
+
+A plan starts from something the user typed: the request, a rough plan, a pasted list of
+constraints, sometimes a whole design in their own words. **Preserve it verbatim in the plan.**
+A paraphrase ("Your positions", a **Scope:** line) loses the wording the user will later want
+to quote, and once the session ends the original survives only in a chat transcript nobody
+reopens. This happened on 2026-09-06: the brief behind an intro-reframing plan had to be dug
+out of a `.jsonl` transcript the next day.
+
+- Every new plan carries `## 0. Brief (verbatim)` directly after the title: the user's
+  instruction word for word, blockquoted, with the date and where it came from (chat message,
+  pasted doc, voice note). Fix nothing in it, not even typos.
+- Strip only what the editor appended, never what the user wrote: `<context ref=...>` attachment
+  blocks, tool output, and pasted file bodies become a link to the file. Keep `@file` mentions as
+  typed, re-pointed to a path that resolves from the plan.
+- Later instructions in the same thread ("also do X", "no, drop Y") go under the same section as
+  dated addenda. Never rewrite the earlier text.
+- If you need a paraphrase for the argument, put it below the brief and label it as yours. The
+  preamble's **Scope:** line is a summary, not a substitute.
+- If the brief lives in a file the user wrote (notes, an email), link it under **Inputs:** and
+  still quote the parts that drive the plan; linked files move, the plan is the record.
+
 ### Authoring rules
+- The user's original instruction is quoted verbatim in `## 0. Brief (verbatim)` and never
+  edited; later instructions are appended there as dated addenda (see The brief).
 - Stable, unique ids; never renumber; never delete resolved/superseded items (they collapse).
 - On a review pass, read every `<answer>` and open `<comment>`; update the plan; convert answered
   questions to decisions; **reply** to comments (leave *resolving* to the user) — **never silently
@@ -139,14 +169,16 @@ menu item — keybinding + palette is the supported surface. Setup + copy-paste 
 ## Export a PDF to share
 
 When the plan needs to go to people who won't open the viewer — a summary for colleagues, a
-decision record for a review — export it. **In the viewer** there's a **PDF** button in the
-header, beside the filename; it renders and downloads `<plan>.pdf`. From the CLI:
+decision record for a review — export it. **In the viewer** there's a **PDF ▾** button in the
+header, beside the filename, with two choices: **Chosen answers only** (downloads `<plan>.pdf`)
+and **All options, chosen marked** (downloads `<plan>.review.pdf`, for readers who should see
+the alternatives). From the CLI:
 
 ```bash
 cd ~/.claude/skills/interactive-plan/app && bun run pdf <abs-path-to-plan.md> [out.pdf]
 ```
 
-The button calls `GET /api/pdf?plan=<abs>[&comments=<mode>&no-comments=1&no-questions=1&no-checks=1]`,
+The button calls `GET /api/pdf?plan=<abs>[&answered=chosen|all&comments=<mode>&no-comments=1&no-questions=1&no-checks=1]`,
 which runs the same renderer and streams the result back as a download. It needs `bun` on `PATH`
 (already true if you lint or test this app) and says so plainly if it's missing.
 
@@ -154,11 +186,13 @@ This does **not** print the viewer. The viewer is built for interaction and has 
 stylesheet, so printing it yields a mess. `bun run pdf` renders the same parsed plan through a
 print-first presentation (`app/src/print.ts`): the preamble becomes a header card, decisions and
 findings become callouts with their status/severity badges, checklists keep their tick state, and
-an answered question collapses to **just the chosen option** — a settled question shouldn't read
-as an open menu.
+an answered question shows **just the chosen option** by default — a settled question shouldn't read
+as an open menu — or, under `--answered=all`, every option with the chosen one marked, so reviewers
+can weigh what was passed over.
 
 Flags, for trimming a working document into something shareable:
 - `--comments=<mode>` — how comment threads travel; see [Comments become PDF comments](#comments-become-pdf-comments)
+- `--answered=chosen|all` — answered questions print only the chosen option (default) or all options with the chosen one marked
 - `--no-questions` — drop *unanswered* questions (answered ones stay, as decisions-in-progress)
 - `--no-comments` — drop comment threads
 - `--no-checks` — drop checklists
@@ -189,7 +223,7 @@ All six tags render, plus the preamble, tables, and code blocks:
 | `<decision>` | callout with status badge, date, `from`/`supersedes` |
 | `<finding>` | callout with severity badge, status, effort |
 | `<check>` | checklist, consecutive checks grouped, `done` struck through |
-| `<open-question>` | open → question + options; answered → question + **only the chosen option** + the answer |
+| `<open-question>` | open → question + options; answered → question + **only the chosen option** + the answer (or every option with the chosen one marked, under `--answered=all`) |
 | `<comment>` | a real PDF comment on its anchored span — see below; or a note callout under `--comments=inline` |
 | `<user-highlight>` | highlighted span; dropped entirely under `--no-comments`, since there is then nothing to point at |
 
@@ -257,7 +291,7 @@ a leak. Run `--status` if you've lost the port (or `curl -s http://localhost:<po
 
 ## The loop
 
-1. Author/update the plan in this format → 2. lint → 3. launch the viewer → 4. the user answers
+1. Author/update the plan in this format, opening with the user's brief verbatim → 2. lint → 3. launch the viewer → 4. the user answers
 questions, picks options, and comments (saved back into the same `.md`) → 5. they tell you to
 "review my feedback on plan X" → you read the answers + open comments, revise, convert answered
 questions to decisions, and **reply** to comments (the user resolves them) → 6. repeat until the

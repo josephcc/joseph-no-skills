@@ -69,6 +69,8 @@ export interface PdfOptions {
   noChecks?: boolean;
   /** How comment threads travel: real PDF annotations (default), inline callouts, or both. */
   comments?: 'annotations' | 'inline' | 'both' | 'none';
+  /** Answered questions: only the chosen option (default) or every option with the chosen one marked. */
+  answered?: 'chosen' | 'all';
 }
 
 /** Ask the daemon to render this plan and hand back the PDF bytes. */
@@ -78,6 +80,7 @@ export async function exportPdf(planPath: string, opts: PdfOptions = {}): Promis
   if (opts.noQuestions) q.set('no-questions', '1');
   if (opts.noChecks) q.set('no-checks', '1');
   if (opts.comments) q.set('comments', opts.comments);
+  if (opts.answered) q.set('answered', opts.answered);
   const r = await fetch(`/api/pdf?${q}`);
   if (!r.ok) {
     // The route reports render failures as JSON; fall back to the status code.

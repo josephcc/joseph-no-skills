@@ -18,7 +18,7 @@ Two audiences, one file:
 1. **Single source of truth.** Everything — the plan, the questions, the decisions, the user's
    answers, every comment thread, every finding's status — lives in the one `.md` file. There is
    no sidecar JSON. The file is git-diffable and self-contained.
-2. **Tags are additive and semantic.** Anything not inside a known tag is plain markdown and
+2. **Tags are additive and semantic.** Anything not inside a known tag is plain markdown (GFM; strikethrough requires `~~`, so a lone LaTeX `~` is literal) and
    renders normally. A reader who ignores the tags still gets a coherent document.
 3. **State lives in attributes.** `status`, `by`, `at`, `severity`, etc. are attributes, never
    prose, so they are machine-parseable and unambiguous.
@@ -120,7 +120,8 @@ Toggle is fine, but it must preserve the chat transcript across modes.
 **converts an answered question into a `<decision from="...">`** (see below), preserving the id link.
 
 **Rendering** — open questions surface in a right-side **Questions rail** and inline at their
-location; answered ones collapse to a one-line summary you can expand.
+location; answered ones show the chosen option's full text (not just its id) with the answer note
+and a *Change answer* control that reopens the full option list.
 
 **Example (the real `Q-A`, converted)**
 ```xml
@@ -329,6 +330,11 @@ race on the same file.
 ---
 
 ## Authoring guidance for agents
+
+**Open with the brief.** Directly after the title, a `## 0. Brief (verbatim)` section quotes the
+user's original instruction word for word (blockquoted, dated, with its source), followed by dated
+addenda for later instructions in the same thread. It is plain markdown, not a tag, and the agent
+never edits it; paraphrases go below it and are labelled as the agent's. See SKILL.md, "The brief".
 
 When writing or updating a plan in this format:
 

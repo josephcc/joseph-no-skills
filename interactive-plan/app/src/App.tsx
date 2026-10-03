@@ -54,6 +54,8 @@ export function App() {
   const [pending, setPending] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [pdfMenu, setPdfMenu] = useState(false);
+  const pdfMenuRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [composer, setComposer] = useState<{ sel: SelInfo; text: string } | null>(null);
   const [elComposer, setElComposer] = useState<{ block: Block; text: string; x: number; y: number } | null>(null);
@@ -61,6 +63,16 @@ export function App() {
   const hashRef = useRef(hash);
   hashRef.current = hash;
   const mainRef = useRef<HTMLDivElement>(null);
+
+  // Close the PDF menu on a click anywhere else.
+  useEffect(() => {
+    if (!pdfMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!pdfMenuRef.current?.contains(e.target as Node)) setPdfMenu(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [pdfMenu]);
 
   useEffect(() => {
     if (!planPath) return;
@@ -369,15 +381,19 @@ export function App() {
 
   // Download the plan as a PDF. The daemon renders it (see /api/pdf); we only trigger the
   // browser download and surface failures, since a render takes a few seconds.
-  const onExportPdf = async () => {
+  // `answered` picks how settled questions print: just the chosen option (a decision record),
+  // or every option with the chosen one marked (for reviewers weighing the alternatives).
+  const onExportPdf = async (answered: 'chosen' | 'all' = 'chosen') => {
     if (!path) return;
+    setPdfMenu(false);
     setExporting(true);
     try {
-      const blob = await exportPdf(path);
+      const blob = await exportPdf(path, { answered });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (path.split('/').pop() ?? 'plan').replace(/\.md$/, '') + '.pdf';
+      a.download =
+        (path.split('/').pop() ?? 'plan').replace(/\.md$/, '') + (answered === 'all' ? '.review.pdf' : '.pdf');
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -408,14 +424,30 @@ export function App() {
           <span className="ip-path" title={path}>
             {path.split('/').slice(-1)[0]}
           </span>
-          <button
-            className="ip-btn ip-btn-ghost ip-pdf-btn"
-            onClick={onExportPdf}
-            disabled={exporting}
-            title="Download this plan as a PDF to share"
-          >
-            {exporting ? 'Rendering…' : 'PDF'}
-          </button>
+          <div className="ip-pdf-wrap" ref={pdfMenuRef}>
+            <button
+              className="ip-btn ip-btn-ghost ip-pdf-btn"
+              onClick={() => setPdfMenu((o) => !o)}
+              disabled={exporting}
+              title="Download this plan as a PDF to share"
+              aria-haspopup="menu"
+              aria-expanded={pdfMenu}
+            >
+              {exporting ? 'Rendering…' : 'PDF ▾'}
+            </button>
+            {pdfMenu && (
+              <div className="ip-pdf-menu" role="menu">
+                <button role="menuitem" onClick={() => onExportPdf('chosen')}>
+                  <b>Chosen answers only</b>
+                  <span>Answered questions show just the option you picked. A decision record.</span>
+                </button>
+                <button role="menuitem" onClick={() => onExportPdf('all')}>
+                  <b>All options, chosen marked</b>
+                  <span>Answered questions keep every option, with yours marked. For others to review.</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

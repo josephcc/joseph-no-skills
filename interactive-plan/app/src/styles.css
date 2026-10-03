@@ -138,6 +138,14 @@ body {
 }
 
 /* ---- markdown ---- */
+/* Figures a plan references (served via /api/asset): fit the column, never overflow it. */
+.ip-md img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.75rem auto;
+}
+
 .ip-md {
   font-size: 0.95rem;
 }
@@ -563,8 +571,18 @@ body {
 }
 .ip-answer-chose {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-self: stretch;
+}
+.ip-answer-option {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+.ip-answer-option .ip-chip {
+  flex: none;
+  margin-top: 0.15rem;
 }
 .ip-answer-label {
   font-size: 0.68rem;
@@ -929,4 +947,49 @@ body {
   padding: 2px 9px;
   font-size: 11px;
   white-space: nowrap;
+}
+/* The PDF button opens a two-item menu: chosen answers only, or every option with the chosen
+   one marked so others can review the alternatives. */
+.ip-pdf-wrap {
+  position: relative;
+}
+.ip-pdf-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  padding: 0.3rem;
+  min-width: 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  white-space: normal;
+}
+.ip-pdf-menu button {
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+  color: var(--text);
+}
+.ip-pdf-menu button:hover {
+  background: var(--asta-cream);
+}
+.ip-pdf-menu button b {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--asta-teal);
+}
+.ip-pdf-menu button span {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
 }
