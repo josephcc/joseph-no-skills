@@ -10,8 +10,9 @@ __pycache__/
 *.log
 .DS_Store
 
-# write-like-joseph: personal writing exemplars, not for distribution
-write-like-joseph/examples/
+# write-like-joseph: the voice itself is not for distribution. private/ holds the example corpus,
+# the voice profile, the pattern registry, the checker's baseline and the plans; the repo keeps the method.
+write-like-joseph/private/
 write-like-joseph-workspace/
 watch-recording-workspace/
 

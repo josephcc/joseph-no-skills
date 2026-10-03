@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "notes": "Synthetic registry for the test suite. Classes are chosen so the verdict tests exercise every branch; they are not anyone's profile.",
+ "patterns": [
+  {"id": "dash", "label": "em-dash / en-dash as punctuation", "class": "ban", "group": "dash", "regex": "—|(?<![0-9])–(?![0-9])", "fix": "commas, parentheses, or two sentences"},
+  {"id": "t1-delve", "label": "delve", "class": "ban", "group": "t1", "regex": "\\bdelv(?:e|es|ed|ing)\\b"},
+  {"id": "t1-harness", "label": "harness", "class": "ban", "group": "t1", "regex": "\\bharness(?:es|ed|ing)?\\b"},
+  {"id": "what-cleft", "label": "What-cleft opener (What … is/was …)", "class": "ban", "regex": "What\\b[^.!?]{2,80}?\\b(?:is|was|are|were)\\b", "start": true, "statement": true, "fix": "say who did what"},
+  {"id": "where-here", "label": "'Where X, here Y' opener", "class": "ban", "regex": "Where\\b", "start": true, "statement": true, "fix": "While …, or two sentences"},
+  {"id": "every", "label": "'every' as an intensifier", "class": "p0", "regex": "\\bevery\\b", "fix": "each, all, or drop the word"},
+  {"id": "colon-clause", "label": "clause-joining colon (heuristic: a full clause follows)", "class": "p0", "matcher": "colon_clause", "fix": "a period, or since / because / where / in which / so that"},
+  {"id": "colon-all", "label": "mid-sentence colon, lowercase after", "class": "info", "matcher": "colon_any"},
+  {"id": "rather-than", "label": "'rather than'", "class": "watch", "regex": "\\brather than\\b", "fix": "instead of / and not / two sentences"},
+  {"id": "semicolon", "label": "semicolon", "class": "watch", "regex": ";", "fix": "two sentences, or a conjunction"},
+  {"id": "the-same", "label": "'the same'", "class": "watch", "regex": "\\bthe same\\b", "fix": "name the thing"},
+  {"id": "never", "label": "'never'", "class": "watch", "regex": "\\bnever\\b"},
+  {"id": "at-once", "label": "'at once'", "class": "watch", "regex": "\\bat once\\b", "fix": "at the same time / immediately"},
+  {"id": "serves-as", "label": "'serves as / acts as'", "class": "watch", "group": "t3", "regex": "\\b(?:serv(?:e|es|ed|ing)|act(?:s|ed|ing)?) as\\b", "fix": "is"},
+  {"id": "suggests", "label": "'suggest(s)' hedge", "class": "move", "group": "move", "regex": "\\bsuggests?\\b"}
+ ]
+}

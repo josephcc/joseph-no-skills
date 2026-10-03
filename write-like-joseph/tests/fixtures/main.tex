@@ -1,0 +1,12 @@
+\documentclass[sigconf]{acmart}
+\newcommand{\sysname}{Lanternfish}
+\newcommand{\persona}{Odile}
+\newcommand{\chip}[2]{%
+  \tikz[baseline=(chip.base)]{\node[fill=#1!8, draw=#1!30] (chip) {#2};}\xspace}
+\newcommand{\cpt}[1]{\chip{ConceptColor}{#1}}
+\newcommand{\edgeup}[1]{\chip{IncreaseColor}{#1}}
+\newcommand{\triple}[3]{\cpt{#1}#2\cpt{#3}}
+\newcommand\jc[1]{\textcolor{blue}{Joseph: #1}}
+\begin{document}
+\input{section}
+\end{document}

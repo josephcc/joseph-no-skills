@@ -94,16 +94,28 @@ by section type (`examples/introduction/`, `examples/lab-study/`, `examples/qual
   "what I write instead" table.
 - **Context loading strategy**: per-section dependency table (e.g., related work loads the draft's
   own intro/abstract for framing and the method for differentiation claims).
+- **A voice checker, not only a word list**: `scripts/voice_check.py` reads the draft's `.tex` or
+  `.md`, strips the LaTeX (macros expanded from the paper's own `main.tex`, figures, captions'
+  alt text and citations dropped, quotations masked), and scores every blocklist word, em-dash and
+  sentence habit as a per-10,000-word rate against my corpus — with a verdict per habit that is
+  calibrated on my own papers. The tell it exists for: a draft that passes the word grep while
+  running 6× my colon rate and 7× my "rather than" rate.
 - **Honest placeholders** (`[CITE: …]`, `[TODO(joseph): …]`, `[CHECK: …]`) instead of fluent filler
   or invented citations, plus a citation report on every handback: new citations flagged for
   vetting, stretched citations shown with evidence and reasoning.
 - **Gated per repo**: the skill refuses to imitate unless a `.i-am-joseph` marker file exists at
   the repo root (`touch .i-am-joseph`) — same opt-in pattern as `codex-audit`, but hard: no
   marker, no voice, even when invoked explicitly.
-- **The voice doesn't ship**: `examples/` is gitignored — only the instructions are in the repo.
-  The skill tells you to populate `examples/<section>/<corpus_id>.md` from your own papers
-  (mine were extracted from the full texts of ten of my publications). Swap in your own corpus and
-  it's `write-like-you`.
+- **The voice doesn't ship**: everything the corpus says about how I write lives in a gitignored
+  `private/` directory — the example sections themselves, the voice profile (the tiered word lists
+  with their counts, the "what I write instead" table, the sentence-length, word and trigram
+  distributions, the register notes), the checker's pattern registry and its baseline rates. The
+  repo has the method: `SKILL.md` describes each part of the profile without its content,
+  `references/voice-profile.template.md` has the headings with instructions and the generic
+  candidate lists, `scripts/patterns.example.json` is a registry to start from, and
+  `scripts/build_profile.py` computes the numeric sections from a corpus of your own papers
+  (mine were extracted from the full texts of ten of my publications). Swap in your own corpus
+  and it's `write-like-you`.
 
 ---
 
@@ -240,7 +252,7 @@ directory (so it won't clobber a skill you've edited in place). To install a sub
 **Per-skill requirements**
 - `interactive-plan` — [Bun](https://bun.sh) (the viewer is a Vite/React app + a small Node daemon; first launch runs `bun install` + build automatically). Optional: an editor CLI for click-to-open refs (defaults to Zed; see `interactive-plan/config.json`).
 - `codex-audit` — the [OpenAI Codex CLI](https://github.com/openai/codex) (`brew install codex`, then `codex login`) and a git repo.
-- `write-like-joseph` — no tooling, but the gitignored `examples/` corpus must be populated locally from your own papers before it can imitate anyone.
+- `write-like-joseph` — python3 3.10+ (stdlib only) for the checker and the profile builder; the gitignored `private/` directory (example corpus, voice profile, registry, baseline) must be built locally from your own papers before it can imitate anyone — see "Building the private part" in its SKILL.md.
 - `watch-recording` — [ffmpeg](https://ffmpeg.org) on PATH (`brew install ffmpeg`), plus a recording folder holding a video and its `.vtt` captions. Optional: ImageMagick, to crop a frame for use as a figure. For recordings with *no* captions, local transcription additionally needs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`brew install whisper-cpp`) and, for speaker labels, [uv](https://docs.astral.sh/uv/) plus a HuggingFace token with three gated pyannote repos accepted — [`speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1), [`segmentation-3.0`](https://huggingface.co/pyannote/segmentation-3.0) and [`speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) (one pipeline pulls all three; the script names whichever it gets refused by).
 
 ## Wire the skills into a repo
