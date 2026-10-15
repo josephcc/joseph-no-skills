@@ -36,6 +36,20 @@ function countOccurrences(hay: string, needle: string): number {
   return n;
 }
 
+// Phone layout, portrait or landscape: the same query styles.css uses to drop the comment rail
+// into a bottom sheet.
+const NARROW = '(max-width: 880px), (pointer: coarse) and (max-height: 500px)';
+function useMedia(query: string) {
+  const [on, setOn] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setOn(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [query]);
+  return on;
+}
+
 interface SelInfo {
   text: string;
   blockIndex: number;
@@ -60,6 +74,9 @@ export function App() {
   const [composer, setComposer] = useState<{ sel: SelInfo; text: string } | null>(null);
   const [elComposer, setElComposer] = useState<{ block: Block; text: string; x: number; y: number } | null>(null);
   const [scrolled, setScrolled] = useState(false);
+  const narrow = useMedia(NARROW);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [metaOpen, setMetaOpen] = useState(false);
   const hashRef = useRef(hash);
   hashRef.current = hash;
   const mainRef = useRef<HTMLDivElement>(null);
@@ -108,10 +125,20 @@ export function App() {
   // Dismiss the floating "Comment" button on Escape or when the selection
   // clears (an off-click anywhere collapses the selection).
   useEffect(() => {
+    // Touch has no mouseup after a long-press selection, so capture once the selection
+    // handles stop moving instead.
+    let settle: ReturnType<typeof setTimeout> | undefined;
     const onSelChange = () => {
       if (composer) return; // keep it while the composer is open
       const s = window.getSelection();
-      if (!s || s.isCollapsed || !s.toString().trim()) setSel(null);
+      if (!s || s.isCollapsed || !s.toString().trim()) {
+        setSel(null);
+        return;
+      }
+      if (window.matchMedia('(pointer: coarse)').matches) {
+        clearTimeout(settle);
+        settle = setTimeout(() => captureRef.current(), 350);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -123,6 +150,7 @@ export function App() {
     document.addEventListener('selectionchange', onSelChange);
     document.addEventListener('keydown', onKey);
     return () => {
+      clearTimeout(settle);
       document.removeEventListener('selectionchange', onSelChange);
       document.removeEventListener('keydown', onKey);
     };
@@ -217,6 +245,9 @@ export function App() {
     setSel({ text, blockIndex, occ, x: rect.left, y: rect.top - 8 });
   }
 
+  const captureRef = useRef(captureSelection);
+  captureRef.current = captureSelection;
+
   const nextCommentId = () => {
     const ids = (plan?.blocks ?? [])
       .filter((b) => b.type === 'comment')
@@ -240,6 +271,7 @@ export function App() {
       content.slice(0, block.range.start) + wrapped + commentSource(id, commentText) + content.slice(block.range.end);
     commit(newContent);
     setActiveComment(id);
+    if (narrow) setSheetOpen(true);
     setComposer(null);
     setSel(null);
   }
@@ -259,6 +291,7 @@ export function App() {
       replaceBlock(content, block.range, serializeBlock(next)) + commentSource(id, commentText);
     commit(newContent);
     setActiveComment(id);
+    if (narrow) setSheetOpen(true);
     setElComposer(null);
   }
 
@@ -300,7 +333,12 @@ export function App() {
         return;
       }
       setActiveComment(hl.dataset.comment);
-      document.getElementById(`comment-${hl.dataset.comment}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (narrow) setSheetOpen(true);
+      const id = hl.dataset.comment;
+      // Wait a frame on a phone so the sheet is open before its card scrolls into view.
+      requestAnimationFrame(() =>
+        document.getElementById(`comment-${id}`)?.scrollIntoView({ behavior: 'smooth', block: narrow ? 'nearest' : 'center' }),
+      );
     }
   }
 
@@ -319,7 +357,7 @@ export function App() {
   function activateComment(id: string) {
     setActiveComment(id);
     const mark = mainRef.current?.querySelector(`.ip-hl[data-comment="${id}"]`);
-    mark?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    mark?.scrollIntoView({ behavior: 'smooth', block: narrow ? 'start' : 'center' });
     mark?.classList.add('ip-hl-flash');
     setTimeout(() => mark?.classList.remove('ip-hl-flash'), 900);
   }
@@ -335,6 +373,7 @@ export function App() {
     onAddComment: (block: Block, e: React.MouseEvent) => {
       setComposer(null); // close any open prose-selection composer
       setSel(null);
+      setSheetOpen(false);
       setElComposer({ block, text: '', x: e.clientX, y: e.clientY });
     },
     onActivateComment: activateComment,
@@ -411,7 +450,12 @@ export function App() {
       <header className={`ip-header ${scrolled ? 'ip-header-compact' : ''}`}>
         <div className="ip-header-main">
           <h1>{plan.title ?? 'Plan'}</h1>
-          <div className="ip-preamble">
+          {plan.preamble.length > 0 && (
+            <button className="ip-meta-toggle" onClick={() => setMetaOpen((o) => !o)} aria-expanded={metaOpen}>
+              {metaOpen ? 'Hide details ▴' : 'Details ▾'}
+            </button>
+          )}
+          <div className={`ip-preamble ${metaOpen ? 'ip-preamble-open' : ''}`}>
             {plan.preamble.map((kv) => (
               <span key={kv.key} className="ip-meta">
                 <b>{kv.key}:</b> {kv.value}
@@ -493,16 +537,26 @@ export function App() {
           onActivate={activateComment}
           onEditNote={onEditNote}
           onDeleteThread={onDeleteThread}
+          sheetOpen={sheetOpen}
+          onCloseSheet={() => setSheetOpen(false)}
         />
       </div>
+
+      {narrow && !sheetOpen && !composer && !elComposer && (
+        <button className="ip-sheet-fab" onClick={() => setSheetOpen(true)} aria-label="Show comments">
+          💬 {comments.filter((c) => c.status === 'open').length}
+        </button>
+      )}
 
       {sel && !composer && (
         <button
           className="ip-sel-btn"
           style={{ left: sel.x, top: sel.y }}
-          onMouseDown={(e) => {
+          // pointerdown, not click: on touch the tap would collapse the selection (and this button) first.
+          onPointerDown={(e) => {
             e.preventDefault();
             setElComposer(null); // close any open element composer
+            setSheetOpen(false);
             setComposer({ sel, text: '' });
           }}
         >

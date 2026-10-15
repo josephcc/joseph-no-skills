@@ -99,6 +99,8 @@ function runServer() {
       try {
         const h = new URL(origin).hostname;
         okOrigin = h === 'localhost' || h === '127.0.0.1';
+        // A phone reading the plan through an ngrok tunnel: viewing only, never saves.
+        if (!okOrigin && (req.method === 'GET' || req.method === 'HEAD')) okOrigin = h.endsWith('.ngrok-free.app');
       } catch {
         okOrigin = false;
       }

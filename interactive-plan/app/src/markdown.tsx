@@ -122,6 +122,28 @@ function decorateCodeBlocks(root: HTMLElement): void {
   });
 }
 
+// Put each table in its own sideways-scrolling box and tag each column by how much text
+// its longest cell holds. On a phone (styles.css) long columns get a readable minimum
+// width and the table scrolls, rather than every column squeezing to fit the screen.
+function wrapTables(root: HTMLElement): void {
+  root.querySelectorAll('table').forEach((table) => {
+    if (table.parentElement?.classList.contains('ip-table-scroll')) return;
+    const box = document.createElement('div');
+    box.className = 'ip-table-scroll';
+    table.replaceWith(box);
+    box.appendChild(table);
+    const longest: number[] = [];
+    for (const row of table.rows)
+      [...row.cells].forEach((c, i) => (longest[i] = Math.max(longest[i] ?? 0, (c.textContent ?? '').trim().length)));
+    for (const row of table.rows)
+      [...row.cells].forEach((c, i) => {
+        if (longest[i] > 60) c.classList.add('ip-col-wide');
+        else if (longest[i] > 20) c.classList.add('ip-col-mid');
+        else c.classList.add('ip-col-short');
+      });
+  });
+}
+
 // Neutralize dangerous URL schemes in links generated from user-authored
 // markdown (e.g. [x](javascript:…)) — relevant only for the escapeHtml path.
 function scrubLinks(root: HTMLElement): void {
@@ -233,6 +255,7 @@ export function Markdown({
     if (escapeHtml) decodeUserCode(ref.current);
     linkifyCodeRefs(ref.current);
     decorateCodeBlocks(ref.current);
+    wrapTables(ref.current);
     if (escapeHtml) scrubLinks(ref.current);
     rewritePlanLinks(ref.current);
     rewriteImageSrcs(ref.current);

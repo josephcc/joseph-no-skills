@@ -229,6 +229,14 @@ body {
   color: var(--asta-gray);
 }
 
+.ip-table-scroll {
+  overflow-x: auto;
+  margin: 0.8rem 0;
+}
+.ip-table-scroll table {
+  margin: 0;
+}
+
 /* code refs + highlights */
 .ip-coderef {
   color: var(--asta-teal);
@@ -930,14 +938,258 @@ body {
   border-bottom: 1px solid var(--asta-amber);
 }
 
-@media (max-width: 880px) {
+/* Phone-only controls; the phone block below turns them on. */
+.ip-rail-head,
+.ip-meta-toggle,
+.ip-sheet-fab {
+  display: none;
+}
+
+/* ---- phone ---- */
+/* Narrow windows, plus phones in landscape (wider than 880px but short, on a touch screen).
+   Keep in sync with NARROW in App.tsx. One column. Comments move into a bottom sheet so a tapped highlight shows its thread at once
+   instead of at the end of the page; composers dock to the bottom edge, clear of the OS's
+   own selection menu. */
+@media (max-width: 880px), (pointer: coarse) and (max-height: 500px) {
   .ip-layout {
     grid-template-columns: 1fr;
+    padding: 0.75rem 0.75rem 5rem;
   }
+
+  .ip-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 0.7rem 0.9rem;
+  }
+  .ip-header h1 {
+    font-size: 1.05rem;
+  }
+  .ip-header-compact h1 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.88rem;
+  }
+  .ip-header-compact {
+    flex-direction: row;
+    align-items: center;
+  }
+  .ip-header-compact .ip-header-side {
+    flex-wrap: nowrap;
+  }
+  .ip-header-compact .ip-openq {
+    white-space: nowrap;
+  }
+  .ip-header-main {
+    min-width: 0;
+  }
+  .ip-header-compact .ip-meta-toggle,
+  .ip-header-compact .ip-path {
+    display: none;
+  }
+  .ip-meta-toggle {
+    display: inline-block;
+    background: none;
+    border: none;
+    padding: 0.1rem 0;
+    font: inherit;
+    font-size: 0.75rem;
+    color: var(--asta-green-60);
+    cursor: pointer;
+  }
+  .ip-preamble {
+    display: none;
+    flex-direction: column;
+    margin-top: 0.3rem;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+  .ip-preamble-open {
+    display: flex;
+  }
+  .ip-header-side {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .ip-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ip-pdf-wrap {
+    margin-left: auto;
+  }
+  .ip-pdf-menu {
+    min-width: 0;
+    width: min(18rem, calc(100vw - 1.5rem));
+  }
+
+  .ip-md {
+    overflow-wrap: anywhere;
+  }
+  /* Tables keep readable columns and scroll sideways in their box (see wrapTables). */
+  .ip-md th,
+  .ip-md td {
+    overflow-wrap: normal;
+  }
+  .ip-md .ip-col-mid {
+    min-width: 9rem;
+  }
+  .ip-md .ip-col-short {
+    white-space: nowrap;
+  }
+  .ip-md .ip-col-wide {
+    min-width: 17rem;
+  }
+  .ip-hl {
+    scroll-margin-top: 4rem;
+  }
+
+  .ip-card-head {
+    flex-wrap: wrap;
+    padding: 0.55rem 0.8rem;
+  }
+  .ip-card-head h3 {
+    order: 10;
+    flex-basis: 100%;
+  }
+  .ip-card-body {
+    padding: 0.4rem 0.8rem 0.9rem;
+  }
+  /* Decision and finding rows: badges on one line, the title on its own full-width line. */
+  .ip-drow-toggle,
+  .ip-frow-toggle {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+    padding: 0.6rem 0.8rem;
+  }
+  .ip-drow-title,
+  .ip-frow-title {
+    order: 10;
+    flex-basis: 100%;
+  }
+  .ip-id,
+  .ip-from {
+    white-space: nowrap;
+  }
+  .ip-caret {
+    margin-left: auto;
+  }
+  .ip-drow-body {
+    padding: 0 0.8rem 0.9rem 1.2rem;
+  }
+  .ip-frow-body {
+    padding: 0 0.8rem 0.9rem;
+  }
+  .ip-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Below 16px iOS zooms the page on focus. */
+  .ip-textarea,
+  .ip-select {
+    font-size: 16px;
+  }
+
   .ip-rail {
-    position: static;
-    max-height: none;
-    overflow: visible;
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 35;
+    max-height: 62vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 0.75rem calc(0.9rem + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -6px 24px rgba(10, 50, 53, 0.18);
+    transform: translateY(105%);
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0s linear 0.22s;
+  }
+  .ip-rail-open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.22s ease;
+  }
+  .ip-rail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0 -0.75rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--asta-dark-teal);
+  }
+  .ip-sheet-fab {
+    display: block;
+    position: fixed;
+    right: 1rem;
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    z-index: 30;
+    background: var(--asta-dark-teal);
+    color: var(--asta-cream);
+    border: none;
+    border-radius: 999px;
+    padding: 0.65rem 1rem;
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 700;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+  }
+
+  /* Inline positions come from the mouse; on a phone the composers dock to the bottom instead. */
+  .ip-composer {
+    left: 0 !important;
+    right: 0;
+    top: auto !important;
+    bottom: 0;
+    width: auto;
+    border-radius: 16px 16px 0 0;
+    padding: 0.9rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -6px 24px rgba(10, 50, 53, 0.18);
+  }
+  .ip-sel-btn {
+    left: 50% !important;
+    top: auto !important;
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    padding: 0.7rem 1.2rem;
+    font-size: 0.95rem;
+  }
+  .ip-toast {
+    bottom: calc(4.5rem + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 2rem);
+  }
+}
+
+/* Touch screens have no hover: show the hover-revealed controls and give them room to tap. */
+@media (hover: none) {
+  .ip-cmark-add,
+  .ip-thread-del,
+  .ip-note-edit {
+    opacity: 0.6;
+  }
+  .ip-cmark {
+    min-width: 2rem;
+    min-height: 2rem;
+  }
+  .ip-btn {
+    padding: 0.55rem 0.9rem;
+  }
+  .ip-check-box {
+    width: 1.25rem;
+    height: 1.25rem;
   }
 }
 

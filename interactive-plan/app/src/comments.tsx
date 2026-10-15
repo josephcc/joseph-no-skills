@@ -190,9 +190,13 @@ export function CommentRail({
   onActivate,
   onEditNote,
   onDeleteThread,
+  sheetOpen,
+  onCloseSheet,
 }: {
   comments: CommentBlock[];
   activeId: string | null;
+  sheetOpen: boolean;
+  onCloseSheet: () => void;
   onReply: (c: CommentBlock, text: string) => void;
   onResolve: (c: CommentBlock) => void;
   onReopen: (c: CommentBlock) => void;
@@ -205,7 +209,16 @@ export function CommentRail({
   const resolved = comments.filter((c) => c.status === 'resolved');
   const cardProps = { onReply, onResolve, onReopen, onActivate, onEditNote, onDeleteThread };
   return (
-    <aside className="ip-rail">
+    // On a phone the rail is a bottom sheet (see styles.css); its head and the open state only show there.
+    <aside className={`ip-rail ${sheetOpen ? 'ip-rail-open' : ''}`}>
+      <div className="ip-rail-head">
+        <span>
+          Comments{openComments.length > 0 ? ` · ${openComments.length} open` : ''}
+        </span>
+        <button className="ip-btn ip-btn-ghost" onClick={onCloseSheet} aria-label="Close comments">
+          ✕
+        </button>
+      </div>
       {openComments.map((c) => (
         <CommentCard key={c.id} c={c} active={c.id === activeId} {...cardProps} />
       ))}
