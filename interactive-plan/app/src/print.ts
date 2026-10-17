@@ -410,6 +410,11 @@ p { margin: 8px 0; } ul, ol { margin: 8px 0 8px 18px; padding: 0; } li { margin:
 blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: #46555e; }
 strong { color: var(--accent-d); }
 a { color: var(--accent); text-decoration: none; }
+/* Figures print at their pixel size otherwise: a render wider than the page is clipped and
+   pushed onto a page of its own. Shrink to the text width, and cap the height so a tall one
+   still fits a page (A4 less margins is ~263mm). */
+img { display: block; max-width: 100%; max-height: 230mm; width: auto; height: auto;
+      margin: 10px auto; break-inside: avoid; }
 table { border-collapse: collapse; width: 100%; margin: 10px 0 14px; font-size: 9pt; }
 thead { display: table-header-group; }  /* repeat headers when a table spans pages */
 tr { break-inside: avoid; }
