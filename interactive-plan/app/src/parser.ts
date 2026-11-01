@@ -1,7 +1,9 @@
+import { marked, type Tokens } from 'marked';
 import type {
   Answer,
   Block,
   CheckBlock,
+  CheckTableBlock,
   CommentBlock,
   DecisionBlock,
   Diagnostic,
@@ -13,7 +15,7 @@ import type {
   QuestionBlock,
 } from './types';
 
-const BLOCK_TAGS = ['open-question', 'decision', 'finding', 'comment', 'check'] as const;
+const BLOCK_TAGS = ['open-question', 'decision', 'finding', 'comment', 'check', 'check-table'] as const;
 type BlockTagName = (typeof BLOCK_TAGS)[number];
 
 // --- attribute parsing -------------------------------------------------------
@@ -111,7 +113,9 @@ function scanBlockTags(raw: string, prot: Range[]): RawBlockTag[] {
       i = lt + 1;
       continue;
     }
-    const m = /^<(open-question|decision|finding|comment|check)\b/.exec(raw.slice(lt, lt + 16));
+    // `check-table` before `check`, and a lookahead rather than \b: `\b` matches at the
+    // hyphen, so `<check-table` would otherwise be read as a `<check>` tag.
+    const m = /^<(open-question|decision|finding|comment|check-table|check)(?=[\s/>])/.exec(raw.slice(lt, lt + 16));
     if (!m) {
       i = lt + 1;
       continue;
@@ -360,6 +364,38 @@ function parseCheck(open: string, inner: string, range: Range): CheckBlock {
   };
 }
 
+// The body's first GFM table becomes the checkable rows; anything around it
+// stays markdown. marked's own lexer does the splitting, so escaped pipes and
+// alignment rows mean exactly what they mean when the table renders.
+function parseCheckTable(open: string, inner: string, range: Range): CheckTableBlock {
+  const a = parseAttrs(open);
+  const block: CheckTableBlock = {
+    type: 'check-table',
+    id: a.id ?? '',
+    title: a.title ?? '',
+    checked: (a.checked ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    inner,
+    before: inner,
+    after: '',
+    columns: [],
+    rows: [],
+    range,
+  };
+  const tokens = marked.lexer(inner);
+  const k = tokens.findIndex((t) => t.type === 'table');
+  if (k === -1) return block;
+  const table = tokens[k] as Tokens.Table;
+  const before = tokens.slice(0, k).map((t) => t.raw).join('');
+  // The token raws concatenate back to the source; if marked ever normalised something
+  // (a CRLF file), fall back to treating the whole body as prose rather than misplace it.
+  if (inner.slice(before.length, before.length + table.raw.length) !== table.raw) return block;
+  block.before = before;
+  block.after = inner.slice(before.length + table.raw.length);
+  block.columns = table.header.map((c, i) => ({ header: c.text, align: table.align[i] ?? null }));
+  block.rows = table.rows.map((r) => ({ id: (r[0]?.text ?? '').trim(), cells: r.map((c) => c.text) }));
+  return block;
+}
+
 // --- main parse --------------------------------------------------------------
 
 export function parsePlan(raw: string): ParsedPlan {
@@ -381,6 +417,7 @@ export function parsePlan(raw: string): ParsedPlan {
     else if (t.name === 'decision') blocks.push(parseDecision(open, inner, range));
     else if (t.name === 'finding') blocks.push(parseFinding(open, inner, range));
     else if (t.name === 'check') blocks.push(parseCheck(open, inner, range));
+    else if (t.name === 'check-table') blocks.push(parseCheckTable(open, inner, range));
     else blocks.push(parseComment(open, inner, range));
     cursor = t.end;
   }
@@ -453,6 +490,14 @@ export function serializeCheck(c: CheckBlock): string {
   return `<check id="${escapeAttr(c.id)}" status="${c.status}">${c.label}</check>`;
 }
 
+// Only the opening tag is regenerated; the body goes back byte-for-byte, so ticking
+// a row changes one attribute and nothing else in the file.
+export function serializeCheckTable(t: CheckTableBlock): string {
+  const attrs = [`id="${escapeAttr(t.id)}"`, `title="${escapeAttr(t.title)}"`];
+  if (t.checked.length) attrs.push(`checked="${escapeAttr(t.checked.join(','))}"`);
+  return `<check-table ${attrs.join(' ')}>${t.inner}</check-table>`;
+}
+
 export function serializeBlock(b: Block): string {
   switch (b.type) {
     case 'question':
@@ -465,6 +510,8 @@ export function serializeBlock(b: Block): string {
       return serializeComment(b);
     case 'check':
       return serializeCheck(b);
+    case 'check-table':
+      return serializeCheckTable(b);
     case 'markdown':
       return b.text;
   }
@@ -522,6 +569,16 @@ export function appendTarget(field: string, id: string): string {
   const core = field.slice(0, field.length - trail.length);
   const sep = core && !/\s$/.test(core) ? ' ' : '';
   return `${core}${sep}<user-highlight comment="${id}"></user-highlight>${trail}`;
+}
+
+// Anchor a ◆ target to a check table as a whole. It goes in the prose above the
+// table: appended to the end of the table, it would land in the last row.
+export function appendTableTarget(t: CheckTableBlock, id: string): string {
+  const rest = t.inner.slice(t.before.length);
+  const before = t.before.trim()
+    ? appendTarget(t.before, id)
+    : `\n<user-highlight comment="${id}"></user-highlight>\n\n`;
+  return before + rest;
 }
 
 // Strip every <user-highlight comment="id"> anchor for one comment id, keeping
@@ -636,6 +693,7 @@ export function lintPlan(raw: string): Diagnostic[] {
       enums: { status: ['open', 'resolved'], kind: ['error', 'clarify', 'question', 'nit'] },
     },
     check: { allowed: ['id', 'status'], required: ['id'], enums: { status: ['todo', 'done'] } },
+    'check-table': { allowed: ['id', 'title', 'checked'], required: ['id', 'title'], enums: {} },
   };
   for (const t of tags) {
     if (t.closeIdx === -1) continue;
@@ -732,6 +790,45 @@ export function lintPlan(raw: string): Diagnostic[] {
           message: `Question "${b.id}" is select="single" but the answer chose ${b.answer.chose.length} options.`,
         });
     }
+  }
+
+  // 4b. check tables: a table is present, its first column holds unique row ids that
+  // can live in a comma-separated attribute, and every checked id still names a row.
+  // A checked id with no row is the user's tick on a row the agent removed — an error,
+  // so the pick gets carried over or raised with the user instead of vanishing.
+  for (const b of plan.blocks) {
+    if (b.type !== 'check-table') continue;
+    const ln = lineOf(raw, b.range.start);
+    if (!b.columns.length) {
+      diags.push({ line: ln, severity: 'error', message: `<check-table id="${b.id}"> has no markdown table inside it.` });
+      continue;
+    }
+    // The body sits right before the close tag; rows start two lines below the table's header.
+    const innerStart = b.range.end - '</check-table>'.length - b.inner.length;
+    const rowLine = (i: number) => lineOf(raw, innerStart + b.before.length) + 2 + i;
+    const seen = new Set<string>();
+    b.rows.forEach((r, i) => {
+      if (!r.id)
+        diags.push({ line: rowLine(i), severity: 'error', message: `<check-table id="${b.id}"> has a row with an empty id cell.` });
+      else if (!/^[^\s,"]+$/.test(r.id))
+        diags.push({
+          line: rowLine(i),
+          severity: 'error',
+          message: `<check-table id="${b.id}"> row id "${r.id}" can't hold spaces, commas or quotes (it is stored in checked="…").`,
+        });
+      else if (seen.has(r.id))
+        diags.push({ line: rowLine(i), severity: 'error', message: `<check-table id="${b.id}"> has two rows with id "${r.id}".` });
+      seen.add(r.id);
+    });
+    for (const c of b.checked)
+      if (!seen.has(c))
+        diags.push({ line: ln, severity: 'error', message: `<check-table id="${b.id}"> checked="${c}" names no row in the table.` });
+    if (marked.lexer(b.after).some((t) => t.type === 'table'))
+      diags.push({
+        line: ln,
+        severity: 'warning',
+        message: `<check-table id="${b.id}"> holds more than one table; only the first gets checkboxes.`,
+      });
   }
 
   // 5. every <user-highlight comment="x"> resolves to a <comment id="x"> (outside code)

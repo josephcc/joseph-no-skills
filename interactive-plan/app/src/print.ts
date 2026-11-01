@@ -13,7 +13,7 @@ import { marked } from 'marked';
 import { configureMarked } from './markedSetup';
 import { anchorHref } from './anchor';
 import { decodeEntities, parsePlan, protectedRanges } from './parser';
-import type { Block, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
+import type { Block, CheckTableBlock, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 configureMarked();
 
@@ -339,6 +339,53 @@ function comment(c: CommentBlock): string {
   ].join('');
 }
 
+/** A table cell: inline markdown, keeping comment anchors like body prose does. */
+function cell2html(md: string): string {
+  const html = marked.parseInline(transformHighlights(md ?? '', highlightMode)) as string;
+  return highlightMode === 'anchor' ? unnestAnchors(html) : html;
+}
+
+/**
+ * A check table, with a tick column. Mirrors the answered-question modes: under `chosen`, once
+ * anything is ticked only the ticked rows print, since the pick is the result; under `all`, every
+ * row prints with the ticked ones marked. With nothing ticked yet, every row prints either way,
+ * like an open question's options.
+ *
+ * Not a `.pcall`: those avoid page breaks, and a long table has to break.
+ */
+function checkTable(t: CheckTableBlock, answered: AnsweredMode): string {
+  const on = new Set(t.checked);
+  const ticked = t.rows.filter((r) => on.has(r.id));
+  const onlyTicked = answered === 'chosen' && ticked.length > 0;
+  const rows = onlyTicked ? ticked : t.rows;
+  const meta = `${ticked.length} of ${t.rows.length} checked${onlyTicked ? ' · unchecked rows omitted' : ''}`;
+  const align = (i: number) => {
+    const a = t.columns[i]?.align;
+    return a ? ` style="text-align:${a}"` : '';
+  };
+  const parts = [
+    `<section class="ptable">`,
+    `<div class="phead">${badge('table', 'table')}<span class="pid">${esc(t.id)}</span>`,
+    `<span class="pmeta">${esc(meta)}</span></div>`,
+    t.title ? `<h4>${inline2html(t.title)}</h4>` : '',
+    md2html(t.before),
+  ];
+  if (t.columns.length) {
+    parts.push(`<table class="pctable"><thead><tr><th class="pcbox"></th>`);
+    t.columns.forEach((c, i) => parts.push(`<th${align(i)}>${cell2html(c.header)}</th>`));
+    parts.push(`</tr></thead><tbody>`);
+    for (const r of rows) {
+      const tick = on.has(r.id);
+      parts.push(`<tr${tick ? ' class="pchecked"' : ''}><td class="pcbox">${tick ? '&#10003;' : ''}</td>`);
+      t.columns.forEach((_c, i) => parts.push(`<td${align(i)}>${cell2html(r.cells[i] ?? '')}</td>`));
+      parts.push(`</tr>`);
+    }
+    parts.push(`</tbody></table>`);
+  }
+  parts.push(md2html(t.after), `</section>`);
+  return parts.join('');
+}
+
 /** Consecutive checks render as one checklist, matching the viewer. */
 function checklist(items: { id: string; status: string; label: string }[]): string {
   const rows = items
@@ -389,6 +436,9 @@ export function renderBlocks(blocks: Block[], opts: PrintOptions = {}): string {
         break;
       case 'check':
         if (!opts.noChecks) pending.push({ id: b.id, status: b.status, label: b.label });
+        break;
+      case 'check-table':
+        out.push(checkTable(b, opts.answered ?? 'chosen'));
         break;
     }
   }
@@ -476,6 +526,11 @@ sup.phlref { font-size: 7pt; color: var(--accent); background: #eef4f5; padding:
 .pbox { flex: 0 0 11px; height: 11px; border: 1px solid #9bb0b5; border-radius: 2px;
         font-size: 8pt; line-height: 10px; text-align: center; color: var(--accent); }
 .pdone { color: #7d8f96; text-decoration: line-through; }
+.ptable { margin: 14px 0; }
+.ptable h4 { margin: 0 0 5px; font-size: 11.5pt; color: var(--accent-d); }
+.pb-table { background: #6d5bd0; }
+.pctable .pcbox { width: 16px; text-align: center; color: var(--accent); font-weight: 700; }
+.pctable tr.pchecked td { background: var(--wash); }
 `;
 
 /**

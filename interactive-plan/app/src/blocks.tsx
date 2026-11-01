@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import { Markdown } from './markdown';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { marked } from 'marked';
+import { Markdown, linkifyCodeRefs, preprocessHighlights, rewritePlanLinks } from './markdown';
 import { anchoredCommentIds } from './parser';
-import type { Block, CheckBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
+import { cellText, nextChecked, numericColumns, rangeIds, visibleRows, type Show, type Sort } from './checkTable';
+import type { Block, CheckBlock, CheckTableBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 type CommentMeta = Record<string, { status: string; kind: string | null }>;
 
@@ -96,6 +98,245 @@ export function CheckList({
         </div>
       ))}
     </div>
+  );
+}
+
+// ---------------- Check table ----------------
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// A <check-table>: the body's markdown table with a checkbox on every row. Each tick
+// saves at once, writing the `checked` attribute through the block-edit path (the body
+// is untouched). Search, the show filter, and sorting are view state only. Shift-click
+// ticks a range of the rows on screen, and the header box ticks every row on screen;
+// either one offers an Undo, since a mis-click there can undo many picks at once.
+export function CheckTable({
+  t,
+  commenting,
+  onChecked,
+}: {
+  t: CheckTableBlock;
+  commenting: Commenting;
+  onChecked: (t: CheckTableBlock, checked: string[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [show, setShow] = useState<Show>('all');
+  const [sort, setSort] = useState<Sort | null>(null);
+  const [undo, setUndo] = useState<{ label: string; checked: string[] } | null>(null);
+  const anchor = useRef<string | null>(null); // the last row clicked, where a shift-click range starts
+  const shift = useRef(false);
+  const allBox = useRef<HTMLInputElement>(null);
+  const body = useRef<HTMLTableSectionElement>(null);
+
+  // Rendering every cell is the costly part of a long table, and a tick changes only the
+  // tag's attribute, so key this on the body (and the comment states it highlights with).
+  const metaKey = JSON.stringify(commenting.commentMeta);
+  const cells = useMemo(() => {
+    const meta = commenting.commentMeta;
+    const html = (md: string) => marked.parseInline(preprocessHighlights(md, meta)) as string;
+    const text = t.rows.map((r) => t.columns.map((_, i) => cellText(r.cells[i] ?? '')));
+    const longest = t.columns.map((_, i) => Math.max(0, ...text.map((r) => r[i].length)));
+    return {
+      head: t.columns.map((c) => html(c.header)),
+      html: t.rows.map((r) => t.columns.map((_, i) => html(r.cells[i] ?? ''))),
+      text,
+      numeric: numericColumns(text, t.columns.length),
+      // Same width classes as prose tables, so a phone keeps long columns readable.
+      width: longest.map((n) => (n > 60 ? 'ip-col-wide' : n > 20 ? 'ip-col-mid' : 'ip-col-short')),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.inner, metaKey]);
+
+  useEffect(() => setUndo(null), [t.inner]);
+
+  const on = new Set(t.checked);
+  const ids = t.rows.map((r) => r.id);
+  const shown = visibleRows(cells.text, ids, on, query, show, sort, cells.numeric);
+  const shownIds = shown.map((i) => ids[i]);
+  const nOn = ids.filter((id) => on.has(id)).length;
+  const shownOn = shownIds.filter((id) => on.has(id)).length;
+  const allOn = shown.length > 0 && shownOn === shown.length;
+
+  useEffect(() => {
+    if (allBox.current) allBox.current.indeterminate = shownOn > 0 && !allOn;
+  });
+
+  // Cells come in as HTML strings, so give them what the Markdown component gives prose:
+  // clickable code refs and plan links. Paper links open in a new tab, keeping the viewer.
+  // Idempotent, and React leaves an unchanged cell's DOM alone, so it is safe every render.
+  useEffect(() => {
+    const root = body.current;
+    if (!root) return;
+    linkifyCodeRefs(root);
+    rewritePlanLinks(root);
+    root.querySelectorAll('a[href^="http"]').forEach((a) => {
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
+    });
+  });
+
+  function set(rowIds: string[], value: boolean) {
+    const changing = rowIds.filter((id) => on.has(id) !== value).length;
+    setUndo(changing > 1 ? { label: `${value ? 'Checked' : 'Unchecked'} ${plural(changing, 'row')}`, checked: t.checked } : null);
+    onChecked(t, nextChecked(t, rowIds, value));
+  }
+
+  function onRow(id: string) {
+    const rowIds = shift.current ? rangeIds(shownIds, anchor.current, id) : [id];
+    shift.current = false;
+    anchor.current = id;
+    set(rowIds, !on.has(id));
+  }
+
+  // Numbers sort high-to-low first (most cited, newest), text A-Z; a third click restores table order.
+  function onSort(col: number) {
+    const first = cells.numeric[col] ? -1 : 1;
+    setSort((s) => (s?.col !== col ? { col, dir: first } : s.dir === first ? { col, dir: first === 1 ? -1 : 1 } : null));
+  }
+
+  const align = (i: number) => t.columns[i].align ?? undefined;
+  const justify = (i: number) =>
+    t.columns[i].align === 'right' ? 'flex-end' : t.columns[i].align === 'center' ? 'center' : undefined;
+
+  return (
+    <section className="ip-card ip-ctable" id={`block-${t.id}`}>
+      <header className="ip-card-head">
+        <span className="ip-badge ip-badge-table">Table</span>
+        <span className="ip-id">{t.id}</span>
+        <h3>{t.title}</h3>
+        <span className="ip-count">
+          {nOn} / {ids.length} checked
+        </span>
+        <CommentMarker
+          ids={anchoredCommentIds(t.inner)}
+          commentMeta={commenting.commentMeta}
+          onAdd={(e) => commenting.onAddComment(t, e)}
+          onActivate={commenting.onActivateComment}
+        />
+      </header>
+      <div className="ip-card-body">
+        {t.before.trim() ? <Markdown source={t.before} commentMeta={commenting.commentMeta} /> : null}
+        {t.columns.length ? (
+          <>
+            <div className="ip-ct-tools">
+              <input
+                type="search"
+                className="ip-ct-search"
+                placeholder="Filter rows…"
+                aria-label="Filter rows"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <select className="ip-select" value={show} onChange={(e) => setShow(e.target.value as Show)}>
+                <option value="all">all rows</option>
+                <option value="checked">checked</option>
+                <option value="unchecked">unchecked</option>
+              </select>
+              {shown.length !== ids.length ? <span className="ip-inline-label">{shown.length} shown</span> : null}
+              {undo ? (
+                <span className="ip-ct-undo">
+                  {undo.label}
+                  <button
+                    className="ip-btn ip-btn-ghost"
+                    onClick={() => {
+                      onChecked(t, undo.checked);
+                      setUndo(null);
+                    }}
+                  >
+                    Undo
+                  </button>
+                </span>
+              ) : null}
+            </div>
+            <div className="ip-ct-scroll">
+              <table className="ip-ct">
+                <thead>
+                  <tr>
+                    <th className="ip-ct-box">
+                      <label>
+                        <input
+                          type="checkbox"
+                          ref={allBox}
+                          checked={allOn}
+                          disabled={!shown.length}
+                          onChange={() => set(shownIds, !allOn)}
+                          title={allOn ? 'Uncheck every row shown' : 'Check every row shown'}
+                          aria-label={allOn ? 'Uncheck every row shown' : 'Check every row shown'}
+                        />
+                      </label>
+                    </th>
+                    {t.columns.map((_, i) => (
+                      <th
+                        key={i}
+                        className={cells.width[i]}
+                        aria-sort={sort?.col === i ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}
+                      >
+                        <button
+                          type="button"
+                          className="ip-ct-sort"
+                          style={{ justifyContent: justify(i) }}
+                          onClick={() => onSort(i)}
+                          title="Sort"
+                        >
+                          <span dangerouslySetInnerHTML={{ __html: cells.head[i] }} />
+                          <span className="ip-ct-arrow">{sort?.col === i ? (sort.dir === 1 ? '▲' : '▼') : ''}</span>
+                        </button>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody ref={body}>
+                  {shown.map((ri) => {
+                    const id = ids[ri];
+                    const isOn = on.has(id);
+                    return (
+                      <tr key={ri} className={isOn ? 'ip-ct-on' : undefined}>
+                        <td className="ip-ct-box">
+                          {/* Shift is read on mousedown: the change event a label click
+                              produces doesn't reliably carry modifier keys. Suppressing the
+                              default there stops shift-click from selecting text. */}
+                          <label
+                            onMouseDown={(e) => {
+                              shift.current = e.shiftKey;
+                              if (e.shiftKey) e.preventDefault();
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isOn}
+                              onChange={() => onRow(id)}
+                              aria-label={`Check ${cells.text[ri][1] || id}`}
+                            />
+                          </label>
+                        </td>
+                        {t.columns.map((_, ci) => (
+                          <td
+                            key={ci}
+                            className={`${cells.width[ci]}${ci === 0 ? ' ip-ct-id' : ''}`}
+                            style={{ textAlign: align(ci) }}
+                            dangerouslySetInnerHTML={{ __html: cells.html[ri][ci] }}
+                          />
+                        ))}
+                      </tr>
+                    );
+                  })}
+                  {shown.length ? null : (
+                    <tr>
+                      <td className="ip-ct-empty" colSpan={t.columns.length + 1}>
+                        No rows match.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <p className="ip-ct-empty">No table in this block yet.</p>
+        )}
+        {t.after.trim() ? <Markdown source={t.after} commentMeta={commenting.commentMeta} /> : null}
+      </div>
+    </section>
   );
 }
 

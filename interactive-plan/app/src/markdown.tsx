@@ -63,7 +63,7 @@ export function preprocessHighlights(
 // letter but may contain digits (e.g. .j2, .mjs) — so ontology.j2:123 linkifies.
 const CODE_REF = /([A-Za-z0-9_./-]+\.[A-Za-z][A-Za-z0-9]{0,5}):(\d+)(?:-\d+)?(?::\d+)?/g;
 
-function linkifyCodeRefs(root: HTMLElement): void {
+export function linkifyCodeRefs(root: HTMLElement): void {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       let el = node.parentElement;
@@ -211,7 +211,7 @@ function rewriteImageSrcs(root: HTMLElement): void {
 // Catch relative links to other .md plans and point them at the viewer, opening
 // in a new tab — so the wiki of interlinked plan files navigates in-app without
 // changing the authored markdown (plain relative links stay plain).
-function rewritePlanLinks(root: HTMLElement): void {
+export function rewritePlanLinks(root: HTMLElement): void {
   const base = planPathFromUrl();
   root.querySelectorAll('a[href]').forEach((a) => {
     const href = resolvePlanHref(a.getAttribute('href') ?? '', base);

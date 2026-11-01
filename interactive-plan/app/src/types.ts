@@ -16,7 +16,8 @@ export type Block =
   | DecisionBlock
   | FindingBlock
   | CommentBlock
-  | CheckBlock;
+  | CheckBlock
+  | CheckTableBlock;
 
 export interface MarkdownBlock {
   type: 'markdown';
@@ -97,6 +98,34 @@ export interface CheckBlock {
   id: string;
   status: 'todo' | 'done';
   label: string; // markdown (the checkbox's text)
+  range: SourceRange;
+}
+
+export interface TableColumn {
+  header: string; // markdown
+  align: 'left' | 'center' | 'right' | null;
+}
+
+export interface TableRow {
+  id: string; // the first cell's text — the row's stable handle in `checked`
+  cells: string[]; // markdown, one per column (cells[0] is the id cell)
+}
+
+// A GFM table with a checkbox on every row, for picking rows out of a long list
+// (papers, files, participants). The ticked rows live in one `checked` attribute
+// on the tag, keyed by the first column, so the agent can rewrite the table and
+// the user's ticks survive. `inner` is kept verbatim: a toggle rewrites only the
+// opening tag.
+export interface CheckTableBlock {
+  type: 'check-table';
+  id: string;
+  title: string;
+  checked: string[]; // row ids
+  inner: string; // raw source between the tags
+  before: string; // markdown before the table
+  after: string; // markdown after it
+  columns: TableColumn[]; // empty when the body has no table (the linter reports it)
+  rows: TableRow[];
   range: SourceRange;
 }
 

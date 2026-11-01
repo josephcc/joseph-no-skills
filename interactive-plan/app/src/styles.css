@@ -509,6 +509,132 @@ body {
   opacity: 0.55;
   text-decoration: line-through;
 }
+
+/* ---- check table ---- */
+.ip-badge-table {
+  background: var(--asta-green-20);
+  color: var(--asta-teal);
+}
+.ip-ct-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0.5rem;
+}
+.ip-ct-search {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+}
+.ip-ct-search:focus {
+  outline: 2px solid var(--asta-green);
+  border-color: var(--asta-green);
+}
+.ip-ct-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ip-ct-undo .ip-btn {
+  padding: 0.15rem 0.55rem;
+}
+/* A long list scrolls inside its own box, so the header row and the tools stay in reach. */
+.ip-ct-scroll {
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ip-ct {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 0.85rem;
+}
+.ip-ct th,
+.ip-ct td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.ip-ct tbody tr:last-child td {
+  border-bottom: none;
+}
+.ip-ct th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--asta-cream);
+  font-weight: 600;
+}
+.ip-ct-sort {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ip-ct-sort:hover {
+  background: var(--asta-green-20);
+}
+.ip-ct-arrow {
+  font-size: 0.65rem;
+  color: var(--asta-teal-60);
+}
+.ip-ct tbody tr:hover td {
+  background: var(--asta-cream);
+}
+.ip-ct tbody tr.ip-ct-on td {
+  background: #ebf7ef;
+}
+.ip-ct-box {
+  width: 2.2rem;
+  padding: 0 !important;
+  text-align: center !important;
+  user-select: none;
+}
+/* The whole cell is the hit target, not just the 1rem box. */
+.ip-ct-box label {
+  display: flex;
+  justify-content: center;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+}
+.ip-ct-box input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--asta-green);
+}
+.ip-ct-id {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ip-ct-empty {
+  color: var(--muted);
+  font-style: italic;
+  text-align: center !important;
+}
 .ip-textarea {
   width: 100%;
   min-height: 64px;
@@ -1032,13 +1158,16 @@ body {
   .ip-md td {
     overflow-wrap: normal;
   }
-  .ip-md .ip-col-mid {
+  .ip-md .ip-col-mid,
+  .ip-ct .ip-col-mid {
     min-width: 9rem;
   }
-  .ip-md .ip-col-short {
+  .ip-md .ip-col-short,
+  .ip-ct .ip-col-short {
     white-space: nowrap;
   }
-  .ip-md .ip-col-wide {
+  .ip-md .ip-col-wide,
+  .ip-ct .ip-col-wide {
     min-width: 17rem;
   }
   .ip-hl {
@@ -1187,7 +1316,8 @@ body {
   .ip-btn {
     padding: 0.55rem 0.9rem;
   }
-  .ip-check-box {
+  .ip-check-box,
+  .ip-ct-box input {
     width: 1.25rem;
     height: 1.25rem;
   }

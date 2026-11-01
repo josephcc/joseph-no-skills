@@ -77,7 +77,7 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 
 ---
 
-## The six tags
+## The seven tags
 
 | Tag | Purpose | Interactive surface |
 |---|---|---|
@@ -87,6 +87,7 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 | `<user-highlight>` | Inline anchor binding a span to a comment | the highlighted span; click ↔ its comment card |
 | `<finding>` | An audit/review finding (severity matrix item) | filter by severity; toggle status |
 | `<check>` | A checkable task item (tutorial / QA checklist) | tick the checkbox; flips `status`, saved to file |
+| `<check-table>` | A markdown table whose rows the user picks from | tick rows; sort, search, filter; writes `checked` |
 
 ID rule: every tag with an `id` uses a short, stable, human-readable id (`Q-A`, `D3`, `c7`,
 `F-B1`). IDs never change once assigned — answers, decisions, and highlights reference them.
@@ -312,12 +313,71 @@ matching — the toggle is addressed by `id`). The agent authors the checks; the
 
 ---
 
+### 7. `<check-table>`
+
+A markdown table with a checkbox on every row: the form for asking the user to pick rows out of
+a long list (papers with their venue, year and citation count; files to migrate; transcripts to
+code). A `<check>` holds one item; a check table holds a list too long to read top to bottom,
+which the user sorts and searches before choosing.
+
+**Attributes**
+- `id` (required): e.g. `T-papers`.
+- `title` (required): shown in the card header.
+- `checked` (optional): comma-separated ids of the ticked rows. Written by the viewer, in table
+  order. Absent or empty means nothing is ticked.
+
+**Children**: markdown, containing one GFM table. Prose above and below it renders normally.
+Only the first table gets checkboxes; a second one renders as plain markdown, with a lint warning.
+
+**Row ids**: the **first column** of every row is that row's id, the value stored in `checked`.
+Ids are unique within the table and contain no whitespace, commas, or double quotes. They are
+the stable handle, so the agent may re-sort, re-word, add, or remove rows between passes and the
+user's ticks stay attached to the right rows.
+
+**Rendering**: a card with a `checked / total` count. Above the table, a search box (every word
+must appear somewhere in the row) and an all / checked / unchecked filter. Clicking a header
+sorts by that column: numbers largest first, text A to Z, a third click restores table order.
+A column sorts as numbers when every non-empty cell parses as one (`1,034`, `12.5`, `40%`).
+Long tables scroll inside the card with the header row pinned. Cells are inline markdown;
+`http(s)` links in cells open in a new tab so the viewer stays put.
+
+**Viewer actions**: tick or untick a row, which saves at once. Shift-click ticks or unticks the
+range between the last row clicked and this one, in the order on screen. The header checkbox ticks
+every row currently shown, or unticks them all when they are all ticked; the search and filter
+decide what "shown" means, so "every CHI paper" is a search followed by one click. A range or
+header action offers **Undo**. Search, filter, and sort are view state and are never saved. A
+toggle rewrites only the opening tag; the body goes back byte-for-byte. An id in `checked` that
+no longer names a row is kept, not dropped, since it is the user's pick.
+
+**Lint**: errors for a missing table, an empty, duplicate, or malformed row id, and a `checked`
+id that names no row (usually a ticked row the agent removed; carry the pick over or ask).
+
+**Reading the pick**: `bun run checked <plan.md> <table-id>` prints the ticked rows as JSON,
+one object per row keyed by column header, each cell's markdown as authored; `--unchecked`
+prints the rest. With no table id it lists each table's count.
+
+**Example**
+```xml
+<check-table id="T-papers" title="Candidates for related work" checked="p2">
+Tick the papers to keep for §2.
+
+| id | Title | Venue | Year | Citations |
+|----|-------|-------|-----:|----------:|
+| p1 | Sensecape: Enabling Multilevel Exploration and Sensemaking with LLMs | UIST | 2023 | 152 |
+| p2 | Threddy: An Interactive System for Thread-based Exploration of Literature | UIST | 2022 | 1,034 |
+</check-table>
+```
+
+---
+
 ## Round-trip: who writes what
 
 | Action | Written by | What changes in the file |
 |---|---|---|
 | Answer a question | **Viewer** | adds `<answer>`; sets question `status="answered"` |
 | Tick / untick a check | **Viewer** | sets `<check status>` (`todo`↔`done`) |
+| Tick / untick table rows | **Viewer** | sets `<check-table checked>`; the table body is untouched |
+| Add, remove, or re-sort table rows | **Agent** | edits the table; keeps every ticked id's row (or raises it) |
 | Comment / reply | **Viewer** or **Agent** | adds `<user-highlight>` + `<comment>` / appends `<note>` |
 | Resolve / reopen a comment | **Viewer** (the user) | sets `<comment status>` + `resolved-by`/`resolved-at` |
 | Lock / reopen / supersede a decision | **Viewer** or **Agent** | sets `<decision status>`/`date` |
@@ -345,7 +405,7 @@ never edits it; paraphrases go below it and are labelled as the agent's. See SKI
 When writing or updating a plan in this format:
 
 1. **Default to plain markdown.** Only reach for a tag when the content is genuinely one of the
-   five semantic kinds. Over-tagging hurts readability.
+   tagged kinds. Over-tagging hurts readability.
 2. **Every genuinely-open decision point is an `<open-question>`** — give it a stable `id` and a
    `title`, and provide `<options>` whenever there are discrete alternatives (the viewer adds Other
    + freeform automatically, so list only the real candidates). Questions and prior decisions are
@@ -363,7 +423,9 @@ When writing or updating a plan in this format:
 ## Rendering summary
 
 - **Interactive:** `<open-question>` (choice + Other + freeform), `<decision>` (lock/reopen),
-  `<comment>`/`<user-highlight>` (threaded, resolvable), `<finding>` (filterable matrix).
+  `<comment>`/`<user-highlight>` (threaded, resolvable), `<finding>` (filterable matrix),
+  `<check>` (tick), `<check-table>` (tick rows; sort, search, filter).
 - **Styled, non-interactive (v1):** status preamble header, linkified code refs, highlighted code
   blocks, tables, phased plans, out-of-scope lists, trade-off/rationale prose.
-- **Deferred (v2):** cross-block highlights; richer per-row checkoff on plain (untagged) tables.
+- **Deferred (v2):** cross-block highlights. (Per-row checkoff on tables, once deferred here, is
+  `<check-table>`.)

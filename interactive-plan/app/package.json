@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "serve": "node server.mjs",
     "lint:plan": "bun lint.ts",
+    "checked": "bun checked.ts",
     "test": "vitest run",
     "pdf": "bun pdf.ts"
   },

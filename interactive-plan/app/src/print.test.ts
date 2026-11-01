@@ -378,3 +378,43 @@ describe('block rendering', () => {
     expect(html).toContain('display: table-header-group');
   });
 });
+
+describe('check tables in print', () => {
+  const TABLE = [
+    '<check-table id="T-papers" title="Candidate papers" checked="p2">',
+    'Tick the papers to keep.',
+    '',
+    '| id | Title | Year |',
+    '|----|-------|-----:|',
+    '| p1 | Sensecape | 2023 |',
+    '| p2 | Threddy | 2022 |',
+    '</check-table>',
+  ].join('\n');
+
+  it('prints only the checked rows by default, and says the rest were left out', () => {
+    const html = render(TABLE);
+    expect(html).toContain('Threddy');
+    expect(html).not.toContain('Sensecape');
+    expect(html).toContain('1 of 2 checked · unchecked rows omitted');
+    expect(html).toContain('<td style="text-align:right">2022</td>');
+  });
+
+  it('prints every row with the checked ones marked under answered=all', () => {
+    const html = render(TABLE, { answered: 'all' });
+    expect(html).toContain('Sensecape');
+    expect(html).toContain('<tr class="pchecked"><td class="pcbox">&#10003;</td><td>p2</td>');
+    expect(html).toContain('1 of 2 checked<');
+  });
+
+  it('prints every row while nothing is checked yet', () => {
+    const html = render(TABLE.replace(' checked="p2"', ''));
+    expect(html).toContain('Sensecape');
+    expect(html).toContain('Threddy');
+    expect(html).toContain('0 of 2 checked<');
+  });
+
+  it('keeps a comment anchored to the table, so it can become an annotation', () => {
+    const raw = `${TABLE.replace('keep.', 'keep. <user-highlight comment="c1"></user-highlight>')}\n\n<comment id="c1" status="open">\n  <note by="user" at="t">why these?</note>\n</comment>`;
+    expect(render(raw, { comments: 'annotations' })).toContain(`href="${anchorHref('c1')}"`);
+  });
+});

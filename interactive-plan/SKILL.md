@@ -25,7 +25,7 @@ The skill lives at `~/.claude/skills/interactive-plan/`:
 - `app/` — the Vite+React viewer + Node file-API + the linter.
 - `examples/` — worked fixtures (`interactive-plan-skill.plan.md`, `demo.plan.md`).
 
-## Authoring cheatsheet (the six tags)
+## Authoring cheatsheet (the seven tags)
 
 Everything not in a tag is plain markdown, GitHub-flavored except that strikethrough needs `~~` (a lone `~`, as in LaTeX `Table~\ref{tab:x}`, stays literal; rendered with code-ref linkifying + highlighted code
 blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
@@ -38,7 +38,7 @@ non-`.md` links are left as ordinary links.
 
 **In-page links resolve and preview.** Headings carry GitHub-style ids (`## 2. Decisions` →
 `[see decisions](#2-decisions)`), and a fragment naming a tagged element's id (`[the port
-question](#Q-1)`, `#D-3`) lands on that block. Clicking scrolls there; resting the
+question](#Q-1)`, `#D-3`, `#T-papers`) lands on that block. Clicking scrolls there; resting the
 pointer on the link for ¾ s pops up a scrollable peek of the target and the lines below it, so a
 reader can check a cross-reference without leaving their place. Link freely between sections and
 to questions/decisions by id — the reader never has to hunt.
@@ -107,6 +107,38 @@ struck-through.
 ```
 `status`: `todo` | `done` (omit ⇒ `todo`). The label is inline markdown (code refs, `code`, bold).
 
+**Check table**: a markdown table with a checkbox on every row, for when the user has to pick
+rows out of a long list: papers by title, venue, year and citation count, files to migrate,
+transcripts to code. In the viewer the user sorts by any column, filters by search text or by
+ticked state, shift-clicks to tick a range, and ticks every row on screen from the header box
+(with Undo). Each tick saves immediately.
+```
+<check-table id="T-papers" title="Candidates for related work" checked="p2">
+What a tick means, in prose: "Tick the papers to keep for §2."
+
+| id | Title | Venue | Year | Citations |
+|----|-------|-------|-----:|----------:|
+| p1 | Sensecape: Enabling Multilevel Exploration and Sensemaking with LLMs | UIST | 2023 | 152 |
+| p2 | Threddy: An Interactive System for Thread-based Exploration of Literature | UIST | 2022 | 1,034 |
+</check-table>
+```
+- **The first column is the row id.** Ids must be unique, with no spaces, commas or quotes; a
+  Semantic Scholar corpus id or a DOI works. `checked` lists the ticked ids, and the viewer
+  rewrites it in table order. Leave it out to start with nothing ticked. You may pre-tick rows
+  as a proposal, but say so in the prose.
+- Ticks are keyed by id, so you can re-sort, re-word, or extend the table between passes and
+  they survive. Removing a row the user ticked is a lint error: keep the row, or raise it.
+- Escape a `|` inside a cell as `\|`. Right-align number columns (`---:`). A column whose
+  cells are all numbers (counts like `1,034` included) sorts numerically, largest first.
+- Only the body's first table gets checkboxes. Prose above and below it renders as usual.
+- **Read the pick back with the script** rather than matching ids against the table by eye:
+  ```bash
+  cd ~/.claude/skills/interactive-plan/app && bun run checked <abs-path-to-plan.md> [table-id] [--unchecked]
+  ```
+  With no table id it lists every table with its count of ticked rows. With an id it prints
+  that table's ticked rows (or, with `--unchecked`, the rest) as JSON, one object per row keyed
+  by column header, with each cell exactly as authored.
+
 ### The brief: keep the user's words
 
 A plan starts from something the user typed: the request, a rough plan, a pasted list of
@@ -133,8 +165,8 @@ out of a `.jsonl` transcript the next day.
 - The user's original instruction is quoted verbatim in `## 0. Brief (verbatim)` and never
   edited; later instructions are appended there as dated addenda (see The brief).
 - Stable, unique ids; never renumber; never delete resolved/superseded items (they collapse).
-- On a review pass, read every `<answer>` and open `<comment>`; update the plan; convert answered
-  questions to decisions; **reply** to comments (leave *resolving* to the user) — **never silently
+- On a review pass, read every `<answer>`, open `<comment>`, and `<check-table>` pick (with
+  `bun run checked`); update the plan; convert answered questions to decisions; **reply** to comments (leave *resolving* to the user) — **never silently
   drop the user's feedback.**
 - Inside fenced code blocks, tags are literal text and are NOT parsed — fine to quote tags there.
 
@@ -202,7 +234,7 @@ Flags, for trimming a working document into something shareable:
 - `--answered=chosen|all` — answered questions print only the chosen option (default) or all options with the chosen one marked
 - `--no-questions` — drop *unanswered* questions (answered ones stay, as decisions-in-progress)
 - `--no-comments` — drop comment threads
-- `--no-checks` — drop checklists
+- `--no-checks` — drop `<check>` checklists (check tables stay: they are content)
 - `--html` — emit the styled HTML instead of a PDF (useful to tweak CSS, or to print by hand)
 
 Needs a headless browser; it tries chromium, Brave, Edge, then Chrome, and if none is present it
@@ -222,7 +254,7 @@ render: a wrapped header line spilling out of its card, markdown showing up as l
 
 ### What the export covers
 
-All six tags render, plus the preamble, tables, and code blocks:
+All seven tags render, plus the preamble, tables, and code blocks:
 
 | construct | in the PDF |
 |---|---|
@@ -230,6 +262,7 @@ All six tags render, plus the preamble, tables, and code blocks:
 | `<decision>` | callout with status badge, date, `from`/`supersedes` |
 | `<finding>` | callout with severity badge, status, effort |
 | `<check>` | checklist, consecutive checks grouped, `done` struck through |
+| `<check-table>` | the table with a ✓ column; once any row is ticked, **only the ticked rows** print, under a "2 of 40 checked · unchecked rows omitted" line (every row, ticks marked, under `--answered=all`) |
 | `<open-question>` | open → question + options; answered → question + **only the chosen option** + the answer (or every option with the chosen one marked, under `--answered=all`) |
 | `<comment>` | a real PDF comment on its anchored span — see below; or a note callout under `--comments=inline` |
 | `<user-highlight>` | highlighted span; dropped entirely under `--no-comments`, since there is then nothing to point at |
@@ -299,7 +332,7 @@ a leak. Run `--status` if you've lost the port (or `curl -s http://localhost:<po
 ## The loop
 
 1. Author/update the plan in this format, opening with the user's brief verbatim → 2. lint → 3. launch the viewer → 4. the user answers
-questions, picks options, and comments (saved back into the same `.md`) → 5. they tell you to
+questions, picks options, ticks table rows, and comments (saved back into the same `.md`) → 5. they tell you to
 "review my feedback on plan X" → you read the answers + open comments, revise, convert answered
 questions to decisions, and **reply** to comments (the user resolves them) → 6. repeat until the
 plan is ready to implement.

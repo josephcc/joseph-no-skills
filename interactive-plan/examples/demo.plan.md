@@ -68,7 +68,23 @@ Files up to ~1,100 lines exist. Debounce the live-watch and collapse long code b
 Handled — the parser skips fenced code when scanning for tags, verified by a unit test.
 </finding>
 
-## 4. Notes
+## 4. Check table
+
+<check-table id="T-papers" title="Papers for the related-work section" checked="p2,p5">
+Tick the papers to keep. Click a header to sort, type in the box to filter, shift-click to tick a
+range. The citation counts are invented for this fixture.
+
+| id | Title | Venue | Year | Citations |
+|----|-------|-------|-----:|----------:|
+| p1 | Augmenting Scientific Papers with Just-in-Time, Position-Sensitive Definitions of Terms and Symbols | CHI | 2021 | 210 |
+| p2 | Threddy: An Interactive System for Personalized Thread-based Exploration and Organization of Scientific Literature | UIST | 2022 | 64 |
+| p3 | CiteSee: Augmenting Citations in Scientific Papers with Persistent and Personalized Historical Context | CHI | 2023 | 71 |
+| p4 | Relatedly: Scaffolding Literature Reviews with Existing Related Work Sections | CHI | 2023 | 48 |
+| p5 | Synergi: A Mixed-Initiative System for Scholarly Synthesis and Sensemaking | UIST | 2023 | 1,034 |
+| p6 | Sensecape: Enabling Multilevel Exploration and Sensemaking with Large Language Models | UIST | 2023 | 152 |
+</check-table>
+
+## 5. Notes
 
 Cross-references are plain in-page links: the [open questions](#1-open-questions) above, the
 [port question](#Q-1) by its id, or a single decision like [D-2](#D-2). Click one to jump, or rest

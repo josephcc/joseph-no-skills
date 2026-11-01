@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadPlan, openInEditor, planPathFromUrl, savePlan, watchPlan, exportPdf } from './api';
 import {
+  appendTableTarget,
   appendTarget,
   encodeEntities,
   parsePlan,
@@ -9,11 +10,19 @@ import {
   serializeBlock,
   wrapNthOccurrence,
 } from './parser';
-import { CheckList, DecisionStack, FindingMatrix, QuestionCard } from './blocks';
+import { CheckList, CheckTable, DecisionStack, FindingMatrix, QuestionCard } from './blocks';
 import { CommentRail } from './comments';
 import { Markdown } from './markdown';
 import { AnchorPeek, assignHeadingIds, jumpToAnchor, scrollToAnchor } from './peek';
-import type { Block, CheckBlock, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
+import type {
+  Block,
+  CheckBlock,
+  CheckTableBlock,
+  CommentBlock,
+  DecisionBlock,
+  FindingBlock,
+  QuestionBlock,
+} from './types';
 
 const nowStamp = () => new Date().toISOString().slice(0, 16);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -214,6 +223,9 @@ export function App() {
   const onCheckToggle = (c: CheckBlock) =>
     editBlock(c, { ...c, status: c.status === 'done' ? 'todo' : 'done' });
 
+  // Write a check table's ticked rows; only its opening tag changes.
+  const onTableChecked = (t: CheckTableBlock, checked: string[]) => editBlock(t, { ...t, checked });
+
   // ---- new comment from a text selection (prose blocks only) ----
   function captureSelection() {
     const s = window.getSelection();
@@ -277,7 +289,7 @@ export function App() {
     setSel(null);
   }
 
-  // Comment on a structured block (decision, finding, check, question) — anchor a
+  // Comment on a structured block (decision, finding, check, question, check table) — anchor a
   // ◆ target to its primary field, so the comment can never drift to a duplicate
   // phrase. The element's ◆ marker then activates this thread.
   function addElementComment(block: Block, commentText: string) {
@@ -287,6 +299,7 @@ export function App() {
     if (block.type === 'check') next = { ...block, label: appendTarget(block.label, id) };
     else if (block.type === 'decision' || block.type === 'finding' || block.type === 'question')
       next = { ...block, body: appendTarget(block.body, id) };
+    else if (block.type === 'check-table') next = { ...block, inner: appendTableTarget(block, id) };
     else return;
     const newContent =
       replaceBlock(content, block.range, serializeBlock(next)) + commentSource(id, commentText);
@@ -433,6 +446,10 @@ export function App() {
       while (i < plan.blocks.length && plan.blocks[i].type === 'check') run.push(plan.blocks[i++] as CheckBlock);
       i--;
       rendered.push(<CheckList key={`c-${start}`} checks={run} commenting={commenting} onToggle={onCheckToggle} />);
+    } else if (b.type === 'check-table') {
+      // Keyed by id, not position: a comment added above it must not remount the table
+      // and throw away the reader's search and sort.
+      rendered.push(<CheckTable key={`t-${b.id}`} t={b} commenting={commenting} onChecked={onTableChecked} />);
     } else if (b.type === 'question') {
       rendered.push(
         <div key={`q-${i}`}>
@@ -516,11 +533,11 @@ export function App() {
               <div className="ip-pdf-menu" role="menu">
                 <button role="menuitem" onClick={() => onExportPdf('chosen')}>
                   <b>Chosen answers only</b>
-                  <span>Answered questions show just the option you picked. A decision record.</span>
+                  <span>Answered questions show just the option you picked, check tables just the ticked rows. A decision record.</span>
                 </button>
                 <button role="menuitem" onClick={() => onExportPdf('all')}>
                   <b>All options, chosen marked</b>
-                  <span>Answered questions keep every option, with yours marked. For others to review.</span>
+                  <span>Questions keep every option and check tables every row, with yours marked. For others to review.</span>
                 </button>
               </div>
             )}
