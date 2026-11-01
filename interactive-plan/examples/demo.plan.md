@@ -70,6 +70,10 @@ Handled — the parser skips fenced code when scanning for tags, verified by a u
 
 ## 4. Notes
 
+Cross-references are plain in-page links: the [open questions](#1-open-questions) above, the
+[port question](#Q-1) by its id, or a single decision like [D-2](#D-2). Click one to jump, or rest
+the pointer on it for a moment to peek at the target without leaving this spot.
+
 ```ts
 // This block literally contains a tag and must NOT be parsed as one:
 // <decision id="NOPE" title="x" status="locked">should stay text</decision>

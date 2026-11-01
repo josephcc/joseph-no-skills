@@ -63,8 +63,14 @@ Recognized keys: `Status`, `Date`, `Related commits`, `Related plans`, `Scope`, 
 - **Inter-plan links** — a plain relative/absolute markdown link to another `.md` plan
   (`[x](../pathway/main.md)`, `[x](hci/main.md#status)`) is resolved against the current plan's path
   and rewritten to open that file in the viewer in a **new tab** (`?plan=<abs>`). Lets plan files
-  interlink like a wiki with no special syntax. External URLs, `#anchors`, and non-`.md` links are
-  untouched.
+  interlink like a wiki with no special syntax. External URLs and non-`.md` links are untouched.
+- **In-page anchors** — every heading gets its GitHub slug as an id (`## Export a PDF to share` →
+  `#export-a-pdf-to-share`, repeats numbered `-1`, `-2`), and a fragment naming a tagged element's
+  id (`[the port question](#Q-1)`, `#D-3`) resolves to that block. A click scrolls there (and Back
+  returns); a `?plan=…#fragment` URL from another plan lands on the section. **Resting the pointer
+  on an in-page link for ¾ s opens a peek**: a small scrollable window showing the target as it is
+  rendered on the page — heading, card, table, highlights — and the lines below it. Click the peek
+  to go there; move away, scroll the page or press Escape to dismiss it. Touch screens skip it.
 - **Code blocks** — fenced blocks are syntax-highlighted with a language label + copy button, and
   collapse behind a "show N lines" toggle when long.
 - **Tables, lists, headings, blockquotes** — standard markdown rendering, styled.

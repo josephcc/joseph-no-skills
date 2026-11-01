@@ -33,8 +33,15 @@ blocks; the `**Status:** / **Date:** / ...` preamble becomes the header).
 **Plans interlink like a wiki.** A plain relative markdown link to another `.md` plan
 (`[Pathway](../pathway/main.md)`, `[details](hci/main.md#status)`) is detected by the viewer and
 rewritten to open that file **in a new viewer tab** (`?plan=<abs>`) — no special syntax, just a normal
-link. Use this to build a portal/thread structure across many plan files. External URLs, in-page
-`#anchors`, and non-`.md` links are left as ordinary links.
+link. Use this to build a portal/thread structure across many plan files. External URLs and
+non-`.md` links are left as ordinary links.
+
+**In-page links resolve and preview.** Headings carry GitHub-style ids (`## 2. Decisions` →
+`[see decisions](#2-decisions)`), and a fragment naming a tagged element's id (`[the port
+question](#Q-1)`, `#D-3`) lands on that block. Clicking scrolls there; resting the
+pointer on the link for ¾ s pops up a scrollable peek of the target and the lines below it, so a
+reader can check a cross-reference without leaving their place. Link freely between sections and
+to questions/decisions by id — the reader never has to hunt.
 
 **Figures render from the plan's repo.** A plain markdown image (`![caption](out/figures/x.png)`,
 relative to the plan file, or an absolute path) is served by the viewer through `/api/asset`, so

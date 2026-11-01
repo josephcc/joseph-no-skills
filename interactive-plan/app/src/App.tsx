@@ -12,6 +12,7 @@ import {
 import { CheckList, DecisionStack, FindingMatrix, QuestionCard } from './blocks';
 import { CommentRail } from './comments';
 import { Markdown } from './markdown';
+import { AnchorPeek, assignHeadingIds, jumpToAnchor, scrollToAnchor } from './peek';
 import type { Block, CheckBlock, CommentBlock, DecisionBlock, FindingBlock, QuestionBlock } from './types';
 
 const nowStamp = () => new Date().toISOString().slice(0, 16);
@@ -314,6 +315,13 @@ export function App() {
   // ---- click delegation: code refs + highlight activation ----
   function onMainClick(e: React.MouseEvent) {
     const target = e.target as HTMLElement;
+    // An in-page link: smooth-scroll to its heading or block (the browser can't find `#q1` by
+    // itself — the block renders as `block-q1`). Unresolved ones fall through to the browser.
+    const anchor = target.closest('a[href^="#"]') as HTMLAnchorElement | null;
+    if (anchor && mainRef.current && jumpToAnchor(anchor.getAttribute('href') ?? '', mainRef.current)) {
+      e.preventDefault();
+      return;
+    }
     const ref = target.closest('.ip-coderef') as HTMLElement | null;
     if (ref?.dataset.ref) {
       const refStr = ref.dataset.ref;
@@ -353,6 +361,31 @@ export function App() {
       root.querySelectorAll(`.ip-hl[data-comment="${activeComment}"]`).forEach((el) => el.classList.add('ip-hl-active'));
     }
   }, [activeComment, content]);
+
+  // In-page anchors. Headings get their GitHub slug as an id after every render (the prose is
+  // re-rendered from HTML and loses them), so `[x](#export-a-pdf)` and `#q1`-style block links
+  // resolve. A fragment in the URL on first load (a `?plan=…#section` link from another plan)
+  // scrolls there once the plan is on the page; Back/Forward follow the fragment too.
+  const scrolledToHash = useRef(false);
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root || content == null) return;
+    assignHeadingIds(root);
+    if (!scrolledToHash.current && location.hash) {
+      scrolledToHash.current = true;
+      requestAnimationFrame(() => scrollToAnchor(location.hash, root, 'auto'));
+    }
+  }, [content]);
+  useEffect(() => {
+    const onHash = () => {
+      const root = mainRef.current;
+      if (!root) return;
+      if (location.hash) scrollToAnchor(location.hash, root);
+      else window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   function activateComment(id: string) {
     setActiveComment(id);
@@ -541,6 +574,7 @@ export function App() {
           onCloseSheet={() => setSheetOpen(false)}
         />
       </div>
+      <AnchorPeek root={mainRef} resetKey={content} />
 
       {narrow && !sheetOpen && !composer && !elComposer && (
         <button className="ip-sheet-fab" onClick={() => setSheetOpen(true)} aria-label="Show comments">
