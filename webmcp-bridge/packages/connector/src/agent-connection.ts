@@ -8,7 +8,8 @@
  */
 import * as acp from '@agentclientprotocol/sdk';
 import type { Stream } from '@agentclientprotocol/sdk';
-import { SessionModel } from './session-model.ts';
+import { SessionModel, type ElicitationResult, type ToolCallItem } from './session-model.ts';
+import { ACTIVITY_HEADING, deepEqual, pageToolOf, sanitiseToolName, type ActivityEntry, type CallsApi } from './widgets.ts';
 
 /** Claude Code permission modes as the adapter names them; other agents may use other ids. */
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | (string & {});
@@ -87,6 +88,12 @@ export interface ConnectionParams {
   defaultMode?: PermissionModeId | null;
   switchPolicy?: SwitchPolicy;
   clientName?: string;
+  /** Advertise form elicitation (the agent may then ask the user structured questions in the page). Default true. */
+  elicitation?: boolean;
+  /** The page's widget activity log: entries newer than a thread's previous prompt ride along as `page://widget-activity`. */
+  activity?: { since(ts: number): ActivityEntry[]; format(entries?: readonly ActivityEntry[], opts?: { maxChars?: number }): string };
+  /** The page's in-flight tool calls: the connection claims the ones its threads' transcript items announce (§4.7). */
+  calls?: CallsApi;
 }
 
 interface Live {
@@ -99,6 +106,8 @@ interface Live {
   closed: boolean;
   title?: string;
   lastActivity: number;
+  /** When this thread last sent a prompt (or was opened): the activity window starts here. */
+  lastPromptAt: number;
 }
 
 interface Stored { id: string; title?: string; updatedAt?: string }
@@ -123,6 +132,9 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   const threadListeners = new Set<Listener<ThreadInfo[]>>();
   const activeListeners = new Set<Listener<AgentHandle | undefined>>();
   const closeListeners = new Set<Listener<string | undefined>>();
+  /** Transcript items that already claimed a page call (one call per item). */
+  const claimedItems = new Set<string>();
+  let elicitSeq = 0;
 
   const notifyThreads = () => { const t = threads(); for (const l of threadListeners) l(t); };
   const notifyActive = () => { const h = activeId !== undefined ? live.get(activeId)?.handle : undefined; for (const l of activeListeners) l(h); };
@@ -148,6 +160,19 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
       });
       notifyThreads();
     }))
+    .onRequest(acp.methods.client.elicitation.create, (ctx: any) => new Promise((resolve, reject) => {
+      const p = ctx.params ?? {};
+      if (p.mode !== undefined && p.mode !== 'form') { reject(acp.RequestError.invalidParams(undefined, `elicitation mode ${String(p.mode)} is not supported`)); return; }
+      const t = live.get(String(p.sessionId));
+      if (!t || t.closed) { resolve({ action: 'cancel' }); return; }
+      const schema = p.requestedSchema && typeof p.requestedSchema === 'object' ? p.requestedSchema : { type: 'object', properties: {} };
+      t.pending += 1;
+      t.model.addElicitation({
+        id: `e${++elicitSeq}-${Date.now()}`, message: String(p.message ?? ''), schema,
+        respond: (result: ElicitationResult) => { t.pending = Math.max(0, t.pending - 1); resolve(result); notifyThreads(); },
+      });
+      notifyThreads();
+    }))
     .onNotification(acp.methods.client.session.update, (ctx: any) => {
       const id = String(ctx.params?.sessionId ?? '');
       const update = ctx.params?.update;
@@ -160,7 +185,33 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   function applyUpdate(t: Live, update: any) {
     t.model.applyUpdate(update);
     if (update.sessionUpdate === 'session_info_update' && typeof update.title === 'string' && update.title.trim()) { t.title = update.title.trim(); notifyThreads(); }
+    if (params.calls && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && typeof update.toolCallId === 'string') {
+      const item = t.model.toolCall(update.toolCallId);
+      if (item) claimForItem(t, item);
+    }
   }
+
+  // Claims (plan §4.7): a page call belongs to the transcript item that announced it. Matched by the page tool's name
+  // and deep-equal arguments, oldest first, in both directions: when an item arrives (or its input completes) and
+  // when a call starts.
+  const openItem = (item: ToolCallItem) => (item.status === 'pending' || item.status === 'in_progress') && !claimedItems.has(item.toolCallId);
+  const matches = (item: ToolCallItem, call: { name: string; args: Record<string, unknown>; claimedBy?: string }) => !call.claimedBy && sanitiseToolName(call.name) === pageToolOf(item) && deepEqual(call.args, item.rawInput ?? {});
+  function claimForItem(t: Live, item: ToolCallItem) {
+    if (!params.calls || !openItem(item) || pageToolOf(item) === undefined) return;
+    const call = params.calls.calls().find((c) => matches(item, c));
+    if (!call) return;
+    params.calls.claimCall(call.callId, t.id); claimedItems.add(item.toolCallId);
+  }
+  function claimForCall(call: { callId: string; name: string; args: Record<string, unknown> }) {
+    const current = params.calls?.calls().find((c) => c.callId === call.callId);
+    if (!current || current.claimedBy) return;
+    for (const t of live.values()) {
+      if (t.closed) continue;
+      const item = t.model.openToolCalls().find((i) => openItem(i) && pageToolOf(i) !== undefined && matches(i, current));
+      if (item) { params.calls!.claimCall(call.callId, t.id); claimedItems.add(item.toolCallId); return; }
+    }
+  }
+  const offCalls = params.calls?.onCall((e) => { if (e.phase === 'start') claimForCall(e); });
 
   const conn = app.connect(params.stream);
   const peer = conn.agent as unknown as { request(method: string, p?: unknown): Promise<any>; notify(method: string, p?: unknown): Promise<void> };
@@ -168,8 +219,9 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   void conn.closed.then(() => dropped('connection closed'));
 
   let init: any;
-  try { init = await req(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} }); }
-  catch (err) { conn.close(); throw err; }
+  const clientCapabilities = params.elicitation === false ? {} : { elicitation: { form: {} } };
+  try { init = await req(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }); }
+  catch (err) { offCalls?.(); conn.close(); throw err; }
   const caps = init?.agentCapabilities ?? {};
   const sc = caps.sessionCapabilities ?? {};
   const supportsLoad = !!caps.loadSession;
@@ -197,7 +249,7 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   function assertOpen() { if (closed) throw new Error('agent connection is closed'); }
 
   function register(id: string): Live {
-    const t = { id, model: new SessionModel(), prompting: false, pending: 0, closeWhenIdle: false, closed: false, lastActivity: Date.now() } as Live;
+    const t = { id, model: new SessionModel(), prompting: false, pending: 0, closeWhenIdle: false, closed: false, lastActivity: Date.now(), lastPromptAt: Date.now() } as Live;
     t.handle = makeHandle(t);
     live.set(id, t);
     ignored.delete(id);
@@ -216,8 +268,17 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
         if (params.context) {
           try { const snap = await params.context(); if (snap) blocks.push({ type: 'resource', resource: { uri: 'page://ui-state', mimeType: 'text/plain', text: `Current UI state of the page (deterministic snapshot):\n${snap}` } }); } catch { /* no snapshot this turn */ }
         }
+        // The activity window closes at send time, but the cutoff is committed only once the agent has taken the prompt:
+        // a rejected request must not swallow the notes it carried (Codex audit 1, finding 2).
+        const cutoff = Date.now();
+        if (params.activity) {
+          // After the ui-state block on purpose: the replay strip in SessionModel removes everything from that block on.
+          const entries = params.activity.since(t.lastPromptAt);
+          if (entries.length) blocks.push({ type: 'resource', resource: { uri: 'page://widget-activity', mimeType: 'text/plain', text: `${ACTIVITY_HEADING}\n${params.activity.format(entries)}` } });
+        }
         try {
           const r = await req(acp.methods.agent.session.prompt, { sessionId: t.id, prompt: blocks });
+          t.lastPromptAt = cutoff;
           const stopReason = String(r?.stopReason ?? 'end_turn');
           if (!t.closed) t.model.endTurn(stopReason);
           return { stopReason };
@@ -231,7 +292,7 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
           if (supportsList && !closed) void listThreads().catch(() => {});
         }
       },
-      async cancel() { t.model.cancelPermissions(); await peer.notify(acp.methods.agent.session.cancel, { sessionId: t.id }); },
+      async cancel() { t.model.cancelPending(); await peer.notify(acp.methods.agent.session.cancel, { sessionId: t.id }); },
       async setMode(modeId) {
         await req(acp.methods.agent.session.setMode, { sessionId: t.id, modeId });
         t.model.setSession({ modes: { ...(t.model.snapshot().modes ?? { available: [] }), current: modeId } });
@@ -258,12 +319,14 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   async function loadThread(id: string): Promise<Live> {
     if (!supportsLoad) throw new Error('this agent cannot resume threads');
     const t = register(id);   // before the request: the replayed history routes here
+    t.model.replaying = true;   // items that land before the load settles are history (widgets render them as restored)
     try {
       const r = await req(acp.methods.agent.session.load, { sessionId: id, cwd: params.cwd, mcpServers: params.mcpServers, _meta: params.meta });
+      t.model.replaying = false;
       t.model.setSession({ sessionId: id, agentName, modes: toModes(r?.modes) });
       t.model.setState('ready');
       return t;
-    } catch (err) { t.closed = true; live.delete(id); throw err; }
+    } catch (err) { t.model.replaying = false; t.closed = true; live.delete(id); throw err; }
   }
 
   async function openThread(id?: string): Promise<AgentHandle> {
@@ -289,7 +352,7 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
     const t = live.get(id);
     if (!t || t.closed) return;
     t.closed = true; live.delete(id); orphaned.delete(id); ignored.add(id);
-    t.model.cancelPermissions(); t.model.setState('closed');
+    t.model.cancelPending(); t.model.setState('closed');
     const wasActive = activeId === id;
     if (wasActive) activeId = undefined;
     notifyThreads();
@@ -323,7 +386,8 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
   }
 
   function endAll(state: 'closed' | 'error', reason?: string) {
-    for (const t of live.values()) { t.closed = true; t.model.setState(state, reason); }
+    offCalls?.();
+    for (const t of live.values()) { t.closed = true; t.model.cancelPending(); t.model.setState(state, reason); }
     live.clear(); orphaned.clear(); activeId = undefined;
     notifyThreads(); notifyActive();
     for (const l of closeListeners) l(reason);

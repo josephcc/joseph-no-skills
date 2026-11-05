@@ -274,3 +274,154 @@ function fakePage(): any {
     usingShim: true,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// In-chat widgets (plan in-chat-widgets §7.1, cases 3–7)
+// ---------------------------------------------------------------------------------------------------------------
+import { createActivityLog, type CallsApi, type PendingCall } from '../src/widgets.ts';
+
+/** A stand-in for the page's call list: calls are started by hand, events fan out, claims are recorded. */
+function fakeCalls() {
+  const list: PendingCall[] = [];
+  const listeners = new Set<(e: any) => void>();
+  const claims: Array<[string, string]> = [];
+  let n = 0;
+  const api: CallsApi = {
+    onCall: (l) => { listeners.add(l); return () => listeners.delete(l); },
+    calls: () => list,
+    claimCall: (callId, by) => { claims.push([callId, by]); const c = list.find((x) => x.callId === callId); if (c) c.claimedBy = by; },
+  };
+  const start = (name: string, args: Record<string, unknown>) => {
+    const call: PendingCall = { callId: `call-${++n}`, name, args, startedAt: Date.now(), signal: new AbortController().signal };
+    list.push(call);
+    for (const l of listeners) l({ callId: call.callId, name, args, phase: 'start' });
+    return call.callId;
+  };
+  const end = (callId: string) => { const i = list.findIndex((c) => c.callId === callId); if (i >= 0) list.splice(i, 1); for (const l of listeners) l({ callId, name: '', args: {}, phase: 'end', ok: true, result: '{}' }); };
+  return { api, start, end, claims, list };
+}
+const toolItems = (m: SessionModel) => m.snapshot().turns.flatMap((t) => t.items).filter((i) => i.kind === 'tool_call') as Array<{ toolCallId: string; name?: string; status: string; replayed?: boolean; rawInput?: unknown }>;
+
+describe('AgentConnection: widgets', () => {
+  test('7. initialize advertises form elicitation by default, not with elicitation: false', async () => {
+    const a = await open();
+    expect(a.fake.calls[0]!.params.clientCapabilities.elicitation).toEqual({ form: {} });   // the SDK adds fs/terminal defaults around it
+    a.conn.close();
+    const b = await open({}, { elicitation: false });
+    expect(b.fake.calls[0]!.params.clientCapabilities.elicitation).toBeUndefined();
+    b.conn.close();
+  });
+
+  test('6. a form elicitation lands in its thread; accept, decline and cancel reach the agent', async () => {
+    const { conn } = await open();
+    const a = await conn.openThread();
+    const turn = a.prompt('please ask-form now');
+    await tick();
+    const e = a.model.snapshot().pendingElicitations[0]!;
+    expect(e.message).toBe('Which one?');
+    expect((e.schema as any).properties.choice.oneOf).toHaveLength(2);
+    expect(byId(conn.threads, a.sessionId)?.state).toBe('needs-permission');
+    e.respond({ action: 'accept', content: { choice: 'a', choice_custom: 'with a note' } });
+    await turn;
+    expect(texts(a.model).at(-1)).toBe('form: {"action":"accept","content":{"choice":"a","choice_custom":"with a note"}}');
+    expect(byId(conn.threads, a.sessionId)?.state).toBe('ready');
+    const turn2 = a.prompt('ask-form again');
+    await tick();
+    a.model.snapshot().pendingElicitations[0]!.respond({ action: 'decline' });
+    await turn2;
+    expect(texts(a.model).at(-1)).toBe('form: {"action":"decline"}');
+    const turn3 = a.prompt('ask-form once more');
+    await tick();
+    expect(a.model.snapshot().pendingElicitations).toHaveLength(1);
+    await a.cancel();   // cancelling the turn settles the open form as cancel
+    await turn3;
+    expect(a.model.snapshot().pendingElicitations).toHaveLength(0);
+    expect(texts(a.model).at(-1)).toMatch(/form: \{"action":"cancel"\}|ask-form once more/);
+    conn.close();
+  });
+
+  test('4. the activity resource rides along only when there are entries newer than the thread\'s last prompt', async () => {
+    let clock = 1_000;
+    const activity = createActivityLog({ now: () => clock });
+    const { fake, conn } = await open({}, { activity, context: async () => 'STATE' });
+    activity.note('before the thread existed');
+    clock = 2_000;
+    await tick(5);
+    const a = await conn.openThread();
+    await a.prompt('one');
+    const prompts = () => fake.calls.filter((c) => c.method === 'session/prompt').map((c) => (c.params.prompt as Array<{ type: string; resource?: { uri: string; text: string } }>).map((b) => (b.type === 'resource' ? b.resource!.uri : b.type)));
+    expect(prompts()[0]).toEqual(['text', 'page://ui-state']);   // the old note predates the thread
+    await tick(5);
+    clock = Date.now();   // strictly after the first prompt
+    activity.note('Applied palette option 2', { tool: 'propose_palette', id: 'toolu_1' });
+    await tick(5);        // and strictly before the second
+    await a.prompt('two');
+    expect(prompts()[1]).toEqual(['text', 'page://ui-state', 'page://widget-activity']);
+    const block = fake.calls.filter((c) => c.method === 'session/prompt')[1]!.params.prompt[2].resource;
+    expect(block.mimeType).toBe('text/plain');
+    expect(block.text).toMatch(/^Recent widget activity[^\n]*\n- \S+ \[propose_palette\] Applied palette option 2$/);
+    await a.prompt('three');
+    expect(prompts()[2]).toEqual(['text', 'page://ui-state']);   // nothing new since "two"
+    // a rejected prompt does not consume the notes it carried: the next successful prompt gets them (audit 1, finding 2)
+    await tick(5);
+    clock = Date.now();
+    activity.note('Dismissed the card');
+    await tick(5);
+    await expect(a.prompt('reject-prompt now')).rejects.toThrow(/refused/);
+    expect(prompts()[3]).toEqual(['text', 'page://ui-state', 'page://widget-activity']);
+    await a.prompt('four');
+    expect(prompts()[4]).toEqual(['text', 'page://ui-state', 'page://widget-activity']);
+    expect(fake.calls.filter((c) => c.method === 'session/prompt')[4]!.params.prompt[2].resource.text).toContain('Dismissed the card');
+    await a.prompt('five');
+    expect(prompts()[5]).toEqual(['text', 'page://ui-state']);
+    conn.close();
+  });
+
+  test('3. claims: an item claims the call with equal input, oldest first; late items claim too; one call per item; background threads count', async () => {
+    const calls = fakeCalls();
+    const { conn } = await open({ callPage: async (_s, tool, input) => { const id = calls.start(tool, input); await tick(5); calls.end(id); return JSON.stringify({ card: 'p1', from: tool }); } }, { calls: calls.api });
+    const a = await conn.openThread();
+    // (a) the item is announced first, then the page call starts: claimed on the call's start event
+    await a.prompt('widget:propose_palette {"story":"warm","n":2}');
+    expect(calls.claims).toEqual([['call-1', a.sessionId]]);
+    expect(toolItems(a.model).at(-1)?.status).toBe('completed');
+    expect(texts(a.model).at(-1)).toBe('card shown');
+    // (b) a call that starts before its item: claimed when the item lands; a different-input call is left alone
+    const stray = calls.start('propose_palette', { story: 'other' });
+    const early = calls.start('propose_palette', { story: 'cold', n: 1 });
+    const noPage = await open({}, { calls: calls.api });   // a second connection that never announces: it must not claim either
+    const bThread = await noPage.conn.openThread();
+    await bThread.prompt('plain prompt');
+    expect(calls.claims).toHaveLength(1);
+    const b = await conn.openThread();   // background: `a` is idle and gets closed; `b` is active
+    await b.prompt('widget:propose_palette {"n":1,"story":"cold"}');   // same input, different key order
+    expect(calls.claims.at(-1)).toEqual([early, b.sessionId]);
+    expect(calls.list.find((c) => c.callId === stray)?.claimedBy).toBeUndefined();
+    calls.end(early); calls.end(stray);
+    // (c) one call per item: two identical calls, one item → only the first is claimed
+    const dup1 = calls.start('propose_palette', { n: 3 });
+    const dup2 = calls.start('propose_palette', { n: 3 });
+    await b.prompt('widget:propose_palette {"n":3}');
+    expect(calls.claims.filter(([id]) => id === dup1 || id === dup2)).toEqual([[dup1, b.sessionId]]);
+    calls.end(dup1); calls.end(dup2);
+    noPage.conn.close();
+    conn.close();
+  });
+
+  test('5. replayed tool calls come back marked restored with their input and result text', async () => {
+    const first = await open({ callPage: async () => '{"card":"p1"}' });
+    const a = await first.conn.openThread();
+    await a.prompt('widget:propose_palette {"story":"x"}');
+    const id = a.sessionId;
+    first.conn.close();
+    const second = startFakeAgent();
+    for (const s of first.fake.store.values()) second.store.set(s.id, s);
+    const conn = await openAgentConnection({ stream: second.stream, agentId: 'fake', cwd: CWD, mcpServers: [], meta: {} });
+    const h = await conn.openThread(id);
+    const items = toolItems(h.model);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ name: 'mcp__page__propose_palette', status: 'completed', replayed: true, rawInput: { story: 'x' } });
+    expect(toolItems(a.model)[0]!.replayed).toBeUndefined();   // the live one was not
+    conn.close();
+  });
+});

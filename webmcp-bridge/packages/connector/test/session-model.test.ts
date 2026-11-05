@@ -55,3 +55,51 @@ describe('SessionModel', () => {
     expect(s.plan[0]!.content).toBe('step'); expect(s.commands[0]!.name).toBe('help'); expect(s.modes?.current).toBe('plan'); expect(s.usage?.used).toBe(10);
   });
 });
+
+describe('SessionModel: widgets support', () => {
+  const call = (id: string, extra: Record<string, unknown> = {}) => ({ sessionUpdate: 'tool_call', toolCallId: id, title: 'mcp__page__x', name: 'mcp__page__x', kind: 'other', status: 'pending', rawInput: { a: 1 }, _meta: { claudeCode: { toolName: 'mcp__page__x' } }, ...extra });
+
+  test('items applied while replaying are marked replayed; meta is kept and merged', () => {
+    const m = new SessionModel();
+    m.replaying = true;
+    m.applyUpdate(call('t1'));
+    m.applyUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: '{"ok":1}' } }], _meta: { claudeCode: { toolName: 'mcp__page__x', extra: true } } });
+    m.replaying = false;
+    m.applyUpdate(call('t2'));
+    const items = m.snapshot().turns.flatMap((t) => t.items) as Array<{ toolCallId: string; replayed?: boolean; meta?: Record<string, unknown>; status: string }>;
+    expect(items.map((i) => [i.toolCallId, i.replayed ?? false])).toEqual([['t1', true], ['t2', false]]);
+    expect(items[0]!.meta).toEqual({ claudeCode: { toolName: 'mcp__page__x', extra: true } });
+    expect(items[0]!.status).toBe('completed');
+    expect(m.toolCall('t2')?.toolCallId).toBe('t2');
+    expect(m.openToolCalls().map((i) => i.toolCallId)).toEqual(['t2']);
+    expect(m.toolCall('nope')).toBeUndefined();
+  });
+
+  test('elicitations are pending until answered; cancelPending settles permissions and elicitations as cancel', () => {
+    const m = new SessionModel();
+    const results: unknown[] = [];
+    m.addElicitation({ id: 'e1', message: 'Which?', schema: { type: 'object', properties: {} }, respond: (r) => results.push(r) });
+    expect(m.snapshot().pendingElicitations).toHaveLength(1);
+    expect(m.snapshot().pendingElicitations[0]!.message).toBe('Which?');
+    m.snapshot().pendingElicitations[0]!.respond({ action: 'accept', content: { choice: 'a' } });
+    expect(results).toEqual([{ action: 'accept', content: { choice: 'a' } }]);
+    expect(m.snapshot().pendingElicitations).toHaveLength(0);
+    const answers: string[] = [];
+    m.addElicitation({ id: 'e2', message: 'Again?', schema: {}, respond: (r) => results.push(r) });
+    m.addPermission({ id: 'p1', title: 'Write', options: [{ optionId: 'a', name: 'Yes', kind: 'allow_once' }], respond: (id) => answers.push(id) });
+    m.cancelPending();
+    expect(results.at(-1)).toEqual({ action: 'cancel' });
+    expect(answers).toEqual(['__cancelled__']);
+    expect(m.snapshot().pendingElicitations).toHaveLength(0);
+    expect(m.snapshot().pendingPermissions).toHaveLength(0);
+  });
+
+  test('replayed user text drops the folded widget-activity resource as it drops the ui-state one', () => {
+    const m = new SessionModel();
+    m.applyUpdate(chunk('user', 'hello\npage://widget-activity\nRecent widget activity:\n- did a thing'));
+    m.applyUpdate(chunk('agent', 'hi'));
+    m.applyUpdate(chunk('user', 'again\npage://ui-state\n{}\npage://widget-activity\n- x'));
+    const texts = m.snapshot().turns.flatMap((t) => t.items).map((i) => (i as { text: string }).text);
+    expect(texts).toEqual(['hello', 'hi', 'again']);
+  });
+});

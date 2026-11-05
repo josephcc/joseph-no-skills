@@ -2,8 +2,10 @@
  * A small ACP agent with sessions, for tests of the thread model (plan threads-and-auto-mode, D-35):
  * session/new, load (replays history), list, close, delete, set_mode, and an echo prompt.
  * Prompt text containing "slow" stays open until `release()` or session/cancel; text containing
- * "ask" first requests a permission. Shared by the bun unit tests (in-process stream pair) and
- * `scripts/e2e/fake-agent.mjs` (stdio, optionally persisted to a file across processes).
+ * "ask" first requests a permission; "ask-form" asks a form elicitation; `widget:<tool> <json>` announces a
+ * page tool call (`mcp__page__<tool>`), runs it through `callPage` when given, and reports the result the way
+ * the Claude adapter does (plan in-chat-widgets §7.1). Shared by the bun unit tests (in-process stream pair)
+ * and `scripts/e2e/fake-agent.mjs` (stdio, optionally persisted to a file across processes).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as acp from '@agentclientprotocol/sdk';
@@ -19,6 +21,20 @@ export interface FakeAgentOptions {
   modes?: string[] | null;
   /** Keep sessions in this JSON file so a later process sees them (e2e). */
   persistFile?: string;
+  /** Run a page tool for `widget:<tool> <json>` prompts and return the result text; omitted → an echo of the input. */
+  callPage?: (session: StoredSession, tool: string, input: Record<string, unknown>) => Promise<string>;
+}
+
+export interface StoredChunk {
+  role: 'user' | 'agent' | 'tool';
+  text: string;
+  /** role 'user': the URIs of the resource blocks the prompt carried (page://ui-state, page://widget-activity). */
+  resources?: string[];
+  /** role 'tool': the call as it was announced, so session/load can replay it. */
+  toolCallId?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  failed?: boolean;
 }
 
 export interface StoredSession {
@@ -27,7 +43,9 @@ export interface StoredSession {
   title?: string;
   updatedAt: string;
   mode: string;
-  chunks: Array<{ role: 'user' | 'agent'; text: string }>;
+  chunks: StoredChunk[];
+  /** The mcpServers the client passed on session/new (the page's endpoint; e2e derives the daemon from it). */
+  mcpServers?: unknown[];
 }
 
 export interface FakeAgent {
@@ -56,6 +74,14 @@ export function buildFakeAgent(opts: FakeAgentOptions = {}): FakeAgent {
   const session = (id: string) => { const s = store.get(id); if (!s) throw acp.RequestError.invalidParams({ sessionId: id }, `no session ${id}`); return s; };
   const record = (method: string, params: any) => calls.push({ method, params });
   const update = (ctx: any, sessionId: string, update: Record<string, unknown>) => ctx.client.notify(acp.methods.client.session.update, { sessionId, update });
+  const toolCallFrames = (c: StoredChunk) => {
+    const name = `mcp__page__${c.name}`;
+    const meta = { claudeCode: { toolName: name } };
+    const first = { sessionUpdate: 'tool_call', toolCallId: c.toolCallId, title: name, name, kind: 'other', status: 'pending', content: [], rawInput: c.input ?? {}, _meta: meta };
+    const text = c.failed ? `\`\`\`\n${c.text}\n\`\`\`` : c.text;
+    const last = { sessionUpdate: 'tool_call_update', toolCallId: c.toolCallId, status: c.failed ? 'failed' : 'completed', content: [{ type: 'content', content: { type: 'text', text } }], _meta: meta };
+    return [first, last];
+  };
 
   const app = acp.agent({ name: opts.name ?? 'fake-agent' })
     .onRequest(acp.methods.agent.initialize, (ctx: any) => {
@@ -69,7 +95,7 @@ export function buildFakeAgent(opts: FakeAgentOptions = {}): FakeAgent {
     .onRequest(acp.methods.agent.session.new, (ctx: any) => {
       record('session/new', ctx.params);
       const id = `${opts.name ?? 'fake'}-${++seq}-${Math.random().toString(36).slice(2, 6)}`;
-      const s: StoredSession = { id, cwd: String(ctx.params.cwd), updatedAt: new Date().toISOString(), mode: 'default', chunks: [] };
+      const s: StoredSession = { id, cwd: String(ctx.params.cwd), updatedAt: new Date().toISOString(), mode: 'default', chunks: [], ...(Array.isArray(ctx.params.mcpServers) ? { mcpServers: ctx.params.mcpServers } : {}) };
       store.set(id, s); loaded.add(id); persist();
       const m = modeState(s);
       return { sessionId: id, ...(m ? { modes: m } : {}) };
@@ -79,7 +105,10 @@ export function buildFakeAgent(opts: FakeAgentOptions = {}): FakeAgent {
       if (!(opts.loadSession ?? true)) throw acp.RequestError.methodNotFound('session/load');
       const s = session(String(ctx.params.sessionId));
       loaded.add(s.id);
-      for (const c of s.chunks) await update(ctx, s.id, { sessionUpdate: c.role === 'user' ? 'user_message_chunk' : 'agent_message_chunk', content: { type: 'text', text: c.text } });
+      for (const c of s.chunks) {
+        if (c.role === 'tool') { for (const f of toolCallFrames(c)) await update(ctx, s.id, f); continue; }
+        await update(ctx, s.id, { sessionUpdate: c.role === 'user' ? 'user_message_chunk' : 'agent_message_chunk', content: { type: 'text', text: c.text } });
+      }
       const m = modeState(s);
       return m ? { modes: m } : {};
     })
@@ -113,10 +142,36 @@ export function buildFakeAgent(opts: FakeAgentOptions = {}): FakeAgent {
     .onRequest(acp.methods.agent.session.prompt, async (ctx: any) => {
       record('session/prompt', ctx.params);
       const s = session(String(ctx.params.sessionId));
-      const text = (ctx.params.prompt as Array<{ type: string; text?: string }>).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ');
-      s.chunks.push({ role: 'user', text }); s.updatedAt = new Date().toISOString(); persist();
+      const blocks = ctx.params.prompt as Array<{ type: string; text?: string; resource?: { uri?: string } }>;
+      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ');
+      const resources = blocks.filter((b) => b.type === 'resource').map((b) => String(b.resource?.uri ?? ''));
+      s.chunks.push({ role: 'user', text, ...(resources.length ? { resources } : {}) }); s.updatedAt = new Date().toISOString(); persist();
+      if (/\breject-prompt\b/.test(text)) { s.chunks.pop(); persist(); throw acp.RequestError.internalError(undefined, 'the agent refused this prompt'); }
       let reply = `echo: ${text}`;
-      if (/\bask\b/.test(text)) {
+      const widget = /^widget:(\S+)\s*(\{.*\})?\s*$/s.exec(text);
+      if (widget) {
+        // A page tool call the way the Claude adapter reports it: tool_call (pending, name, rawInput, _meta), then the result.
+        const tool = widget[1]!;
+        let input: Record<string, unknown> = {};
+        try { input = widget[2] ? JSON.parse(widget[2]) : {}; } catch { /* keep {} */ }
+        const chunk: StoredChunk = { role: 'tool', toolCallId: `toolu_${++seq}_${Math.random().toString(36).slice(2, 6)}`, name: tool, input, text: '' };
+        const [first] = toolCallFrames(chunk);
+        await update(ctx, s.id, first!);
+        try { chunk.text = opts.callPage ? await opts.callPage(s, tool, input) : JSON.stringify({ echoed: input }); }
+        catch (err) { chunk.failed = true; chunk.text = `${tool}: ${(err as Error)?.name ?? 'Error'}: ${(err as Error)?.message ?? String(err)}`; }
+        await update(ctx, s.id, toolCallFrames(chunk)[1]!);
+        s.chunks.push(chunk);
+        reply = chunk.failed ? 'the tool failed' : 'card shown';
+      } else if (/ask-form/.test(text)) {
+        const r = await ctx.client.request(acp.methods.client.elicitation.create, {
+          sessionId: s.id, mode: 'form', message: 'Which one?',
+          requestedSchema: { type: 'object', properties: {
+            choice: { type: 'string', title: 'Choice', oneOf: [{ const: 'a', title: 'Option A' }, { const: 'b', title: 'Option B', description: 'the other one' }] },
+            choice_custom: { type: 'string', title: 'Other', description: 'Type your own answer (optional).' },
+          } },
+        });
+        reply = `form: ${JSON.stringify(r)}`;
+      } else if (/\bask\b/.test(text)) {
         const r = await ctx.client.request(acp.methods.client.session.requestPermission, {
           sessionId: s.id,
           toolCall: { toolCallId: `t-${Date.now()}`, title: 'write a note', name: 'Write', kind: 'edit', status: 'pending' },

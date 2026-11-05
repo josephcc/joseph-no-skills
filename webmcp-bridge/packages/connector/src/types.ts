@@ -1,4 +1,5 @@
 import type { ToolInfo } from './protocol.ts';
+import type { ActivityLog, PendingCall } from './widgets.ts';
 
 export type ConnectorState =
   | 'idle'            // created, not asked to connect
@@ -76,4 +77,16 @@ export interface PageConnection {
   /** Re-read document.modelContext and push the tool list (normally automatic via toolchange). */
   refreshTools(): Promise<ToolInfo[]>;
   setInstructions(instructions?: string, instructionsSummary?: string): void;
+  /** Page tool calls in flight right now (from either Claude), oldest first. */
+  readonly calls: readonly PendingCall[];
+  /** Every page tool call, start and end, like the `onToolCall` option. */
+  onCall(listener: (event: ToolCallEvent) => void): () => void;
+  /** Mark a call as belonging to a chat thread's transcript item; the floating widget panel then leaves it alone. */
+  claimCall(callId: string, by: string): void;
+  /** Who claimed a call (a thread id), remembered for a minute after the call ends. */
+  claimOf(callId: string): string | undefined;
+  /** Fires when a call is claimed (also after it ended), so a panel showing it can take it down. */
+  onClaim(listener: (callId: string, by: string) => void): () => void;
+  /** What the user did in the page's cards; attached to the next prompt and to the terminal hook's state text. */
+  readonly activity: ActivityLog;
 }

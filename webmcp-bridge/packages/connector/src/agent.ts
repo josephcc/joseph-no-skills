@@ -26,6 +26,8 @@ export interface AgentOptions {
   defaultMode?: PermissionModeId | null;
   /** What happens to the thread you switch away from. Default 'keep-while-prompting' (D-36). */
   switchPolicy?: SwitchPolicy;
+  /** Advertise form elicitation so the agent can ask structured questions in the page (Claude's AskUserQuestion). Default true. */
+  elicitation?: boolean;
   /** Advanced: speak ACP over this stream instead of the daemon's /acp socket (tests, custom transports). */
   stream?: Stream;
 }
@@ -66,6 +68,9 @@ export async function openAgent(page: PageConnection, opts: AgentOptions = {}): 
     autoAllowReadOnly,
     defaultMode: opts.defaultMode,
     switchPolicy: opts.switchPolicy,
+    elicitation: opts.elicitation,
+    activity: page.activity,
+    calls: typeof page.onCall === 'function' ? { onCall: (l) => page.onCall(l), calls: () => page.calls, claimCall: (id, by) => page.claimCall(id, by) } : undefined,
   });
 }
 

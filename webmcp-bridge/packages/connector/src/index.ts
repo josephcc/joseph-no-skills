@@ -5,6 +5,7 @@ import { callTool, debounce, listTools } from './mirror.ts';
 import { hasNativeModelContext, installShim } from './shim.ts';
 import type { ConnectOptions, ConnectorStatus, PageConnection, ToolCallEvent } from './types.ts';
 import { CONNECTOR_VERSION } from './version.ts';
+import { ACTIVITY_HEADING, createActivityLog, type PendingCall } from './widgets.ts';
 
 export type { ConnectOptions, ConnectorState, ConnectorStatus, PageConnection, ToolCallEvent, ToolPolicy } from './types.ts';
 export { installShim, hasNativeModelContext } from './shim.ts';
@@ -12,12 +13,17 @@ export { preamble } from './preamble.ts';
 export * from './protocol.ts';
 export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
 export { CONNECTOR_VERSION } from './version.ts';
-export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type ToolCallItem, type PendingPermission } from './session-model.ts';
+export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult } from './session-model.ts';
+export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, sanitiseToolName, createActivityLog, deepEqual, ACTIVITY_HEADING, type WidgetInstance, type WidgetStatus, type PendingCall, type ActivityEntry, type ActivityLog } from './widgets.ts';
 
 const DEFAULT_URL = `ws://127.0.0.1:${DEFAULT_PORT}`;
 const APPROVAL_GRACE_MS = 1_500;
 const MIN_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 15_000;
+/** The terminal hook injects at most 10,000 characters; the daemon's frame header takes some; leave room. */
+const STATE_TEXT_BUDGET = 9_000;
+/** How long a call's claim is remembered after it ends (the floating panel checks claims 400 ms after a start). */
+const CLAIM_MEMORY_MS = 60_000;
 
 /**
  * Connect this page to the local webmcp-daemon: mirrors the page's WebMCP tools,
@@ -41,7 +47,13 @@ export function connect(options: ConnectOptions = {}): PageConnection {
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let approvalTimer: ReturnType<typeof setTimeout> | undefined;
   let backoff = minRetry;
-  const inflight = new Map<string, AbortController>();
+  const inflight = new Map<string, PendingCall & { controller: AbortController }>();
+  const claims = new Map<string, string>();
+  const claimListeners = new Set<(callId: string, by: string) => void>();
+  const callListeners = new Set<(event: ToolCallEvent) => void>();
+  if (options.onToolCall) callListeners.add(options.onToolCall);
+  const activity = createActivityLog();
+  const emitCall = (event: ToolCallEvent) => { for (const l of callListeners) { try { l(event); } catch (err) { console.error('webmcp-connector: onCall listener failed', err); } } };
 
   const emit = (patch: Partial<ConnectorStatus>) => {
     Object.assign(status, patch);
@@ -78,7 +90,7 @@ export function connect(options: ConnectOptions = {}): PageConnection {
     switch (frame.type) {
       case 'welcome': onWelcome(frame); break;
       case 'call': void onCall(frame); break;
-      case 'cancel': inflight.get(frame.callId)?.abort(); break;
+      case 'cancel': inflight.get(frame.callId)?.controller.abort(); break;
       case 'context/request': void onContextRequest(frame.requestId); break;
       case 'error': emit({ lastError: frame.message }); break;
     }
@@ -86,7 +98,7 @@ export function connect(options: ConnectOptions = {}): PageConnection {
 
   link.on('close', ({ code, reason, openedBefore }) => {
     clearTimeout(approvalTimer);
-    for (const c of inflight.values()) c.abort();
+    for (const c of inflight.values()) c.controller.abort();
     inflight.clear();
     if (!wantConnected) { emit({ state: 'idle' }); return; }
     if (code === 4403 || reason === 'origin-denied') {
@@ -121,30 +133,44 @@ export function connect(options: ConnectOptions = {}): PageConnection {
 
   async function onCall(frame: Extract<DaemonFrame, { type: 'call' }>) {
     const controller = new AbortController();
-    inflight.set(frame.callId, controller);
+    const args = frame.args ?? {};
+    inflight.set(frame.callId, { callId: frame.callId, name: frame.name, args, startedAt: Date.now(), signal: controller.signal, controller });
     const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), frame.timeoutMs);
     const started = performance.now();
-    options.onToolCall?.({ callId: frame.callId, name: frame.name, args: frame.args, phase: 'start' });
+    emitCall({ callId: frame.callId, name: frame.name, args, phase: 'start' });
     try {
-      const result = await callTool(mc, frame.name, frame.args ?? {}, controller.signal);
+      const result = await callTool(mc, frame.name, args, controller.signal);
       link.send({ type: 'call/result', callId: frame.callId, ok: true, result });
-      options.onToolCall?.({ callId: frame.callId, name: frame.name, args: frame.args, phase: 'end', ok: true, result, durationMs: performance.now() - started });
+      inflight.delete(frame.callId);
+      emitCall({ callId: frame.callId, name: frame.name, args, phase: 'end', ok: true, result, durationMs: performance.now() - started });
     } catch (err) {
       const e = err as { name?: string; message?: string };
       const error = { name: e?.name ?? 'Error', message: e?.message ?? String(err) };
       link.send({ type: 'call/result', callId: frame.callId, ok: false, error });
-      options.onToolCall?.({ callId: frame.callId, name: frame.name, args: frame.args, phase: 'end', ok: false, error: `${error.name}: ${error.message}`, durationMs: performance.now() - started });
+      inflight.delete(frame.callId);
+      emitCall({ callId: frame.callId, name: frame.name, args, phase: 'end', ok: false, error: `${error.name}: ${error.message}`, durationMs: performance.now() - started });
     } finally {
       clearTimeout(timer);
       inflight.delete(frame.callId);
+      if (claims.has(frame.callId)) setTimeout(() => claims.delete(frame.callId), CLAIM_MEMORY_MS);
     }
+  }
+
+  /** The state text for terminal Claude: the page's context(), then the recent widget activity while it fits the hook's budget. */
+  async function stateText(): Promise<string> {
+    const text = String((await options.context!()) ?? '');
+    const entries = activity.entries.slice(-10);
+    if (entries.length === 0) return text;
+    const room = STATE_TEXT_BUDGET - text.length - ACTIVITY_HEADING.length - 4;
+    if (room < 40) return text;
+    const section = activity.format(entries, { maxChars: room });
+    return section ? `${text}\n\n${ACTIVITY_HEADING}\n${section}` : text;
   }
 
   async function onContextRequest(requestId: string) {
     if (!options.context) { link.send({ type: 'context/result', requestId, error: 'page has no context()' }); return; }
     try {
-      const text = await options.context();
-      link.send({ type: 'context/result', requestId, text: String(text ?? '') });
+      link.send({ type: 'context/result', requestId, text: await stateText() });
     } catch (err) {
       link.send({ type: 'context/result', requestId, error: err instanceof Error ? err.message : String(err) });
     }
@@ -179,6 +205,16 @@ export function connect(options: ConnectOptions = {}): PageConnection {
       instructionsSummary = summary;
       link.send({ type: 'instructions', instructions, instructionsSummary });
     },
+    get calls() { return [...inflight.values()].map(({ controller: _c, ...call }) => ({ ...call, ...(claims.has(call.callId) ? { claimedBy: claims.get(call.callId) } : {}) })); },
+    onCall(listener) { callListeners.add(listener); return () => callListeners.delete(listener); },
+    claimCall(callId, by) {
+      claims.set(callId, by);
+      if (!inflight.has(callId)) setTimeout(() => { if (claims.get(callId) === by) claims.delete(callId); }, CLAIM_MEMORY_MS);
+      for (const l of claimListeners) { try { l(callId, by); } catch (err) { console.error('webmcp-connector: onClaim listener failed', err); } }
+    },
+    claimOf(callId) { return claims.get(callId); },
+    onClaim(listener) { claimListeners.add(listener); return () => claimListeners.delete(listener); },
+    activity,
   };
 
   const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
