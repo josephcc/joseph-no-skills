@@ -44,14 +44,23 @@ document.modelContext.registerTool({ name: 'get_state', description: '…', inpu
 
 React chat: `import { AgentChat } from 'webmcp-connector/react'` and render `<AgentChat page={page} />`.
 
+## The menu bar item
+
+While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 140 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
+
 ## For Claude Code users
 
 ```bash
 /plugin install webmcp-daemon --marketplace <owner>/<repo>   # inside Claude Code, once this repo is pushed (replace <owner>/<repo>)
 # or, from a checkout:
 claude --plugin-dir ./plugin
-# then just run `claude`: the SessionStart hook starts the daemon; /webmcp-daemon:setup offers a login item
+# then just run `claude`: the SessionStart hook starts the daemon (menu bar item "webmcp-bridge" appears) and, until
+# setup is finished, Claude offers to make it start at login. After that the browser chat works with no terminal.
 ```
+
+The plugin has one setting, *Inject page context into terminal sessions* (default on): a connected page's instructions are added at session start and its UI state with every prompt. Turn it off if you only use the chat in the browser.
+
+All of the daemon's state (approvals, workspaces, logs, pid) lives in `~/.webmcp-daemon`, shared by the CLI, the plugin, the login item and the menu bar item.
 
 The repository root carries the marketplace manifest (`.claude-plugin/marketplace.json`), so the install line works as soon as the repo is hosted.
 

@@ -9,9 +9,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bin_dir="$WEBMCP_STATE/bin"
 if [ -f "$bin_dir/webmcp-daemon.js" ]; then
   changed=0
-  for f in webmcp-daemon.js claude-agent-acp.js; do
+  for f in webmcp-daemon.js claude-agent-acp.js tray/webmcp-bridge-tray; do
     src="$here/../daemon/$f"
-    if [ -f "$src" ] && ! cmp -s "$src" "$bin_dir/$f"; then cp "$src" "$bin_dir/$f" && changed=1; fi
+    if [ -f "$src" ] && ! cmp -s "$src" "$bin_dir/$f"; then mkdir -p "$(dirname "$bin_dir/$f")" && cp "$src" "$bin_dir/$f" && changed=1; fi
   done
   if [ "$changed" = 1 ] && command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1; then
     launchctl kickstart -k "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1 || true
@@ -24,7 +24,7 @@ daemon_ts="$here/../../bridge/src/index.ts"     # repo checkout (dev) fallback
 if [ -f "$daemon_js" ]; then entry="$daemon_js"; elif [ -f "$daemon_ts" ]; then entry="$daemon_ts"; else echo "webmcp-daemon: no daemon bundle found next to the plugin" >&2; exit 0; fi
 if ! command -v node >/dev/null 2>&1; then echo "webmcp-daemon: node is required to run the daemon" >&2; exit 0; fi
 # Detach fully (new process group, no inherited stdio) so the daemon outlives this hook and the session.
-node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" --port "$WEBMCP_PORT" >/dev/null 2>&1 || { echo "webmcp-daemon: failed to spawn the daemon" >&2; exit 0; }
+node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" --port "$WEBMCP_PORT" --tray >/dev/null 2>&1 || { echo "webmcp-daemon: failed to spawn the daemon" >&2; exit 0; }
 for _ in $(seq 1 40); do
   if webmcp_healthy; then exit 0; fi
   sleep 0.25

@@ -92,7 +92,7 @@ export class AcpRelay {
         // a reload reconnects with a fresh adapter and `session/load`.
         const stopSoon = () => { if (child.exitCode === null && !child.killed) setTimeout(() => { if (child.exitCode === null) child.kill('SIGTERM'); }, DISCONNECT_GRACE_MS).unref(); };
         clientStream.readable.pipeThrough(touch).pipeTo(agentStream.writable).then(stopSoon, stopSoon);
-        agentStream.readable.pipeThrough(touch2).pipeTo(clientStream.writable).catch(() => {});
+        agentStream.readable.pipeThrough(touch2).pipeTo(clientStream.writable, { preventCancel: true }).catch(() => {});
         const closed = new Promise<void>((resolve) => {
           child.once('exit', (code, signal) => { this.#children.delete(child); log.info(`acp: agent pid ${child.pid} exited (${code ?? signal})`); resolve(); });
           child.once('error', (err) => {   // e.g. a misconfigured --agent command: fail this connection, keep the daemon alive

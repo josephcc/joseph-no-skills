@@ -1,5 +1,6 @@
 **Status:** implemented (PoC verified 2026-11-05); review results in §14
 **Date:** 2026-11-04
+**Update 2026-11-05 (rev 5, setup flow + menu bar):** [D-29](#D-29) streamlined setup (browser chat is the primary surface; terminal is a one-time installer; plugin option to keep terminal sessions clean; one state dir `~/.webmcp-daemon`); [D-30](#D-30) "webmcp-bridge" menu bar item owned by the daemon and shipped in the plugin; chat panel setup-flow empty state; demo chat as a left sidebar; findings [F-17](#F-17)–[F-18](#F-18).
 **Update 2026-11-05 (rev 4.1, gaps closed):** approval page verified in a real browser (c2 now earned), cancel mid-turn (c13), agent picker end to end with a fake ACP agent (c28), publishable package build with type declarations, LICENSE, marketplace manifest (validated), fresh-checkout script, hook refresh of the login-item copy, slash-command menu and auto-allow toggle in the chat UI. Remaining by design: real login-item registration (c27) and the Local Network Access prompt (F-16).
 **Update 2026-11-05 (rev 4, implementation):** M0–M6 built and verified; results, final names and new findings in §14; checks ticked where a scripted or real-Claude run proved them.
 **Update 2026-11-05 (rev 3):** review pass on the user's answers: Q-2, Q-3, Q-5, Q-7, Q-9, Q-10 converted to decisions [D-23](#D-23)–[D-28](#D-28); consequences of "replace the preset" and "full Claude Code in a scratch workspace" propagated into §5.6, §6, M2/M5/M6 and the checklist; launchd consent and fallback added to [D-16](#D-16); measured science-kg prompt sizes recorded in [F-10](#F-10); "resource" glossary line added to §6. Status set to ready-to-implement, awaiting the user's go.
@@ -100,7 +101,7 @@ Context from the same thread (my paraphrase, not the user's words): "MV3" was ex
 | **Demo page** | Vite vanilla-ts page importing the package; four WebMCP tools (colour + sentence), live tool list, call log, bonus tool, chat panel | you, and the plugin's smoke test |
 | **`webmcp-bridge` Claude Code plugin** (name placeholder) | the daemon as one bundled JS file; hooks (SessionStart ensures the daemon and injects page instructions, UserPromptSubmit injects the UI-state snapshot); `.mcp.json` pointing terminal Claude at the daemon; a skill teaching Claude how to use page tools | anyone with Claude Code |
 
-Not shipped: the Chrome extension (future work, §13), browser automation, screenshots. **science-kg is not modified in this project**; its chat components may be copied into the package where they help ([D-21](#D-21)), and its integration is a later, separate plan ([D-22](#D-22)).
+The daemon's macOS menu bar item "webmcp-bridge" ships inside the plugin ([D-30](#D-30)). Not shipped: the Chrome extension (future work, §13), browser automation, screenshots, a separate menu bar app. **science-kg is not modified in this project**; its chat components may be copied into the package where they help ([D-21](#D-21)), and its integration is a later, separate plan ([D-22](#D-22)).
 
 ### 1.2 Verdicts
 
@@ -531,7 +532,7 @@ Whatever [D-23](#D-23) decides, `webmcp_list_pages / use_page / list_tools / cal
 
 <decision id="D-8" title="Origin approval on first contact replaces a pasted token" status="proposed" date="2026-11-04">
 Loopback bind; `Origin` allow-list persisted by the daemon; unknown origins trigger the approval page; every `/acp` session start is logged (§5.5).
-<rationale>The `Origin` header cannot be forged by page JavaScript, so approval-by-origin protects against the web-page threat without asking users to copy tokens; a forged header needs a local process that could already run Claude Code.</rationale>
+<rationale>The `Origin` header cannot be forged by page JavaScript, so approval-by-origin protects against the web-page threat without asking users to copy tokens; a forged header needs a local process that could already run Claude Code. Reaffirmed by the user on 2026-11-05 after the Codex audit: a malicious same-user process is inside the OS trust boundary and is not something this project guards against; the token-file, Unix-socket and process-identity hardening discussed then is deliberately not planned.</rationale>
 </decision>
 
 <decision id="D-9" title="The browser ACP client declares no fs or terminal capabilities" status="proposed" date="2026-11-04">
@@ -548,6 +549,17 @@ A page is not an editor; `fs/*` and `terminal/*` requests are declined. Claude C
 
 <decision id="D-12" title="Build order: daemon + package + terminal path first, with the ACP spike pulled forward as a risk check" status="proposed" date="2026-11-04">
 See §9. The terminal path is the smaller half and exercises the tool channel the embedded chat reuses; the one-day ACP spike retires the auth/transport risk before the chat UI is built.
+</decision>
+
+
+<decision id="D-29" title="The browser chat is the primary surface; a terminal session is a one-time installer" status="locked" date="2026-11-05">
+Requested by the user on 2026-11-05 after trying the demo: starting `claude` only to get the daemon left two chats. Now: (1) the chat panel's empty state is a setup flow (install the plugin, run `claude` once, say yes to "start at login", close the terminal); (2) the plugin's SessionStart hook injects a notice that the page has its own chat in the browser and, until `~/.webmcp-daemon/setup-done` exists or a login item is present, nudges Claude to offer `/webmcp-daemon:setup`; (3) the login item is the expected state; (4) a plugin setting `inject_page_context` (default on) lets browser-only users keep terminal sessions free of page instructions and state. The daemon, plugin, login item and menu bar item share one state directory, `~/.webmcp-daemon`.
+<rationale>Claude Code honours a hook's `initialUserMessage` only in `-p` mode, where it would hijack scripted runs, so the first-session nudge is a context notice, not an auto-submitted prompt ([F-17](#F-17)).</rationale>
+</decision>
+
+<decision id="D-30" title="The daemon owns a macOS menu bar item, \"webmcp-bridge\", shipped inside the plugin" status="locked" date="2026-11-05">
+No Node library can create a status item in-process without Electron (`systray2` is unmaintained since 2022 and ships only an x86_64 helper), so the daemon spawns a 140 KB Objective-C status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, universal binary, `bun run build:tray`) and drives it over JSON lines on stdin/stdout; the helper exits with the daemon. Menu: status, Start at login (launchd), open log, show state folder, copy MCP URL, stop. The plugin hook and the login item pass `--tray`; tests and `bun run daemon` do not. There is no separate app to install.
+<rationale>User's choice on 2026-11-05: ship it inside the plugin and prefer registering from the daemon over a separate Swift app. The helper is Objective-C because this machine's Command Line Tools Swift toolchain has a duplicate `SwiftBridging` module-map defect ([F-18](#F-18)); clang with Cocoa compiles without it.</rationale>
 </decision>
 
 <user-highlight comment="cm1"></user-highlight>
@@ -716,6 +728,14 @@ They are documented in `claude-agent-acp`'s source and `NewSessionMeta` type, an
 Changing a page's instructions mid-session reaches terminal Claude via the next SessionStart (resume/clear/compact) and the embedded chat via the next session; the daemon rewrites the workspace files immediately so new sessions are right.
 </finding>
 
+<finding id="F-17" title="Hook `initialUserMessage` applies only to -p mode" severity="p3" status="open" effort="small">
+Claude Code's docs: it "becomes the first turn" in non-interactive `-p` runs; interactive behaviour is undocumented. Using it from a plugin hook would hijack every scripted run, so the first-session setup nudge is delivered as `additionalContext` and relies on Claude offering the setup (verified: Claude quoted the notice and offered `/webmcp-daemon:setup`).
+</finding>
+
+<finding id="F-18" title="Command Line Tools' Swift cannot build AppKit apps here (duplicate SwiftBridging module map)" severity="p3" status="open" effort="small">
+`swiftc` from Command Line Tools 16-era (Swift 6.1.2, macOS 15.8.1) fails on any AppKit import with "redefinition of module 'SwiftBridging'", even under a clean environment; a full Xcode would avoid it. The status-bar helper is therefore Objective-C compiled by clang, which works with Command Line Tools alone.
+</finding>
+
 <finding id="F2-1" title="Subscription login cannot be offered to other users without Anthropic approval" severity="p1" status="open" effort="design">
 Agent SDK docs: "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." Your own machine with your own login is your own tooling; shipping science-kg-with-embedded-chat to other scientists on their subscriptions is not. API keys (`ANTHROPIC_API_KEY`, `apiKeyHelper`, the adapter's gateway auth) are the sanctioned path. The terminal path has no such issue. See [D-25](#D-25).
 </finding>
@@ -842,6 +862,6 @@ Where things are: `packages/connector` (npm package, `./react` subpath), `demo-s
 - `plugin/daemon/*.js` — bundles rebuilt from the fixed sources (follow-up finding 1); `bun run check:bundles` now fails when the committed bundle is stale.
 
 **Deferred / not actioned:**
-- None: all seven initial findings and both follow-up findings were verified against the code and fixed. A local process that forges `Origin` or sends header-less POSTs remains out of scope by design (D-8, §5.5).
+- None: all seven initial findings and both follow-up findings were verified against the code and fixed. A local process that forges `Origin` or sends header-less POSTs remains out of scope by design (D-8, §5.5), reaffirmed by the user on 2026-11-05. Suggested but not decided: a configuration-only origin allow-list with the approval prompt disabled as the deployment default.
 
 Codex's full final messages saved at `/tmp/codex-audit-20261104-190456-report.md` (initial) and `/tmp/codex-audit-20261104-191431-report.md` (follow-up).

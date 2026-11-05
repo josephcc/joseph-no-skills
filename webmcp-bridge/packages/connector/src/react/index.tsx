@@ -20,11 +20,19 @@ export interface AgentChatProps {
   showThoughts?: boolean;
   onHandle?: (handle: AgentHandle | undefined) => void;
   className?: string;
+  /** Shown while no daemon is reachable: how to get one. Steps are inline markdown-ish text; `code` spans render as code. */
+  setup?: { title?: string; steps?: string[] };
 }
 
 const EMPTY: SessionSnapshot = { state: 'connecting', turns: [], pendingPermissions: [], plan: [], commands: [] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, onHandle, className }: AgentChatProps) {
+const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
+  'Start the local daemon on this computer; it shows up as "webmcp-bridge" in the menu bar while it runs.',
+  'Or install the Claude Code plugin and run `claude` once; say yes to "start at login". After that, this chat works without a terminal.',
+  'Come back here: this panel connects by itself.',
+] };
+
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, onHandle, className, setup }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
   const [handle, setHandle] = useState<AgentHandle>();
@@ -84,8 +92,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   return (
     <section className={`wmc-chat${className ? ` ${className}` : ''}`} data-state={state}>
       <header className="wmc-head">
-        <h3>{title}{snap.title ? ` — ${snap.title}` : ''}</h3>
-        <span className="wmc-badge" data-state={state}>{state}</span>
+        <div className="wmc-head-row">
+          <h3 title={snap.title ?? title}>{title}</h3>
+          <span className="wmc-badge" data-state={state}>{state}</span>
+        </div>
+        <div className="wmc-head-row wmc-controls">
         {snap.modes && snap.modes.available.length > 0 && handle && (
           <select value={snap.modes.current ?? ''} onChange={(e) => void handle.setMode(e.target.value)} title="Permission mode">
             {snap.modes.available.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -93,7 +104,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         )}
         {handle && (
           <label className="wmc-toggle" title="Approve the page's read-only tools without asking">
-            <input type="checkbox" checked={autoAllow} onChange={(e) => { setAutoAllow(e.target.checked); handle.setAutoAllowReadOnly(e.target.checked); }} /> auto-allow read-only
+            <input type="checkbox" checked={autoAllow} onChange={(e) => { setAutoAllow(e.target.checked); handle.setAutoAllowReadOnly(e.target.checked); }} /> auto-allow read-only tools
           </label>
         )}
         {!handle && agents.length > 1 && (
@@ -105,9 +116,10 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         {handle && <button onClick={() => void newSession()} title="Start a fresh session">New</button>}
         {handle ? <button onClick={disconnect}>Disconnect</button>
           : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect to local Claude'}</button>}
+        </div>
       </header>
       {error && <div className="wmc-error">{error}</div>}
-      {!connected && !handle && <div className="wmc-error">The page is not connected to the local daemon ({pageStatus.state}).</div>}
+      {!connected && !handle && <SetupView state={pageStatus.state} setup={setup} />}
       <div className="wmc-log" ref={logRef}>
         {snap.turns.length === 0 && <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : 'Connect to start a chat with your local Claude about this page.'}</div>}
         {snap.turns.map((t) => (
@@ -132,15 +144,33 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         <button className="wmc-primary" disabled={!handle || snap.state === 'prompting' || !input.trim()} onClick={() => void send()}>Send</button>
       </div>
       <div className="wmc-foot">
-        {snap.sessionId && <span>session {snap.sessionId.slice(0, 8)}</span>}
-        {snap.agentName && <span>{snap.agentName}</span>}
+        {snap.sessionId && <span title={snap.title ? `Session: ${snap.title}` : undefined}>session {snap.sessionId.slice(0, 6)}</span>}
+        {snap.agentName && <span title={snap.agentName}>{snap.agentName.replace(/^@[^/]+\//, '')}</span>}
         {handle && handle.agentId !== 'claude' && <span>agent: {handle.agentId}</span>}
-        {snap.commands.length > 0 && <span>type / for {snap.commands.length} commands</span>}
-        {snap.usage?.used !== undefined && <span>context {formatK(snap.usage.used)}{snap.usage.size ? ` / ${formatK(snap.usage.size)}` : ''}</span>}
+        {snap.commands.length > 0 && <span title="Type / in the box to pick one">{snap.commands.length} commands</span>}
+        {snap.usage?.used !== undefined && <span>{formatK(snap.usage.used)}{snap.usage.size ? `/${formatK(snap.usage.size)}` : ''} ctx</span>}
         {snap.usage?.cost && <span>{snap.usage.cost.amount.toFixed(3)} {snap.usage.cost.currency}</span>}
+        {pageStatus.mcpUrl && <a href={new URL('/', pageStatus.mcpUrl).href} target="_blank" rel="noreferrer" title="Daemon status page">daemon</a>}
       </div>
     </section>
   );
+}
+
+function SetupView({ state, setup }: { state: ConnectorStatus['state']; setup?: AgentChatProps['setup'] }) {
+  if (state === 'needs-approval') return <div className="wmc-setup"><strong>Approve this page.</strong> The local daemon opened a tab asking whether this page may use your Claude; allow it there and this panel connects by itself.</div>;
+  if (state === 'denied') return <div className="wmc-setup"><strong>This page was denied.</strong> Allow it from the daemon's approval page (or its state folder) and reconnect.</div>;
+  if (state === 'searching' || state === 'idle') return <div className="wmc-setup">Looking for the local daemon…</div>;
+  const s = { ...DEFAULT_SETUP, ...(setup ?? {}) };
+  return (
+    <div className="wmc-setup">
+      <strong>{s.title}</strong>
+      <ol>{s.steps.map((step, i) => <li key={i}>{renderCode(step)}</li>)}</ol>
+      <div className="wmc-setup-note">One-time setup. The chat you want is this one, in the page; a terminal Claude session is only needed to install.</div>
+    </div>
+  );
+}
+function renderCode(text: string) {
+  return text.split(/(`[^`]+`)/g).map((part, i) => (part.startsWith('`') && part.endsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : <span key={i}>{part}</span>));
 }
 
 function TurnView({ items, stopReason, showThoughts }: { items: TurnItem[]; stopReason?: string; showThoughts: boolean }) {
@@ -170,7 +200,7 @@ function ToolCallView({ item }: { item: ToolCallItem }) {
   }, [item]);
   return (
     <details className="wmc-tool" data-status={item.status}>
-      <summary><span>{item.title}</span>{item.toolKind && <span className="wmc-kind">{item.toolKind}</span>}<span className="wmc-status">{item.status}</span></summary>
+      <summary><span className="wmc-title" title={item.title}>{item.title}</span>{item.toolKind && item.toolKind !== 'other' && <span className="wmc-kind">{item.toolKind}</span>}<span className="wmc-status">{item.status}</span></summary>
       {body && <pre>{body}</pre>}
     </details>
   );

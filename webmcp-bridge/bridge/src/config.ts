@@ -17,6 +17,10 @@ export interface DaemonConfig {
   callTimeoutMs: number;
   idleAgentMs: number;
   claudePath?: string;
+  /** Show the webmcp-bridge menu bar item (macOS). Off by default; the plugin hook and the login item turn it on. */
+  tray: boolean;
+  /** Show the item as text ("● webmcp-bridge") instead of a narrow icon; wide items get hidden under a MacBook notch. */
+  trayText: boolean;
   version: string;
 }
 
@@ -32,6 +36,8 @@ export function parseArgs(argv: string[], version: string): { command: string; c
     callTimeoutMs: 60_000,
     idleAgentMs: 10 * 60_000,
     claudePath: process.env.CLAUDE_CODE_EXECUTABLE,
+    tray: process.env.WEBMCP_DAEMON_TRAY === '1',
+    trayText: process.env.WEBMCP_DAEMON_TRAY_TEXT === '1',
     version,
   };
   let command = 'serve';
@@ -50,6 +56,9 @@ export function parseArgs(argv: string[], version: string): { command: string; c
       case '--call-timeout-ms': config.callTimeoutMs = Number(next()); break;
       case '--idle-agent-ms': config.idleAgentMs = Number(next()); break;
       case '--claude': config.claudePath = next(); break;
+      case '--tray': config.tray = true; break;
+      case '--no-tray': config.tray = false; break;
+      case '--tray-text': config.trayText = true; break;
       case '--dry-run': break;   // consumed by install-launchd
       case '-h': case '--help': command = 'help'; break;
       default: throw new Error(`unknown argument: ${a}`);
@@ -68,5 +77,6 @@ export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-
   --call-timeout-ms <n>      per page-tool call (default 60000)
   --idle-agent-ms <n>        reap idle embedded-chat agents (default 600000)
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
+  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
 `;

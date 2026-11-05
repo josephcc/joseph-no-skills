@@ -9991,8 +9991,8 @@ var require_content_type = __commonJS((exports) => {
 });
 
 // bridge/src/index.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync4, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // bridge/src/config.ts
 import { homedir } from "node:os";
@@ -10018,6 +10018,8 @@ function parseArgs(argv, version) {
     callTimeoutMs: 60000,
     idleAgentMs: 10 * 60000,
     claudePath: process.env.CLAUDE_CODE_EXECUTABLE,
+    tray: process.env.WEBMCP_DAEMON_TRAY === "1",
+    trayText: process.env.WEBMCP_DAEMON_TRAY_TEXT === "1",
     version
   };
   let command = "serve";
@@ -10080,6 +10082,15 @@ function parseArgs(argv, version) {
       case "--claude":
         config.claudePath = next();
         break;
+      case "--tray":
+        config.tray = true;
+        break;
+      case "--no-tray":
+        config.tray = false;
+        break;
+      case "--tray-text":
+        config.trayText = true;
+        break;
       case "--dry-run":
         break;
       case "-h":
@@ -10102,11 +10113,80 @@ var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] 
   --call-timeout-ms <n>      per page-tool call (default 60000)
   --idle-agent-ms <n>        reap idle embedded-chat agents (default 600000)
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
+  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
 `;
 
 // bridge/src/http.ts
 import { createServer } from "node:http";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
+
+// bridge/src/launchd.ts
+import { copyFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename, dirname, join as join2 } from "node:path";
+import { execFileSync } from "node:child_process";
+var LAUNCHD_LABEL = "com.webmcp.daemon";
+function launchdPlan(config, entry) {
+  const binDir = join2(config.stateDir, "bin");
+  const daemonCopy = join2(binDir, basename(entry));
+  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray"].map((f) => join2(dirname(entry), f)).filter(existsSync);
+  const plistPath = join2(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, "--port", String(config.port), "--tray"];
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key><array>${args.map((a) => `<string>${escapeXml(a)}</string>`).join("")}</array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${escapeXml(join2(config.stateDir, "launchd.log"))}</string>
+  <key>StandardErrorPath</key><string>${escapeXml(join2(config.stateDir, "launchd.log"))}</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string></dict>
+</dict></plist>
+`;
+  return { plistPath, binDir, plist, files: [entry, ...siblings] };
+}
+function installLaunchd(config, entry, { dryRun = false } = {}) {
+  if (process.platform !== "darwin")
+    throw new Error("install-launchd is macOS only (use a systemd user unit or Task Scheduler elsewhere)");
+  const plan = launchdPlan(config, entry);
+  if (dryRun)
+    return `# would write ${plan.plistPath}
+# would copy ${plan.files.join(", ")} → ${plan.binDir}
+${plan.plist}`;
+  mkdirSync(plan.binDir, { recursive: true });
+  for (const f of plan.files) {
+    const rel = f.endsWith("webmcp-bridge-tray") ? join2("tray", basename(f)) : basename(f);
+    mkdirSync(dirname(join2(plan.binDir, rel)), { recursive: true });
+    copyFileSync(f, join2(plan.binDir, rel));
+  }
+  mkdirSync(dirname(plan.plistPath), { recursive: true });
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
+  } catch {}
+  writeFileSync(plan.plistPath, plan.plist);
+  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
+  writeFileSync(join2(config.stateDir, "setup-done"), new Date().toISOString() + `
+`);
+  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
+}
+function uninstallLaunchd() {
+  const plistPath = join2(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
+  } catch {}
+  if (existsSync(plistPath)) {
+    unlinkSync(plistPath);
+    return `removed ${plistPath}`;
+  }
+  return "no login item installed";
+}
+function escapeXml(s) {
+  return s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]);
+}
 
 // bridge/src/log.ts
 var started = Date.now();
@@ -10157,8 +10237,8 @@ function sanitiseToolName(name) {
 }
 
 // bridge/src/security.ts
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { mkdirSync as mkdirSync2, readFileSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 class OriginPolicy {
@@ -10174,8 +10254,8 @@ class OriginPolicy {
     this.#noBrowser = noBrowser;
     this.#baseUrl = baseUrl;
     this.#open = opener;
-    mkdirSync(stateDir, { recursive: true });
-    this.#file = join2(stateDir, "origins.json");
+    mkdirSync2(stateDir, { recursive: true });
+    this.#file = join3(stateDir, "origins.json");
     try {
       this.#store = JSON.parse(readFileSync(this.#file, "utf8"));
     } catch {}
@@ -10236,7 +10316,7 @@ class OriginPolicy {
     return { ...this.#store, preapproved: this.#preapproved };
   }
   #save() {
-    writeFileSync(this.#file, JSON.stringify(this.#store, null, 2));
+    writeFileSync2(this.#file, JSON.stringify(this.#store, null, 2));
   }
 }
 function isSiteOrigin(origin) {
@@ -10316,6 +10396,51 @@ async function route(deps, req, res) {
         return json(res, 403, { error: "origin not authorised" });
       }
     }
+  }
+  if (path === "/" && req.method === "GET") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(statusPageHtml());
+    return;
+  }
+  if (path === "/status.json") {
+    const sel = registry.selected()?.id;
+    const loginInstalled = existsSync2(join4(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
+    let logTail = "";
+    try {
+      logTail = readFileSync2(join4(config.stateDir, "daemon.log"), "utf8").split(`
+`).slice(-40).join(`
+`);
+    } catch {}
+    return json(res, 200, {
+      version: config.version,
+      port: config.port,
+      stateDir: config.stateDir,
+      loginInstalled,
+      pid: process.pid,
+      pages: registry.all().map((p) => ({ id: p.id, title: p.title, origin: p.origin, tools: p.tools.length, selected: p.id === sel })),
+      agents: deps.acpStatus?.() ?? [],
+      origins: policy.snapshot(),
+      logTail
+    });
+  }
+  if (path === "/launchd" && req.method === "POST") {
+    if (req.headers.origin !== undefined && req.headers.origin !== selfOrigin)
+      return json(res, 403, { error: "origin not authorised" });
+    const body = JSON.parse(await readBody(req) || "{}");
+    try {
+      const msg = body.action === "uninstall" ? uninstallLaunchd() : installLaunchd(config, process.argv[1]);
+      return json(res, 200, { ok: true, message: msg });
+    } catch (err) {
+      return json(res, 500, { ok: false, message: String(err?.message ?? err) });
+    }
+  }
+  if (path === "/origins/forget" && req.method === "POST") {
+    if (req.headers.origin !== undefined && req.headers.origin !== selfOrigin)
+      return json(res, 403, { error: "origin not authorised" });
+    const body = JSON.parse(await readBody(req) || "{}");
+    if (body.origin)
+      policy.forget(body.origin);
+    return json(res, 200, { ok: true });
   }
   if (path === "/health") {
     const sel = registry.selected();
@@ -10406,6 +10531,34 @@ async function route(deps, req, res) {
     return deps.mcp(req, res, { pageId });
   }
   json(res, 404, { error: "not found" });
+}
+function statusPageHtml() {
+  return `<!doctype html><meta charset="utf-8"><title>webmcp-bridge</title>
+<style>body{font:15px/1.5 system-ui;margin:2rem auto;max-width:44rem;padding:0 1rem;color:#1a1a1a}h1{font-size:1.4rem}h2{font-size:1rem;margin:1.4rem 0 .4rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}button{font:inherit;padding:.35rem .8rem;border-radius:6px;border:1px solid #888;background:#fff;cursor:pointer}.on{background:#0a7;color:#fff;border-color:#0a7}.muted{color:#666}ul{padding-left:1.2rem}pre{background:#111;color:#eee;padding:.6rem;border-radius:6px;font-size:.8rem;max-height:16rem;overflow:auto}</style>
+<h1>● webmcp-bridge <span class="muted" id="v"></span></h1>
+<p>The local daemon that connects web pages to your Claude Code. Everything on this page stays on this computer.</p>
+<p><button id="login"></button> <span class="muted">A login item keeps the daemon (and this menu bar presence) available without a terminal.</span></p>
+<h2>Connected pages</h2><ul id="pages"><li class="muted">none</li></ul>
+<h2>Embedded chats</h2><ul id="agents"><li class="muted">none</li></ul>
+<h2>Approved origins</h2><ul id="origins"><li class="muted">none</li></ul>
+<h2>Claude Code</h2><p>MCP endpoint: <code id="mcp"></code> · state folder: <code id="state"></code></p>
+<h2>Log</h2><pre id="log"></pre>
+<script>
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(){const s=await (await fetch('/status.json')).json();
+document.getElementById('v').textContent='v'+s.version;
+const b=document.getElementById('login');b.textContent=s.loginInstalled?'Start at login: on (click to turn off)':'Start at login: off (click to turn on)';b.className=s.loginInstalled?'on':'';
+b.onclick=async()=>{b.disabled=true;const r=await (await fetch('/launchd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:s.loginInstalled?'uninstall':'install'})})).json();alert(r.message);load();};
+const li=(h)=>'<li>'+h+'</li>';
+document.getElementById('pages').innerHTML=s.pages.length?s.pages.map(p=>li(esc(p.title)+' <span class=muted>'+esc(p.origin)+' · '+p.tools+' tools'+(p.selected?' · selected':'')+'</span>')).join(''):'<li class=muted>none</li>';
+document.getElementById('agents').innerHTML=s.agents.length?s.agents.map(a=>li(esc(a.origin)+' <span class=muted>since '+new Date(a.startedAt).toLocaleTimeString()+'</span>')).join(''):'<li class=muted>none</li>';
+const o=[...s.origins.preapproved.map(x=>({o:x,fixed:true})),...s.origins.allowed.map(x=>({o:x}))];
+document.getElementById('origins').innerHTML=o.length?o.map(x=>li(esc(x.o)+(x.fixed?' <span class=muted>(command line)</span>':' <button data-o="'+esc(x.o)+'">forget</button>'))).join(''):'<li class=muted>none</li>';
+for(const f of document.querySelectorAll('button[data-o]'))f.onclick=async()=>{await fetch('/origins/forget',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({origin:f.dataset.o})});load();};
+document.getElementById('mcp').textContent=location.origin+'/mcp';document.getElementById('state').textContent=s.stateDir;
+document.getElementById('log').textContent=s.logTail||'(empty)';}
+load();setInterval(load,5000);
+</script>`;
 }
 function frameState(title, origin, text) {
   return `[webmcp] Current UI state of "${title}" (${origin}), captured ${new Date().toISOString()}:
@@ -10546,8 +10699,8 @@ function slugify(origin) {
 }
 
 // bridge/src/workspace.ts
-import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, existsSync } from "node:fs";
-import { join as join3 } from "node:path";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, existsSync as existsSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 
 class Workspaces {
   #stateDir;
@@ -10555,11 +10708,11 @@ class Workspaces {
     this.#stateDir = stateDir;
   }
   ensure(page) {
-    const dir = join3(this.#stateDir, "workspaces", page.slug);
-    mkdirSync2(join3(dir, ".claude"), { recursive: true });
-    const settings = join3(dir, ".claude", "settings.json");
-    if (!existsSync(settings)) {
-      writeFileSync2(settings, JSON.stringify({
+    const dir = join5(this.#stateDir, "workspaces", page.slug);
+    mkdirSync3(join5(dir, ".claude"), { recursive: true });
+    const settings = join5(dir, ".claude", "settings.json");
+    if (!existsSync3(settings)) {
+      writeFileSync3(settings, JSON.stringify({
         permissions: { defaultMode: "default", disableBypassPermissionsMode: "disable" }
       }, null, 2) + `
 `);
@@ -10576,8 +10729,8 @@ This workspace belongs to the web page at ${page.origin}. The page's tools are a
 
 ${text}
 `;
-    writeFileSync2(join3(dir, "CLAUDE.md"), body);
-    writeFileSync2(join3(dir, "AGENTS.md"), body);
+    writeFileSync3(join5(dir, "CLAUDE.md"), body);
+    writeFileSync3(join5(dir, "AGENTS.md"), body);
   }
 }
 
@@ -21799,10 +21952,10 @@ function readJson(req) {
 }
 
 // bridge/src/acp.ts
-import { spawn as spawn2, execFileSync } from "node:child_process";
-import { existsSync as existsSync2 } from "node:fs";
+import { spawn as spawn2, execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
-import { dirname, join as join4 } from "node:path";
+import { dirname as dirname2, join as join6 } from "node:path";
 import { Readable as Readable2, Writable } from "node:stream";
 
 // node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
@@ -27202,7 +27355,7 @@ class AcpRelay {
             }, DISCONNECT_GRACE_MS).unref();
         };
         clientStream.readable.pipeThrough(touch).pipeTo(agentStream.writable).then(stopSoon, stopSoon);
-        agentStream.readable.pipeThrough(touch2).pipeTo(clientStream.writable).catch(() => {});
+        agentStream.readable.pipeThrough(touch2).pipeTo(clientStream.writable, { preventCancel: true }).catch(() => {});
         const closed = new Promise((resolve) => {
           child.once("exit", (code, signal) => {
             this.#children.delete(child);
@@ -27240,16 +27393,16 @@ class AcpRelay {
       this.#adapterCmd = { cmd, args };
       return this.#adapterCmd;
     }
-    const sibling = join4(dirname(process.argv[1] ?? ""), "claude-agent-acp.js");
-    if (existsSync2(sibling)) {
+    const sibling = join6(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
+    if (existsSync4(sibling)) {
       this.#adapterCmd = { cmd: process.execPath, args: [sibling] };
       return this.#adapterCmd;
     }
     try {
       const require2 = createRequire2(import.meta.url);
       const pkg = require2.resolve(`${ADAPTER_PACKAGE}/package.json`);
-      const entry = join4(dirname(pkg), "dist", "index.js");
-      if (existsSync2(entry)) {
+      const entry = join6(dirname2(pkg), "dist", "index.js");
+      if (existsSync4(entry)) {
         this.#adapterCmd = { cmd: process.execPath, args: [entry] };
         return this.#adapterCmd;
       }
@@ -27267,7 +27420,7 @@ class AcpRelay {
       return fromConfig;
     }
     try {
-      this.#claudePath = execFileSync("which", ["claude"], { encoding: "utf8" }).trim();
+      this.#claudePath = execFileSync2("which", ["claude"], { encoding: "utf8" }).trim();
     } catch {
       this.#claudePath = "";
     }
@@ -27303,64 +27456,141 @@ Content-Length: 0\r
   socket.destroy();
 }
 
-// bridge/src/launchd.ts
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname2, join as join5 } from "node:path";
-import { execFileSync as execFileSync2 } from "node:child_process";
-var LAUNCHD_LABEL = "com.webmcp.daemon";
-function launchdPlan(config2, entry) {
-  const binDir = join5(config2.stateDir, "bin");
-  const daemonCopy = join5(binDir, basename(entry));
-  const siblings = ["claude-agent-acp.js"].map((f) => join5(dirname2(entry), f)).filter(existsSync3);
-  const plistPath = join5(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config2.stateDir, "--port", String(config2.port)];
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${LAUNCHD_LABEL}</string>
-  <key>ProgramArguments</key><array>${args.map((a) => `<string>${escapeXml(a)}</string>`).join("")}</array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${escapeXml(join5(config2.stateDir, "launchd.log"))}</string>
-  <key>StandardErrorPath</key><string>${escapeXml(join5(config2.stateDir, "launchd.log"))}</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string></dict>
-</dict></plist>
-`;
-  return { plistPath, binDir, plist, files: [entry, ...siblings] };
-}
-function installLaunchd(config2, entry, { dryRun = false } = {}) {
-  if (process.platform !== "darwin")
-    throw new Error("install-launchd is macOS only (use a systemd user unit or Task Scheduler elsewhere)");
-  const plan = launchdPlan(config2, entry);
-  if (dryRun)
-    return `# would write ${plan.plistPath}
-# would copy ${plan.files.join(", ")} → ${plan.binDir}
-${plan.plist}`;
-  mkdirSync3(plan.binDir, { recursive: true });
-  for (const f of plan.files)
-    copyFileSync(f, join5(plan.binDir, basename(f)));
-  mkdirSync3(dirname2(plan.plistPath), { recursive: true });
-  try {
-    execFileSync2("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
-  } catch {}
-  writeFileSync3(plan.plistPath, plan.plist);
-  execFileSync2("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
-  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
-}
-function uninstallLaunchd() {
-  const plistPath = join5(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-  try {
-    execFileSync2("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
-  } catch {}
-  if (existsSync3(plistPath)) {
-    unlinkSync(plistPath);
-    return `removed ${plistPath}`;
+// bridge/src/tray.ts
+import { spawn as spawn3 } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname3, join as join7 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+class Tray {
+  #deps;
+  #child;
+  #timer;
+  constructor(deps) {
+    this.#deps = deps;
   }
-  return "no login item installed";
+  static helperPath() {
+    const candidates = [
+      process.env.WEBMCP_TRAY_HELPER,
+      join7(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
+      join7(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
+    ].filter((p) => !!p);
+    return candidates.find((p) => existsSync5(p));
+  }
+  start() {
+    if (process.platform !== "darwin")
+      return false;
+    const helper = Tray.helperPath();
+    if (!helper) {
+      log.warn("tray: helper not found; running without a menu bar item");
+      return false;
+    }
+    const child = spawn3(helper, [], { stdio: ["pipe", "pipe", "inherit"] });
+    this.#child = child;
+    let buf = "";
+    child.stdout?.on("data", (d) => {
+      buf += d.toString();
+      let nl;
+      while ((nl = buf.indexOf(`
+`)) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line)
+          continue;
+        try {
+          this.#onMessage(JSON.parse(line));
+        } catch {}
+      }
+    });
+    child.on("error", (err) => {
+      log.warn(`tray: helper failed: ${err.message}`);
+      this.#child = undefined;
+    });
+    child.on("exit", (code) => {
+      log.info(`tray: helper exited (${code})`);
+      this.#child = undefined;
+      clearInterval(this.#timer);
+    });
+    this.#deps.registry.on("change", () => this.render());
+    this.#deps.registry.on("selection", () => this.render());
+    this.#timer = setInterval(() => this.render(), 5000);
+    this.#timer.unref();
+    log.info(`tray: showing webmcp-bridge in the menu bar (${helper})`);
+    return true;
+  }
+  render() {
+    if (!this.#child?.stdin?.writable)
+      return;
+    const pages = this.#deps.registry.all().length;
+    const agents = this.#deps.agentCount();
+    const login = existsSync5(join7(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+    const items = [
+      { id: "name", title: `webmcp-bridge ${this.#deps.config.version}`, enabled: false },
+      { id: "status", title: `Daemon: running on 127.0.0.1:${this.#deps.config.port} · ${pages} page${pages === 1 ? "" : "s"} · ${agents} chat${agents === 1 ? "" : "s"}`, enabled: false },
+      { id: "page", title: "Open status page" },
+      { sep: true },
+      { id: "login", title: "Start at login", checked: login },
+      { id: "log", title: "Open log" },
+      { id: "folder", title: "Show state folder" },
+      { id: "mcp", title: "Copy MCP URL for Claude Code" },
+      { sep: true },
+      { id: "stop", title: "Stop daemon" }
+    ];
+    const running = { running: true };
+    this.#send({ type: "set", title: `${running ? "●" : "○"} webmcp-bridge`, icon: this.#deps.config.trayText ? "" : "point.3.connected.trianglepath.dotted", tooltip: `webmcp-bridge (webmcp-daemon ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`, items });
+  }
+  #onMessage(msg) {
+    if (msg.type === "ready") {
+      this.render();
+      return;
+    }
+    if (msg.type !== "click")
+      return;
+    const { config: config2 } = this.#deps;
+    try {
+      switch (msg.id) {
+        case "login": {
+          const installed = existsSync5(join7(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+          log.info(installed ? uninstallLaunchd() : installLaunchd(config2, process.argv[1]));
+          break;
+        }
+        case "page":
+          spawn3("open", [`http://${config2.host}:${config2.port}/`], { stdio: "ignore", detached: true }).unref();
+          break;
+        case "log":
+          openPath(join7(config2.stateDir, existsSync5(join7(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
+          break;
+        case "folder":
+          openPath(config2.stateDir);
+          break;
+        case "mcp":
+          spawn3("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] }).stdin?.end(`http://${config2.host}:${config2.port}/mcp`);
+          break;
+        case "stop":
+          log.info("tray: stop requested");
+          this.#deps.shutdown();
+          break;
+      }
+    } catch (err) {
+      log.warn(`tray: ${msg.id} failed: ${String(err)}`);
+    }
+    this.render();
+  }
+  #send(obj) {
+    try {
+      this.#child?.stdin?.write(JSON.stringify(obj) + `
+`);
+    } catch {}
+  }
+  stop() {
+    clearInterval(this.#timer);
+    try {
+      this.#child?.stdin?.end();
+    } catch {}
+    this.#child = undefined;
+  }
 }
-function escapeXml(s) {
-  return s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]);
+function openPath(p) {
+  spawn3("open", [p], { stdio: "ignore", detached: true }).unref();
 }
 
 // bridge/src/index.ts
@@ -27383,11 +27613,13 @@ async function serve(config2) {
       resolve();
     });
   });
-  const pidFile = join6(config2.stateDir, "daemon.json");
+  const pidFile = join8(config2.stateDir, "daemon.json");
   writeFileSync4(pidFile, JSON.stringify({ pid: process.pid, port: config2.port, startedAt: new Date().toISOString(), version: VERSION }));
   log.info(`listening on ${httpBase} (ws: /ws, mcp: /mcp, acp: /acp, state dir: ${config2.stateDir}, pre-approved origins: ${config2.allowOrigins.join(", ") || "none"})`);
   registry2.on("selection", ({ pageId }) => log.info(`selected page: ${pageId ?? "none"}`));
+  let tray;
   const close = async () => {
+    tray?.stop();
     await acpRelay.close();
     await mcp.close();
     await new Promise((resolve) => server.close(() => resolve()));
@@ -27395,6 +27627,12 @@ async function serve(config2) {
       unlinkSync2(pidFile);
     } catch {}
   };
+  if (config2.tray) {
+    tray = new Tray({ registry: registry2, config: config2, agentCount: () => acpRelay.status().length, shutdown: () => {
+      close().then(() => process.exit(0));
+    } });
+    tray.start();
+  }
   return { close, port: config2.port, registry: registry2 };
 }
 async function main() {
@@ -27425,7 +27663,7 @@ ${HELP}`);
   }
   if (command === "stop") {
     try {
-      const { pid } = JSON.parse(readFileSync2(join6(config2.stateDir, "daemon.json"), "utf8"));
+      const { pid } = JSON.parse(readFileSync3(join8(config2.stateDir, "daemon.json"), "utf8"));
       process.kill(pid, "SIGTERM");
       process.stdout.write(`sent SIGTERM to ${pid}
 `);

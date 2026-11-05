@@ -11,6 +11,7 @@ import { PageServer } from './ws-server.ts';
 import { createMcpHandler } from './mcp.ts';
 import { AcpRelay } from './acp.ts';
 import { installLaunchd, uninstallLaunchd } from './launchd.ts';
+import { Tray } from './tray.ts';
 
 const VERSION = '0.0.1';
 
@@ -37,12 +38,18 @@ export async function serve(config: DaemonConfig): Promise<Daemon> {
   log.info(`listening on ${httpBase} (ws: /ws, mcp: /mcp, acp: /acp, state dir: ${config.stateDir}, pre-approved origins: ${config.allowOrigins.join(', ') || 'none'})`);
   registry.on('selection', ({ pageId }: { pageId?: string }) => log.info(`selected page: ${pageId ?? 'none'}`));
 
+  let tray: Tray | undefined;
   const close = async () => {
+    tray?.stop();
     await acpRelay.close();
     await mcp.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     try { unlinkSync(pidFile); } catch { /* already gone */ }
   };
+  if (config.tray) {
+    tray = new Tray({ registry, config, agentCount: () => acpRelay.status().length, shutdown: () => { void close().then(() => process.exit(0)); } });
+    tray.start();
+  }
   return { close, port: config.port, registry };
 }
 

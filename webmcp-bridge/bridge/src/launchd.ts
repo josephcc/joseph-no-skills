@@ -14,9 +14,9 @@ export const LAUNCHD_LABEL = 'com.webmcp.daemon';
 export function launchdPlan(config: DaemonConfig, entry: string): { plistPath: string; binDir: string; plist: string; files: string[] } {
   const binDir = join(config.stateDir, 'bin');
   const daemonCopy = join(binDir, basename(entry));
-  const siblings = ['claude-agent-acp.js'].map((f) => join(dirname(entry), f)).filter(existsSync);
+  const siblings = ['claude-agent-acp.js', 'tray/webmcp-bridge-tray'].map((f) => join(dirname(entry), f)).filter(existsSync);
   const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
-  const args = [process.execPath, daemonCopy, 'serve', '--state-dir', config.stateDir, '--port', String(config.port)];
+  const args = [process.execPath, daemonCopy, 'serve', '--state-dir', config.stateDir, '--port', String(config.port), '--tray'];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -37,11 +37,12 @@ export function installLaunchd(config: DaemonConfig, entry: string, { dryRun = f
   const plan = launchdPlan(config, entry);
   if (dryRun) return `# would write ${plan.plistPath}\n# would copy ${plan.files.join(', ')} → ${plan.binDir}\n${plan.plist}`;
   mkdirSync(plan.binDir, { recursive: true });
-  for (const f of plan.files) copyFileSync(f, join(plan.binDir, basename(f)));
+  for (const f of plan.files) { const rel = f.endsWith('webmcp-bridge-tray') ? join('tray', basename(f)) : basename(f); mkdirSync(dirname(join(plan.binDir, rel)), { recursive: true }); copyFileSync(f, join(plan.binDir, rel)); }
   mkdirSync(dirname(plan.plistPath), { recursive: true });
   try { execFileSync('launchctl', ['bootout', `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: 'ignore' }); } catch { /* not loaded */ }
   writeFileSync(plan.plistPath, plan.plist);
   execFileSync('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: 'inherit' });
+  writeFileSync(join(config.stateDir, 'setup-done'), new Date().toISOString() + '\n');
   return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
 }
 

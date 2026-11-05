@@ -112,7 +112,7 @@ function showStatus(s: ConnectorStatus) {
   const b = $('daemon-badge'); b.dataset.state = s.state;
   b.textContent = `daemon: ${s.state}${s.pageId ? ` (page ${s.pageId})` : ''}`;
   const hints: Record<string, string> = {
-    absent: 'No local daemon found on 127.0.0.1:8717. Start Claude Code once (the webmcp-daemon plugin starts it) or run `npx webmcp-daemon`. Retrying…',
+    absent: 'No local daemon on 127.0.0.1:8717. Install the Claude Code plugin and run `claude` once (one-time setup: it starts the daemon, which then lives in the menu bar as "webmcp-bridge"); the chat you want is the panel on the left. Retrying…',
     'needs-approval': 'The daemon is asking you to approve this page: look for a new tab titled "approve origin".',
     denied: 'This page was denied by the daemon. Allow it from the approval page or `webmcp-daemon status`.',
   };

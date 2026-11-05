@@ -1,6 +1,11 @@
 :root { color-scheme: light; }
 body { margin: 0; font: 15px/1.5 system-ui, sans-serif; transition: background-color .3s; min-height: 100vh; }
-main { max-width: 64rem; margin: 0 auto; padding: 2rem 1.5rem; }
+.layout { display: grid; grid-template-columns: clamp(28rem, 34vw, 40rem) minmax(0, 1fr); min-height: 100vh; }
+main { max-width: 64rem; margin: 0 auto; padding: 2rem 1.5rem; min-width: 0; }
+.chat-sidebar { grid-column: 1; grid-row: 1; position: sticky; top: 0; height: 100vh; box-sizing: border-box; padding: 1rem; border-right: 1px solid #0002; background: rgba(255,255,255,.65); backdrop-filter: blur(6px); }
+main { grid-column: 2; grid-row: 1; }
+.chat-sidebar .wmc-chat { height: 100%; max-height: none; }
+@media (max-width: 64rem) { .layout { grid-template-columns: 1fr; } .chat-sidebar { grid-column: 1; grid-row: 2; position: static; height: auto; min-height: 28rem; border-right: 0; border-top: 1px solid #0002; } main { grid-column: 1; grid-row: 1; } }
 h1 { font-size: 2rem; margin: 0 0 .5rem; background: rgba(255,255,255,.75); display: inline-block; padding: .3rem .6rem; border-radius: 8px; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; }
 .swatch span { display: inline-block; width: 1.1em; height: 1.1em; vertical-align: middle; border: 1px solid #0003; border-radius: 4px; }
@@ -17,4 +22,3 @@ code { font-family: ui-monospace, monospace; font-size: .9em; }
 button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #888; background: #fff; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 .log-ok { color: #0a7; } .log-err { color: #c33; }
-#chat-mount { margin-top: 2rem; }
