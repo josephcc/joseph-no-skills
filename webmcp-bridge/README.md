@@ -94,7 +94,8 @@ While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemo
 ## For Claude Code users
 
 ```bash
-/plugin install webmcp-daemon --marketplace <owner>/<repo>   # inside Claude Code, once this repo is pushed (replace <owner>/<repo>)
+/plugin marketplace add josephcc/webmcp-bridge                  # inside Claude Code (private repo: your gh/git credentials must reach it)
+/plugin install webmcp-daemon@webmcp-bridge
 # or, from a checkout:
 claude --plugin-dir ./plugin
 # then just run `claude`: the SessionStart hook starts the daemon (menu bar item "webmcp-bridge" appears) and, until
@@ -105,7 +106,7 @@ The plugin has one setting, *Inject page context into terminal sessions* (defaul
 
 All of the daemon's state (approvals, workspaces, logs, pid) lives in `~/.webmcp-daemon`, shared by the CLI, the plugin, the login item and the menu bar item.
 
-The repository root carries the marketplace manifest (`.claude-plugin/marketplace.json`), so the install line works as soon as the repo is hosted.
+The repository root carries the marketplace manifest (`.claude-plugin/marketplace.json`), so the install lines work against the hosted repository, `github.com/josephcc/webmcp-bridge`.
 
 ## Privacy
 

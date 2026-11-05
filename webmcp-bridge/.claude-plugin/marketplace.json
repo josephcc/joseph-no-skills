@@ -1,5 +1,5 @@
 {
-  "name": "webmcp-claude-hooligan",
+  "name": "webmcp-bridge",
   "owner": { "name": "Joseph Chee Chang" },
   "metadata": { "description": "Local daemon that connects WebMCP-enabled web pages to Claude Code (terminal via MCP, embedded chat via ACP)." },
   "plugins": [
