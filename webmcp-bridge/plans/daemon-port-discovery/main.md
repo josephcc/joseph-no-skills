@@ -1,4 +1,4 @@
-**Status:** in progress — reviewed by Joseph 2026-11-05 18:41 (every question answered with the recommended option; D-1–D-8 locked); implementation W1–W7 under way, one commit per step
+**Status:** implemented 2026-11-05 — reviewed by Joseph 18:41 (D-1–D-8 locked); W1–W7 landed one commit per step, two Codex audits fixed (`89d7c8f`, `1fd76c1`); thirteen of fourteen checks ticked, c12 (a real Claude Code session through the relay) awaits Joseph
 **Date:** 2026-11-05
 **Scope:** How the daemon, the page connector, the plugin's hooks and the plugin's MCP client find each other when the fixed port is taken, and how a second daemon is prevented. Not in scope: multiple daemons by design (private state dirs keep working as today), remote daemons, authentication.
 **Inputs:** `bridge/src/{config,index,http,ws-server,launchd}.ts`, `packages/protocol/src/index.ts`, `packages/connector/src/{index,protocol,types}.ts`, `plugin/.mcp.json`, `plugin/hooks/hooks.json`, `plugin/scripts/{common.sh,ensure-daemon.sh,detach.mjs}`, `demo-site/src/main.ts`, the science-kg adoption (`src/agent/webmcpPage.ts` there), [combined/main.md](../combined/main.md) §5
@@ -286,7 +286,7 @@ science-kg calls `connect()` with no `daemonUrl` unless `?daemon=` is given, so 
 
 **✅ Suite, docs, audit**
 <check id="c13" status="done">`bun test`, `bun run typecheck`, the connector build and the plugin bundles green; the m10 e2e green. — evidence: at `2a0d31f`: `bun test` 78 across 11 files; `bun run typecheck`; `build:connector` (0.0.6) and `build:plugin` (daemon, relay, adapter) clean; m10 green.</check>
-<check id="c14" status="todo">Docs updated; Codex audit recorded at the end of this file.</check>
+<check id="c14" status="done">Docs updated; Codex audit recorded at the end of this file. — evidence: README, PRIVACY, the combined plan's addendum and this plan updated; two audits recorded below (seven findings fixed in `89d7c8f`, two in `1fd76c1`).</check>
 
 ## 9. Audit budget
 
@@ -294,6 +294,43 @@ science-kg calls `connect()` with no `daemonUrl` unless `?daemon=` is given, so 
 
 ## 10. Status
 
-**Implemented 2026-11-05** (W1–W6 as the commits `e20948e`, `cd085f1`, `2065472`, `f14cb09`, `2a0d31f` on `main`, unpushed): the candidate list and the daemon identity in the protocol; the daemon's probe, exclusive record, port walk and clear failure; `GET /id`; the connector's sweep (0.0.6); the hooks' resolution and the login item without `--port`; the stdio MCP relay and the plugin's `.mcp.json` as a stdio entry; docs; the m10 e2e. Twelve of the fourteen checks are ticked with their evidence. Open: c12 (a real Claude Code session through the relay — Joseph, after a plugin reinstall or a `/mcp` reconnect, since `.mcp.json` changed) and c14's audit record. W7 (science-kg re-vendors 0.0.6) is on the science-kg branch.
+**Implemented 2026-11-05** (W1–W6 as the commits `e20948e`, `cd085f1`, `2065472`, `f14cb09`, `2a0d31f` on `main`, unpushed): the candidate list and the daemon identity in the protocol; the daemon's probe, exclusive record, port walk and clear failure; `GET /id`; the connector's sweep (0.0.6); the hooks' resolution and the login item without `--port`; the stdio MCP relay and the plugin's `.mcp.json` as a stdio entry; docs; the m10 e2e. Twelve of the fourteen checks are ticked with their evidence. Open: c12 (a real Claude Code session through the relay — Joseph, after a plugin reinstall or a `/mcp` reconnect, since `.mcp.json` changed); c14 is ticked: both audits are recorded below. The first audit's seven findings are fixed in `89d7c8f`; the one that mattered most: a daemon from before this change answers `/health` but not `/id`, and an upgraded start would have dropped its record and started a second daemon, where it now exits as already running with a restart hint. W7 (science-kg re-vendors 0.0.6) is on the science-kg branch.
 
 **Worth knowing.** The relay waits five seconds for the hook's daemon before starting one itself (`WEBMCP_RELAY_WAIT_MS`), and starting from the relay can be disabled with `WEBMCP_RELAY_START=0`. A daemon restart mid-session still drops the relay (F-3). The hooks' candidate list is a copy of the protocol's (`WEBMCP_CANDIDATE_PORTS` in `common.sh`); keep the two in step.
+
+## Codex audit — 2026-11-05 (1 of 2: the build, `0ee04a7..284e817`)
+
+**Codex verdict:** Patch has correctness issues in the relay shutdown path, daemon singleton/upgrade handling, and hook/login-item port resolution; I would not ship without fixes.
+**Issue counts (Codex's):** P0:0 P1:3 P2:4 P3:0
+
+| # | Sev (re-rated) | file:line | Finding | Verdict | Action / evidence |
+|---|---|---|---|---|---|
+| 1 | P1 | `bridge/src/mcp-relay.ts:71` | `quit()` re-entered through the SDK's `close()` → `onclose` → `quit(0)`, which could mask an error exit as a clean one. | Fix now | Confirmed (`close()` calls `onclose` synchronously). `quit` is one-shot, keeps the first code, clears `onclose` and the liveness timer before closing. |
+| 2 | P1 | `bridge/src/mcp-relay.ts:74` | `upstream.onerror` only logged, so an idle session kept a relay whose daemon had died (contradicting D-5/F-3). | Fix now | A liveness probe re-reads `GET /id` every 5 s and exits after two misses, 0 with "went away" or "restarted" (another instance id). Test "the daemon going away ends the relay, once". |
+| 3 | P2 | `bridge/src/config.ts:57` | `--ports` left `portPinned` true when `WEBMCP_DAEMON_PORT` or an earlier `--port` was present, so the list was never walked; bad tokens were dropped silently. | Fix now | `--ports` unpins (the last of `--port`/`--ports` wins) and throws on non-ports. `bridge/test/config.test.ts`. |
+| 4 | P2 | `plugin/scripts/common.sh:24` | With no daemon identified, `WEBMCP_URL` still pointed at 8717, so the inject hooks could read a stranger's answers into Claude's context. | Fix now | `WEBMCP_URL` is empty then; `inject-state.sh` reads nothing; `inject-instructions.sh` reads nothing and says no daemon answered. `bridge/test/hooks.test.ts` "with no daemon identified, the hooks read nothing". |
+| 5 | P1 | `bridge/src/instance.ts:105` | `findRunningDaemon` accepted any `/id` without matching the recorded instance, and treated a daemon from before `/id` (live pid, `/health` but no `/id`) as stale — an upgrade would drop its record and start a second daemon beside it. | Fix now | The recorded instance must match; a record without one counts as running when `/health` carries its pid (`legacy: true`, with a restart hint in the "already running" message). `instance.test.ts` "a daemon from before /id … counts as running", "a record whose port answers as another instance is stale". |
+| 6 | P2 | `plugin/scripts/ensure-daemon.sh:16` | Login items installed before this change keep `--port 8717` in their plist and would crash-loop under launchd when 8717 is taken while the hook starts a fallback daemon. | Fix now | On the plugin-refresh path, a plist still pinned to 8717 (and no `WEBMCP_DAEMON_PORT`) is rewritten by `install-launchd` from the state directory's bundle copy. Not covered by a test (launchd). |
+| 7 | P2 | `packages/connector/src/discover.ts:35` | `identify`/`identifyDaemon` accepted any numeric protocol, so an incompatible daemon on an earlier candidate would be chosen over a compatible later one. | Fix now | Both require `protocol === PROTOCOL_VERSION`. `discover.test.ts` "a daemon of another protocol version … is passed over"; `instance.test.ts` "identify passes over a daemon of another protocol version". |
+
+**Changes made in response:** commit `89d7c8f` — `bridge/src/config.ts`, `instance.ts`, `index.ts`, `mcp-relay.ts`, `packages/connector/src/discover.ts`, `plugin/scripts/common.sh`, `inject-state.sh`, `inject-instructions.sh`, `ensure-daemon.sh`, tests, the rebuilt plugin bundles; suite 88 tests across 12 files, typecheck, the connector and plugin builds, and the m10 e2e green afterwards.
+
+**Deferred / not actioned:** none.
+
+Codex's full final message saved at `/tmp/codex-audit-20261105-105821-report.md` (this run).
+
+## Codex audit — 2026-11-05 (2 of 2: follow-up on the fixes, `89d7c8f`)
+
+**Codex verdict:** The commit addresses the prior audit items, but it leaves two targeted correctness gaps: stale legacy records can still be accepted based on an unrelated `/id`, and relay restart detection can be disabled by a missed initial identity probe.
+**Issue counts (Codex's):** P0:0 P1:0 P2:2 P3:0 (no VERDICT/ISSUES lines were written; the counts are read off the findings)
+
+| # | Sev (re-rated) | file:line | Finding | Verdict | Action / evidence |
+|---|---|---|---|---|---|
+| 1 | P2 | `bridge/src/instance.ts:124` | A record without an instance id accepted any `/id` on its port, so a reused pid plus some new daemon there passed as "already running". | Fix now | Such a record is proven only by its own `/health` carrying the recorded pid; the `/id` branch requires a recorded instance to match. `instance.test.ts` "a legacy record whose port now answers as some new instance (its pid reused) is stale". |
+| 2 | P2 | `bridge/src/mcp-relay.ts:101` | A missed first `/id` probe left `identity` null, after which the liveness check accepted every instance and a restart went unreported. | Fix now | The first probe that answers fills the baseline; only a different instance afterwards counts as a restart. Covered indirectly by "the daemon going away ends the relay, once". |
+
+**Changes made in response:** commit `1fd76c1` — `bridge/src/instance.ts`, `bridge/src/mcp-relay.ts`, the test, the rebuilt bundles; suite 89 tests, typecheck and the plugin build green. The connector is unchanged, so science-kg's vendored 0.0.6 (`f787086`) still matches.
+
+**Deferred / not actioned:** none. No further audit (the two-call budget of D-8 is spent); both fixes are a few lines and pinned by tests.
+
+Codex's full final message saved at `/tmp/codex-audit-20261105-111009-report.md` (this run).
