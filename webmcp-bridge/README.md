@@ -1,141 +1,408 @@
-# WebMCP ⇄ local daemon ⇄ Claude Code
+# webmcp-bridge — your local Claude Code, inside the web page you are looking at
 
-Connect web pages to a *local* Claude Code: terminal Claude can see and operate a page through the
-page's own [WebMCP](https://webmachinelearning.github.io/webmcp/) tools, and the page can embed a
-chat with that same local Claude through the [Agent Client Protocol](https://agentclientprotocol.com).
-Plan and evidence: [`plans/combined/main.md`](plans/combined/main.md).
+A web page describes itself to [WebMCP](https://webmachinelearning.github.io/webmcp/) (tools on
+`document.modelContext`, plus instructions and a snapshot of what the user sees). A small daemon on your
+machine mirrors that to **your own Claude Code**, in two directions: a chat panel embedded in the page talks
+to Claude through the [Agent Client Protocol](https://agentclientprotocol.com), and a terminal Claude Code
+session sees and operates the same page through MCP. Nothing leaves your machine except what Claude Code
+itself sends to Anthropic; the page never holds a key.
+
+![The demo page with the embedded chat: Claude set the sentence, proposed a palette as a card, and suggested two follow-ups](docs/img/demo-hero.png)
 
 Three things ship from this repo:
 
 | Deliverable | Path | What it is |
 |---|---|---|
-| `webmcp-connector` (npm, 0.0.4) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads and page-provided widgets: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`). |
-| Demo page | `demo-site` | Vite page with WebMCP tools for the colour and the sentence, two card tools (`propose_palette`, `suggest_replies`), a `show_output` tool that fills a big monospace output box on the page (for results from any Claude, skill or tool), a call log, a bonus tool for dynamic registration, and the embedded chat. |
-| `webmcp-daemon` Claude Code plugin | `plugin` | Ships and runs the local daemon (`bridge/`), points Claude Code at it over MCP, and injects each page's instructions (session start) and live UI state (every prompt) through hooks. |
+| `webmcp-connector` (0.0.6, not yet published) | `packages/connector` | The browser library: `connect()` mirrors the page's tools to the daemon (with a shim when the browser lacks the API) and carries the page's instructions and UI state; `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`) are the embedded chat with threads and page-provided cards. |
+| `webmcp-daemon` Claude Code plugin | `plugin` | Runs the daemon, gives terminal Claude the page's tools over MCP, and injects each page's instructions and live state through hooks. |
+| The demo page | `demo-site` | A sentence on a coloured background with eight tools, three cards and the chat: the page every example below uses. |
 
-## Try it (this checkout)
+The design record is under [`plans/`](plans/main.md): one plan per thread of work, with the decisions and the evidence.
 
-```bash
-bun install
-bun run daemon -- --allow-origin http://127.0.0.1:5173     # http://127.0.0.1:8717 (or the next free candidate port): /ws /mcp /acp
-bun run demo                                                # http://127.0.0.1:5173
-claude --plugin-dir ./plugin                                # in any directory; ask about "the demo page"
+---
+
+## Using it
+
+### Install
+
+Inside Claude Code:
+
+```
+/plugin marketplace add josephcc/webmcp-bridge       # private repo: your gh/git credentials must reach it
+/plugin install webmcp-daemon@webmcp-bridge
 ```
 
-Open the demo in Chrome. With `chrome://flags/#enable-webmcp-testing` enabled the page uses the
-native API; without it the connector's shim is used. Click **Connect to local Claude** in the page
-for the embedded chat (it uses your existing Claude Code login).
+Then run `claude` once, in any directory. The plugin's session hook starts the daemon, an **webmcp-bridge** item
+appears in the menu bar (macOS), and, until setup is finished, Claude offers to make the daemon start at login
+(`/webmcp-daemon:setup` does the same at any time). After that the browser chat works with no terminal open.
 
-Without `--allow-origin`, the daemon opens an approval tab the first time an origin connects.
+From a checkout instead: `bun install`, then `claude --plugin-dir ./plugin`, or `bun run daemon` to run the daemon
+by hand (`-- --allow-origin http://127.0.0.1:5173` skips the approval tab for the demo).
 
-## For web developers
+Everything the daemon keeps (approvals, per-page workspaces, logs, the port it took) lives in `~/.webmcp-daemon`,
+shared by the CLI, the plugin, the login item and the menu bar item. The plugin has one setting, *Inject page
+context into terminal sessions* (default on); turn it off if you only use the chat in the browser.
+
+### The demo page
+
+```bash
+bun run demo                 # http://127.0.0.1:5173
+```
+
+Open it in Chrome. With `chrome://flags/#enable-webmcp-testing` on, the page uses the browser's native
+`modelContext`; without it the connector's shim steps in (the badge says which). The page finds the daemon on
+whichever of its candidate ports it took, and the first time an origin connects the daemon opens a tab asking
+you to approve it; after that it connects on its own.
+
+The page is deliberately small: a sentence, a background colour, a call log, the list of registered tools, an
+output box, and the chat on the left. Its tools are `get_state`, `set_background_color`, `set_sentence`,
+`randomize`, `propose_palette`, `suggest_replies`, `show_output`, and a bonus `shout` you can register and
+unregister to watch the tool list change live.
+
+### Chat with the page in the browser
+
+Click **Connect** in the panel. The chat is your Claude Code (your login, your plan) started by the daemon for
+this page, with the page's instructions as its system prompt and a snapshot of what you see attached to every
+message, so you can say "make it feel like evening" without explaining what "it" is.
+
+![The embedded chat after one turn: a palette card with Use buttons, Claude's one-line reply, and two suggested replies as chips](docs/img/demo-chat.png)
+
+What happened in that turn: Claude called `set_sentence` (the page changed under the panel), `propose_palette`
+(the page drew its own card inside the chat, four options with **Use** buttons that apply one *only when you
+click*), and `suggest_replies` (the two chips; clicking one sends it). When you click **Use**, the page records a
+note, and the next message you send carries it, so Claude knows what you picked without being told.
+
+Things to try: **Threads** lists every past conversation about this page (title, age, state); **New** starts one;
+the mode dropdown is Claude Code's permission mode, **auto** by default; the footer shows the context meter and
+the cost so far; the raw input and output of any tool call are one click away under its card. Agent-asked
+questions (Claude's `AskUserQuestion`) appear as a form in the panel.
+
+### Terminal Claude on the same page
+
+Open a terminal, run `claude`, and ask about the page. The plugin gives the session the page's tools (as
+`mcp__webmcp__…`), its instructions at session start, and its current state with every prompt. A real session
+against the demo, trimmed (Claude Code's own tool-lookup step omitted, long results shortened):
+
+```text
+> I have a web page open in my browser. What is it showing right now? Then change its
+  sentence to 'Hello from terminal Claude' and propose a warmer palette for it.
+
+⏺ get_state()
+  ⎿  {"backgroundColor":"rgb(138, 182, 214)","sentence":"Local Claude is reading this page", …}
+
+⏺ set_sentence(text: "Hello from terminal Claude")
+  ⎿  {"backgroundColor":"rgb(138, 182, 214)","sentence":"Hello from terminal Claude", …}
+
+⏺ propose_palette(story: "Warm, sunlit tones that replace the current cool blue with something cozier.",
+                  options: [{color: "#f4a261", why: "Soft apricot orange feels friendly and sunny."}, … 4 options])
+  ⎿  {"card":"p2", …}
+
+⏺ The page was showing a soft blue background, rgb(138, 182, 214), with the sentence "Local Claude is
+  reading this page". It's the "WebMCP demo — colour and sentence" page on 127.0.0.1:5179.
+  I changed the sentence to "Hello from terminal Claude". I also put a card on the page with four warmer
+  background options. Each one has a "Use" button, and nothing changes until you click one:
+  1. Apricot #f4a261  2. Honey #e9c46a  3. Terracotta #e76f51  4. Sand #f2cc8f
+```
+
+Terminal Claude has no chat panel to draw in, so a card it makes lands on the page itself, bottom-right, in a
+floating tray; the sentence it set is already on the page:
+
+![After the terminal session: the page's sentence reads "Hello from terminal Claude" and the palette card floats bottom-right](docs/img/demo-terminal-card.png)
+
+The tray is a scroll box no taller than the window; close a card with its ×. Clicking **Use** there records the
+same note the chat's cards record, and the next terminal prompt's state ends with it.
+
+### Stopping it, and what it keeps
+
+**Stop** in the menu bar item stops the daemon, as does the daemon CLI: `node "${CLAUDE_PLUGIN_ROOT}/daemon/webmcp-daemon.js" stop`
+(from a checkout, `bun run daemon -- stop`); `status` says which port it is on; `uninstall-launchd` removes the
+login item. The daemon keeps per-page workspaces, logs and the origin
+allow-list under `~/.webmcp-daemon`; delete that directory to remove them. See [PRIVACY.md](PRIVACY.md).
+
+---
+
+## Building a site on it
+
+### Install and import
+
+```bash
+bun add webmcp-connector          # the chat needs React 18 or newer
+```
 
 ```ts
 import { connect, preamble } from 'webmcp-connector';
-
-const page = connect({
-  instructions: preamble({ pageTitle: 'My app' }) + '\n\n' + MY_SYSTEM_PROMPT,   // replaces Claude Code's preset in the embedded chat
-  instructionsSummary: 'Short version for terminal sessions (≤ 9,500 chars).',
-  context: () => describeWhatTheUserSees(),                                     // deterministic; attached to every prompt
-  // toolPolicy: { disallowedTools: ['Bash', 'Write', 'Edit'] },                // default: full Claude Code; new chat threads start in auto mode (see below)
-});
-document.modelContext.registerTool({ name: 'get_state', description: '…', inputSchema: {…}, annotations: { readOnlyHint: true }, execute: () => state });
+import { AgentChat, FloatingWidgetPanel } from 'webmcp-connector/react';
 ```
 
-React chat: `import { AgentChat } from 'webmcp-connector/react'` and render `<AgentChat page={page} />`.
+**Not published yet.** Until it is: clone this repo, `bun install && bun run build:connector`, and depend on the
+built package by path (`"webmcp-connector": "file:../webmcp-bridge/packages/connector"`) or vendor it (copy
+`packages/connector/package.json` and `dist/` into your repo and depend on `file:vendor/webmcp-connector`; science-kg
+does this with a refresh script, `scripts/vendor-webmcp-connector.sh`).
+
+### Connect the page
+
+```ts
+const page = connect({
+  instructions: preamble({ pageTitle: 'My app' }) + '\n\n' + MY_SYSTEM_PROMPT,   // the embedded chat's system prompt
+  instructionsSummary: 'Short version for terminal sessions (≤ 9,500 chars).',  // what the plugin hook injects
+  context: () => describeWhatTheUserSees(),                                     // deterministic; attached to every prompt
+  // toolPolicy: { disallowedTools: ['Bash', 'Write', 'Edit'] },                // default: full Claude Code
+  // daemonUrl: 'ws://127.0.0.1:8720',                                          // pins a daemon; default: the port sweep
+});
+```
+
+- `instructions` replaces Claude Code's preset system prompt in the embedded chat. `preamble()` is the part that
+  explains the page to Claude: what tools are, that cards are the page's and that the user acts on them, that it
+  learns what the user did from the notes, and that a tool which accompanies an answer should be called *before*
+  the answer. Put your own prompt after it.
+- `context()` is called by the daemon on demand and before every chat prompt. Keep it deterministic and
+  readable: it is what Claude "sees".
+- `toolPolicy.disallowedTools` removes Claude Code tools from the chat's agent entirely. New threads start in
+  Claude Code's **auto** permission mode (`<AgentChat agentOptions={{ defaultMode: 'default' }}>` pins another;
+  `null` leaves the agent's own); the origin approval and the prompts auto mode still raises are the safety boundary.
+- `autoConnect` defaults to true on localhost and false elsewhere (a public https page triggers Chrome's local
+  network prompt, which should follow a click: call `page.connect()` from a handler). `page.onStatus()` reports
+  `idle`, `searching`, `needs-approval`, `connected`, `denied`, `absent`, the daemon's port, and the tool count.
+
+### Register tools
+
+Tools are ordinary WebMCP registrations on `document.modelContext`; the connector mirrors the list to the
+daemon on every change, and both the chat's agent and terminal Claude call them by name.
+
+```ts
+document.modelContext.registerTool({
+  name: 'set_sentence',
+  description: 'Replace the sentence shown on the page. Returns the new state.',
+  inputSchema: { type: 'object', properties: { text: { type: 'string', maxLength: 200 } }, required: ['text'] },
+  annotations: { readOnlyHint: false },
+  execute: ({ text }) => { state.sentence = text; render(); return state; },
+});
+```
+
+A result is stringified by the API, so return plain data. Throw to report an error; the message reaches Claude.
+`readOnlyHint: true` tools are pre-allowed in the chat while its *auto-allow read-only tools* toggle is on (the
+default), so they never raise a permission prompt. Terminal
+Claude sees the same tools under `mcp__webmcp__<name>` plus the daemon's own (`webmcp_list_pages`,
+`webmcp_use_page`, `webmcp_get_context`, …); the chat's agent sees them as `mcp__page__<name>`, scoped to this page.
+
+### Mount the chat
+
+```tsx
+<AgentChat
+  page={page}
+  title="Local Claude on this page"
+  widgets={WIDGETS}
+  setup={{ steps: ['Install the Claude Code plugin and run `claude` once.'] }}   // shown while no daemon is found
+/>
+```
 
 **Threads.** The panel holds one ACP connection and lists every stored thread of the page under **Threads**
-(title, age, state); click one to switch, **New** for a fresh one, × to delete. Switching away from an idle
-thread frees its Claude process (reopening replays the history in about a second); a thread that is still
-answering keeps running in the background and is released when its turn ends. The last active thread reopens
-after a reload. The daemon also releases a chat that has been idle for about ten minutes; the panel then keeps the
-transcript on screen, says so, and reconnects into the same thread when you send the next message. Without React: `openAgent(page)` returns an `AgentConnection` with `listThreads()`,
-`openThread(id?)`, `closeThread()`, `deleteThread()` and change listeners; `connectAgent(page)` is the
-one-thread shorthand. Agents that cannot list or resume sessions get the single-thread panel.
+(title, age, state); click one to switch, **New** for a fresh one, × to delete. Switching away from an idle thread
+frees its Claude process (reopening replays the history in about a second); a thread that is still answering keeps
+running in the background and is released when its turn ends. The last active thread reopens after a reload
+(`sessionStorageKey` scopes that memory, `threadFilter` the list, for a page with several workspaces). The daemon
+releases a chat idle for about ten minutes; the panel keeps the transcript, says so, and reconnects into the same
+thread on the next message. Without React: `openAgent(page)` returns an `AgentConnection` with `listThreads()`,
+`openThread(id?)`, `closeThread()`, `deleteThread()` and change listeners; `connectAgent(page)` is the one-thread
+shorthand. Agents that cannot list or resume sessions get the single-thread panel.
 
-**Permission mode.** New threads start in Claude Code's **auto** mode: Claude Code decides most permissions
-itself, including shell and file tools in the page's scratch workspace, and the panel prompts only for what it
-escalates. Change it per thread in the mode dropdown, or pin the default with
-`<AgentChat agentOptions={{ defaultMode: 'default' }}>` (`null` leaves the agent's own default);
-`toolPolicy.disallowedTools` still removes tools entirely. Resumed threads keep the mode they were in. The daemon
-writes `defaultMode: "auto"` into new page workspaces so other ACP clients start the same way; the page's origin
-approval and the per-call prompts auto mode still raises are the safety boundary.
+**Settings.** The agent's settings arrive on the snapshot as `configOptions` (Claude Code's adapter offers the
+permission mode, the model, the effort level, fast mode); `handle.setConfigOption(id, value)` changes one and the
+snapshot follows. `onHandle` gives you the handle (`prompt(text)`, `cancel()`, the session model, the connection).
 
-**Widgets.** A page tool's result can render as the page's own card inside the chat instead of the generic row:
-pass `<AgentChat page={page} widgets={{ propose_palette: PaletteCard, suggest_replies: RepliesRow }} />`, keyed by
-tool name; an entry may also be `{ component, placement: 'end', latestOnly: true }` to render after the turn's last
-message instead of where the call sits, and only in the most recent turn (what suggested replies want). The component
-receives the call (`input`, the parsed `output` and the raw `text`, `status`, a stable
-`id`, `restored` for history replayed after a reload or a thread switch), persisted `state` / `setState`
-(localStorage, per origin, agent, thread and call; swept when a thread is gone), `prompt(text)` to send a message (refused while the thread is busy),
-and `note(text)` to record what the user did: notes since the thread's last prompt ride along with the next one as
-a `page://widget-activity` resource, and the state text terminal Claude receives ends with the same list. Three
-rules make a card work: the tool's description says what the card shows and that the assistant's message should
-not repeat it (`preamble()` tells Claude the same in general; a tool that accompanies an answer, like suggested
-replies, should ask to be called *before* the answer, because Claude writes a text after every tool result and an
-answer-then-tool order makes it restate the answer); the tool returns what the card needs as its
-result, because that is what replays after a reload; and the card does nothing in render, only in click handlers,
-because history replays every call. The raw input and output stay one click away under every card; unmapped tools
-keep the generic row. Agent-asked questions (Claude's `AskUserQuestion`, MCP elicitations) render as a form in the
-panel; `renderElicitation` replaces it, `agentOptions={{ elicitation: false }}` turns the capability off. The
-demo's `demo-site/src/widgets.tsx` has a palette proposal card and suggestion chips.
+### Cards (in-chat widgets)
 
-**Rendering the panel in your own style.** `<AgentChat>` keeps its connection, threads, permissions, elicitations and
-widgets, and lets a page replace the surfaces it draws: `renderHeader={(ctx) => …}` (the badge, the mode, the threads, connect;
-`ctx.actions` carries every built-in action), `renderMessage={(item, info) => …}` (the page's own markdown and chips),
-`renderToolCall={(item, info) => …}` (the generic row for unmapped tools), `renderEmpty={(info) => …}` (starter prompts) and
-`renderComposer={(ctx) => …}` (the page's own input; `ctx.send(text)` sends, `ctx.cancel()` stops, `ctx.usage` is the context
-meter); `footer={false}` drops the footer; `autoConnect` opens the chat as soon as the daemon is there. `threadFilter={(t) => …}` lists only some of the origin's threads (a page with several
-workspaces scopes them), and `sessionStorageKey` keys the last-thread memory the same way. The agent's settings arrive on the
-snapshot as `configOptions` (Claude Code's adapter offers the permission mode, the model, the effort level, fast mode);
-`handle.setConfigOption(id, value)` changes one and the snapshot follows (`config_option_update`). The CSS variables `--wmc-*`
-on `.wmc-chat` restyle what stays. science-kg's **Use local Claude** panel is the worked example. The package's button defaults (`:where(.wmc-chat) button`, `:where(.wmc-float, .wmc-widget) button`) carry no specificity, so a page's own classes on the buttons it renders — in a header, a composer or a widget — win without `!important`. The floating widget panel is a scroll box no taller than the window, and its cards are opaque (`--wmc-bg`), so a tall card from terminal Claude never runs off the screen or shows the page through (0.0.5).
+A page tool's result can render as the page's own component inside the chat instead of the generic tool row.
 
-**Terminal Claude and cards.** `<FloatingWidgetPanel page={page} widgets={WIDGETS} />` shows the same components,
-bottom-right of the page, for page tool calls that did not come through the chat panel (calls from a terminal
-session). There is no thread to send to, so `prompt` is absent; `note()` still reaches the terminal through the
-state hook. The panel waits 400 ms for the chat to claim a call; a call the chat makes can show twice for a moment
-if its transcript item arrives late, and goes away as soon as the claim lands. Without React: `page.calls`,
-`page.onCall()`, `page.claimOf()`, `page.onClaim()` and `page.activity` carry the same information.
+```tsx
+const WIDGETS = {
+  propose_palette: PaletteCard,
+  suggest_replies: { component: RepliesRow, placement: 'end', latestOnly: true },   // after the turn's last message, newest turn only
+};
 
-## The menu bar item
-
-**Ports and the single daemon.** The daemon listens on the first free of five candidate ports, `8717, 49217, 52431, 55893, 61307` (`CANDIDATE_PORTS` in `webmcp-protocol`), and records the one it took in `~/.webmcp-daemon/daemon.json`; `--port <n>` or `WEBMCP_DAEMON_PORT` pins one with no fallback, `--ports a,b,…` substitutes the list. Every client walks the same list: a page's `connect()` probes `GET /id` on each port (the one CORS-open, non-private answer) and opens its WebSocket only where the daemon identified itself, so a stranger on 8717 never sees an upgrade or an approval prompt; the plugin's hooks read the record, then the list; Claude Code's MCP server is a stdio relay (`plugin/daemon/webmcp-mcp.js`) that finds the daemon the same way, starts one if none is up, and passes JSON-RPC through to `/mcp`. A second `serve` for the same state directory probes first and exits 0 as "already running on …"; the record is created exclusively before listening, so two starts racing at login end with one daemon. Private daemons with their own `--state-dir` (the e2e runs) are separate instances on purpose. See `plans/daemon-port-discovery/main.md`.
-
-While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The icon is the icon as a template image (`plugin/daemon/tray/webmcp-bridge-icon.png`, regenerated from the company logo with `scripts/make-tray-icon.py`), so the menu bar colours it like its neighbours: white in dark mode, black in light mode; `--tray-text` shows the name instead. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
-
-## For Claude Code users
-
-```bash
-/plugin marketplace add josephcc/webmcp-bridge                  # inside Claude Code (private repo: your gh/git credentials must reach it)
-/plugin install webmcp-daemon@webmcp-bridge
-# or, from a checkout:
-claude --plugin-dir ./plugin
-# then just run `claude`: the SessionStart hook starts the daemon (menu bar item "webmcp-bridge" appears) and, until
-# setup is finished, Claude offers to make it start at login. After that the browser chat works with no terminal.
+function PaletteCard({ input, output, status, restored, state, setState, prompt, note }: WidgetProps<PaletteArgs, PaletteResult, { chosen?: string }>) {
+  if (status !== 'completed' || !output) return <Pending />;
+  return (
+    <div>
+      <p>{input.story}</p>
+      {output.options.map((o) => (
+        <button key={o.color} onClick={() => { applyPalette(o); setState({ chosen: o.color }); note(`I chose ${o.color} for the page.`); }}>
+          Use
+        </button>
+      ))}
+    </div>
+  );
+}
 ```
 
-The plugin has one setting, *Inject page context into terminal sessions* (default on): a connected page's instructions are added at session start and its UI state with every prompt. Turn it off if you only use the chat in the browser.
+The component receives the call: `input`, the parsed `output` and the raw `text`, `status`, a stable `id`,
+`restored` (history replayed after a reload or a thread switch), persisted `state` / `setState` (localStorage, per
+origin, agent, thread and call; swept when the thread is gone), `prompt(text)` to send a message (refused while
+the thread is busy), and `note(text)` to record what the user did: notes since the thread's last prompt ride along
+with the next one as a `page://widget-activity` resource, and the state text terminal Claude receives ends with the
+same list. Three rules make a card work: the tool's description says what the card shows and that the assistant's
+message should not repeat it (a tool that accompanies an answer, like suggested replies, should ask to be called
+*before* the answer, because Claude writes a text after every tool result and an answer-then-tool order makes it
+restate the answer); the tool returns what the card needs as its result, because that is what replays after a
+reload; and the card does nothing in render, only in click handlers, because history replays every call. Unmapped
+tools keep the generic row; the raw input and output stay one click away under every card. `renderElicitation`
+replaces the built-in question form; `agentOptions={{ elicitation: false }}` turns the capability off. The demo's
+`demo-site/src/widgets.tsx` has the palette card, the reply chips and the output box.
 
-All of the daemon's state (approvals, workspaces, logs, pid) lives in `~/.webmcp-daemon`, shared by the CLI, the plugin, the login item and the menu bar item.
+**Terminal Claude and cards.** `<FloatingWidgetPanel page={page} widgets={WIDGETS} />` shows the same components,
+bottom-right of the page, for page tool calls that did not come through the chat panel. There is no thread to
+send to, so `prompt` is absent; `note()` still reaches the terminal through the state hook. The panel waits 400 ms
+for the chat to claim a call; a call the chat makes can show twice for a moment if its transcript item arrives
+late, and goes away as soon as the claim lands. Without React: `page.calls`, `page.onCall()`, `page.claimOf()`,
+`page.onClaim()` and `page.activity` carry the same information.
 
-The repository root carries the marketplace manifest (`.claude-plugin/marketplace.json`), so the install lines work against the hosted repository, `github.com/josephcc/webmcp-bridge`.
+### Your own look
 
-## Privacy
+`<AgentChat>` keeps its connection, threads, permissions, elicitations and widgets, and lets a page replace the
+surfaces it draws: `renderHeader={(ctx) => …}` (the badge, the mode, the threads, connect; `ctx.actions` carries
+every built-in action), `renderMessage={(item, info) => …}` (your own markdown and chips),
+`renderToolCall={(item, info) => …}` (the generic row for unmapped tools), `renderEmpty={(info) => …}` (starter
+prompts) and `renderComposer={(ctx) => …}` (your own input; `ctx.send(text)` sends, `ctx.cancel()` stops, `ctx.usage`
+is the context meter); `footer={false}` drops the footer. The CSS variables `--wmc-*` on `.wmc-chat` and on
+`.wmc-float` restyle what stays. The package's button defaults carry no specificity (`:where(.wmc-chat) button`,
+`:where(.wmc-float, .wmc-widget) button`), so a page's own classes on the buttons it renders win without `!important`.
 
-Everything stays on your machine: see [PRIVACY.md](PRIVACY.md).
+**A worked example.** science-kg's **Use local Claude** button swaps its
+API-backed chat for this panel in the app's own clothes: its header, bubbles and `@`-mention composer through the
+render props, its proposal, concepts, removal, ask-paper and filter cards as widgets over the same components the
+API chat uses, one CSS file mapping `--wmc-*` onto its design tokens, and nothing app-specific in this library.
 
-## Layout
+---
 
-`packages/protocol` shared wire types · `packages/connector` the npm package · `bridge` daemon source
-(`plugin/daemon/*.js` are its bundles, built by `bun run build:plugin`) · `plugin` the Claude Code plugin ·
-`demo-site` · `scripts/e2e` browser-driven checks · `spikes` the original feasibility spike · `plans`.
+## How it works
 
-## Development
+### The pieces
+
+```mermaid
+flowchart LR
+  subgraph B["Browser"]
+    P["Your page<br/>tools on document.modelContext"]
+    C["webmcp-connector<br/>connect() · AgentChat · FloatingWidgetPanel"]
+    P --- C
+  end
+  subgraph D["webmcp-daemon on 127.0.0.1 (first free candidate port)"]
+    WS["/ws  pages"]
+    MCP["/mcp  MCP server"]
+    ACP["/acp  ACP relay"]
+    R["page registry · origin approval · per-page workspaces"]
+  end
+  subgraph T["Terminal Claude Code"]
+    PL["webmcp-daemon plugin<br/>hooks · webmcp-mcp relay"]
+  end
+  subgraph A["Embedded chat's agent (one process per open thread)"]
+    AD["claude-agent-acp → Claude Code"]
+  end
+  C -- "WebSocket: hello, tools, calls, context" --> WS
+  C -- "WebSocket: ACP JSON-RPC" --> ACP
+  PL -- "stdio ⇄ streamable HTTP" --> MCP
+  ACP -- "stdio: ACP" --> AD
+  AD -- "MCP: /mcp/by-page/<id>" --> MCP
+  MCP -. "a page tool call goes out over /ws" .-> WS
+```
+
+- **The page** registers tools on `document.modelContext` (the browser's native API behind a flag, or the
+  connector's shim) and calls `connect()`. The connector opens `/ws`, sends a `hello` (origin, title,
+  instructions), pushes the tool list on every change, answers `context/request` with the page's `context()`
+  plus recent widget notes, and executes `call` frames by running the tool in the page.
+- **The daemon** (`bridge/`) is one Node process: a registry of connected pages, the origin approval page and
+  allow-list, a workspace directory per page origin (where the chat's Claude runs, with the page's instructions
+  written as its `CLAUDE.md`), the MCP server, the ACP relay, and the menu bar item.
+- **Terminal Claude** gets the daemon as an MCP server through the plugin: `webmcp-mcp` is a stdio relay Claude
+  Code starts per session; it finds the daemon and passes JSON-RPC through to `/mcp`. The daemon's MCP server
+  offers `webmcp_list_pages`, `webmcp_use_page`, `webmcp_list_tools`, `webmcp_call_tool`, `webmcp_get_context`,
+  and mirrors the selected page's tools by name. The plugin's hooks add the selected page's instructions at
+  session start and its state with every prompt.
+- **The embedded chat** opens `/acp?page=<id>` from the page; the daemon spawns `claude-agent-acp` (the ACP
+  adapter around Claude Code) in the page's workspace, hands it the page's instructions as the system prompt and
+  a per-page MCP endpoint (`/mcp/by-page/<id>`) as its only MCP server, and relays ACP both ways. Each prompt
+  carries the page's context as a `page://ui-state` resource. The adapter's tool calls to page tools come back
+  through the daemon to the page's `/ws`.
+
+### Who talks to whom
+
+A page connecting, then a terminal session calling one of its tools:
+
+```mermaid
+sequenceDiagram
+  participant P as Page (connector)
+  participant D as Daemon
+  participant T as Terminal Claude (plugin relay)
+  P->>D: GET /id on each candidate port, in order
+  P->>D: WebSocket /ws, then hello (origin, title, instructions)
+  D-->>P: approval tab the first time an origin connects
+  D-->>P: welcome (page id, mcpUrl, acpUrl, agents)
+  P->>D: tools (the modelContext list, again on every change)
+  T->>D: tools/list over MCP: webmcp_* plus the selected page's tools
+  T->>D: tools/call set_sentence
+  D->>P: call (callId, name, args, timeout)
+  P->>P: executeTool on document.modelContext
+  P-->>D: call/result
+  D-->>T: tool result, the hooks attach the new state to the next prompt
+```
+
+A prompt in the embedded chat that ends in a card:
+
+```mermaid
+sequenceDiagram
+  participant U as AgentChat (in the page)
+  participant D as Daemon /acp
+  participant A as claude-agent-acp
+  participant P as Page tools
+  U->>D: session/new (cwd: the page's workspace, mcpServers: /mcp/by-page/id)
+  D->>A: spawn, initialize, forward
+  U->>D: session/prompt (text + page://ui-state from context(), + widget notes)
+  D->>A: session/prompt
+  A->>D: tools/call propose_palette (MCP, the by-page endpoint)
+  D->>P: call over /ws
+  P-->>D: result (what the card needs)
+  D-->>A: tool result
+  A-->>U: session/update: tool_call, then text
+  U->>U: the widget for propose_palette renders from the call's output
+  U->>U: the user clicks Use: the page applies it, note() records it for the next prompt
+```
+
+### Finding the daemon, and only one of it
+
+```mermaid
+flowchart TD
+  S["serve (no --port)"] --> Q{"daemon.json in this state directory?"}
+  Q -- "pid alive and GET /id answers as that instance" --> X["exit 0: already running on that port"]
+  Q -- "none, or stale (dead pid, no answer)" --> C["claim daemon.json exclusively, port: null"]
+  C --> W["walk CANDIDATE_PORTS: 8717, 49217, 52431, 55893, 61307"]
+  W -- "first free" --> L["listen, write the port into daemon.json"]
+  W -- "all taken" --> F["exit 1 naming the ports (--port pins one)"]
+  L --> K["pages: GET /id per candidate · hooks and the relay: daemon.json, then the list"]
+```
+
+Every side walks the same list, so "first free" and "first found" meet. `GET /id` is the one answer any origin
+may read: the daemon's name, protocol version and a random per-start instance id, nothing about pages. Private
+daemons with their own `--state-dir` (the e2e runs) are separate instances on purpose; `--ports a,b` gives them
+their own list. Details and the audit trail: [`plans/daemon-port-discovery/main.md`](plans/daemon-port-discovery/main.md).
+
+### Layout
+
+| Path | What |
+|---|---|
+| `packages/connector` | the browser library (`src/index.ts` connect, `link.ts` the WebSocket, `discover.ts` the port sweep, `agent*.ts` ACP, `react/` the panel and widgets, `protocol.ts` the wire types) |
+| `packages/protocol` | re-exports the wire types for the daemon |
+| `bridge/src` | the daemon: `index.ts` start and CLI, `instance.ts` the singleton and port selection, `http.ts`, `ws-server.ts`, `mcp.ts`, `acp.ts`, `security.ts` (approval), `workspace.ts`, `tray.ts`, `launchd.ts`, `mcp-relay.ts` (the plugin's stdio MCP entry) |
+| `plugin` | the Claude Code plugin: `.mcp.json`, `hooks/`, `scripts/` (the hook shell), `commands/setup.md`, `skills/`, `daemon/` (the bundles `bun run build:plugin` produces; commit them, the plugin runs the bundles) |
+| `demo-site` | the demo page (`main.ts` tools, `state.ts`, `widgets.tsx` cards, `chat.tsx` the chat mount) |
+| `scripts/e2e` | browser-driven checks (`cdp.mjs` drives a throwaway Chrome; `fake-agent.mjs` the token-free echo agent) · `scripts/docs/screenshots.mjs` regenerates this README's images |
+| `plans` | the design record: one interactive plan per thread, with decisions, checks and the Codex audits |
+| `spikes` | the original feasibility spike |
+
+### Development
 
 ```bash
-bun run typecheck && bun test        # types + unit tests
-bun run build:plugin                 # bundles daemon + Claude adapter into plugin/daemon/ (commit them: the plugin runs the bundles)
+bun run typecheck && bun test        # types + unit tests (daemon, connector, hooks, relay)
+bun run build:connector              # packages/connector/dist
+bun run build:plugin                 # bundles daemon + relay + Claude adapter into plugin/daemon/ (commit them)
 bun run check:bundles                # fails if the committed bundles are stale relative to bridge/
 node scripts/e2e/m1.mjs              # page ⇄ daemon (needs daemon + demo running)
 node scripts/e2e/m2.mjs              # MCP client against the daemon
@@ -143,4 +410,16 @@ node scripts/e2e/m4-relay.mjs        # ACP relay (spawns a Claude agent: costs t
 node scripts/e2e/m5-chat.mjs         # embedded chat through the real browser, incl. auto mode and a thread switch (costs tokens)
 node scripts/e2e/m8-threads.mjs      # threads in the chat panel with the echo agent on a private daemon (needs vite; no tokens)
 node scripts/e2e/m9-widgets.mjs      # widget cards, chips, the question form, restore after reload, the floating panel (needs vite; no tokens)
+node scripts/e2e/m10-port-clash.mjs  # a stranger on the first port: fallback, the single daemon, the page's sweep, the hook, the relay (needs vite on 5179)
+node scripts/docs/screenshots.mjs    # the README's images and terminal transcript (costs a few cents)
 ```
+
+The menu bar item is a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal
+binary, `bun run build:tray`) the daemon drives over stdin/stdout; it shows the daemon's status, page and chat
+counts, *Start at login*, the log, the state folder, the MCP URL, and stop. The icon is the icon as a template
+image (`scripts/make-tray-icon.py`); `--tray-text` shows the name instead. The plugin hook and the login item start
+the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
+
+## Privacy
+
+Everything stays on your machine: see [PRIVACY.md](PRIVACY.md).
