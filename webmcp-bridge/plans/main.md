@@ -28,6 +28,7 @@ Below are tentative plans, I'm doing the best I can without knowing all the tech
 
 # Plan index
 
+- [**Chat threads in the npm package: list, switch, auto mode by default**](threads-and-auto-mode/main.md) — review this one: one ACP connection holding many threads, thread list + switching in `<AgentChat>`, new threads start in Claude Code's auto permission mode (2026-11-05: answered, implemented and verified; see its §11)
 - [**Combined plan — WebMCP ⇄ local daemon ⇄ Claude Code (Stages 1 + 2)**](combined/main.md) — review this one: unified architecture, one set of questions/decisions/risks, build order, checklist (2026-11-05, rev 4: implemented and verified end to end; see its §14)
 - [Stage 1 — WebMCP ⇄ Chrome extension ⇄ MCP ⇄ Claude Code](stage1-webmcp-bridge/main.md) — feasibility verdicts, architecture, open questions, work breakdown, acceptance checks (2026-11-04, superseded by the combined plan; kept as the investigation record)
 - [Stage 2 — Embed a local Claude Code chat inside the website (ACP)](stage2-acp-embed/main.md) — ACP = Agent Client Protocol; verdicts, unified daemon architecture, proposed revisions to Stage 1 (2026-11-04, superseded by the combined plan; kept as the investigation record)

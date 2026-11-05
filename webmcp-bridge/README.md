@@ -9,7 +9,7 @@ Three things ship from this repo:
 
 | Deliverable | Path | What it is |
 |---|---|---|
-| `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers `connectAgent()` plus a React `<AgentChat>` (`webmcp-connector/react`). |
+| `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` (`webmcp-connector/react`). |
 | Demo page | `demo-site` | Vite page with four WebMCP tools (colour + sentence), a call log, a bonus tool for dynamic registration, and the embedded chat. |
 | `webmcp-daemon` Claude Code plugin | `plugin` | Ships and runs the local daemon (`bridge/`), points Claude Code at it over MCP, and injects each page's instructions (session start) and live UI state (every prompt) through hooks. |
 
@@ -37,12 +37,28 @@ const page = connect({
   instructions: preamble({ pageTitle: 'My app' }) + '\n\n' + MY_SYSTEM_PROMPT,   // replaces Claude Code's preset in the embedded chat
   instructionsSummary: 'Short version for terminal sessions (≤ 9,500 chars).',
   context: () => describeWhatTheUserSees(),                                     // deterministic; attached to every prompt
-  // toolPolicy: { disallowedTools: ['Bash', 'Write', 'Edit'] },                // default: full Claude Code, every non-read tool prompts
+  // toolPolicy: { disallowedTools: ['Bash', 'Write', 'Edit'] },                // default: full Claude Code; new chat threads start in auto mode (see below)
 });
 document.modelContext.registerTool({ name: 'get_state', description: '…', inputSchema: {…}, annotations: { readOnlyHint: true }, execute: () => state });
 ```
 
 React chat: `import { AgentChat } from 'webmcp-connector/react'` and render `<AgentChat page={page} />`.
+
+**Threads.** The panel holds one ACP connection and lists every stored thread of the page under **Threads**
+(title, age, state); click one to switch, **New** for a fresh one, × to delete. Switching away from an idle
+thread frees its Claude process (reopening replays the history in about a second); a thread that is still
+answering keeps running in the background and is released when its turn ends. The last active thread reopens
+after a reload. Without React: `openAgent(page)` returns an `AgentConnection` with `listThreads()`,
+`openThread(id?)`, `closeThread()`, `deleteThread()` and change listeners; `connectAgent(page)` is the
+one-thread shorthand. Agents that cannot list or resume sessions get the single-thread panel.
+
+**Permission mode.** New threads start in Claude Code's **auto** mode: Claude Code decides most permissions
+itself, including shell and file tools in the page's scratch workspace, and the panel prompts only for what it
+escalates. Change it per thread in the mode dropdown, or pin the default with
+`<AgentChat agentOptions={{ defaultMode: 'default' }}>` (`null` leaves the agent's own default);
+`toolPolicy.disallowedTools` still removes tools entirely. Resumed threads keep the mode they were in. The daemon
+writes `defaultMode: "auto"` into new page workspaces so other ACP clients start the same way; the page's origin
+approval and the per-call prompts auto mode still raises are the safety boundary.
 
 ## The menu bar item
 
@@ -83,5 +99,6 @@ bun run check:bundles                # fails if the committed bundles are stale 
 node scripts/e2e/m1.mjs              # page ⇄ daemon (needs daemon + demo running)
 node scripts/e2e/m2.mjs              # MCP client against the daemon
 node scripts/e2e/m4-relay.mjs        # ACP relay (spawns a Claude agent: costs tokens)
-node scripts/e2e/m5-chat.mjs         # embedded chat through the real browser (costs tokens)
+node scripts/e2e/m5-chat.mjs         # embedded chat through the real browser, incl. auto mode and a thread switch (costs tokens)
+node scripts/e2e/m8-threads.mjs      # threads in the chat panel with the echo agent on a private daemon (needs vite; no tokens)
 ```

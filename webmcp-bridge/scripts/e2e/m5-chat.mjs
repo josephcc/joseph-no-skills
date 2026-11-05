@@ -47,7 +47,7 @@ try {
     await page.evaluate('document.querySelector(".wmc-perm button[data-kind=reject_once]").click(); "rejected"');
   }
   const s5 = await waitFor(async () => { const s = await snap(); return s.turns.length >= 4 && s.state === 'ready' ? s : null; }, 'bash turn done', { tries: 120 });
-  step('bash rejected', { reply: lastAgentText(s5).slice(0, 160), tools: toolNames(s5) });
+  step('shell write (Manual: prompt rejected; auto: Claude Code decides)', { prompted: s4.pendingPermissions.length > 0, reply: lastAgentText(s5).slice(0, 160), tools: toolNames(s5) });
   // 5b. cancel mid-turn (c13)
   await page.evaluate(`window.__demo.agent.prompt('Count from 1 to 400, one number per line, no commentary.'); 'sent'`);
   await waitFor(async () => (await snap()).state === 'prompting', 'prompting', { tries: 20 });
