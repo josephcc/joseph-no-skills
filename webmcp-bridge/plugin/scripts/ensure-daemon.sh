@@ -9,7 +9,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bin_dir="$WEBMCP_STATE/bin"
 if [ -f "$bin_dir/webmcp-daemon.js" ]; then
   changed=0
-  for f in webmcp-daemon.js claude-agent-acp.js tray/webmcp-bridge-tray; do
+  for f in webmcp-daemon.js claude-agent-acp.js tray/webmcp-bridge-tray tray/webmcp-bridge-icon.png; do
     src="$here/../daemon/$f"
     if [ -f "$src" ] && ! cmp -s "$src" "$bin_dir/$f"; then mkdir -p "$(dirname "$bin_dir/$f")" && cp "$src" "$bin_dir/$f" && changed=1; fi
   done

@@ -10132,7 +10132,7 @@ var LAUNCHD_LABEL = "com.webmcp.daemon";
 function launchdPlan(config, entry) {
   const binDir = join2(config.stateDir, "bin");
   const daemonCopy = join2(binDir, basename(entry));
-  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray"].map((f) => join2(dirname(entry), f)).filter(existsSync);
+  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray", "tray/webmcp-bridge-icon.png"].map((f) => join2(dirname(entry), f)).filter(existsSync);
   const plistPath = join2(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
   const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, "--port", String(config.port), "--tray"];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -10159,7 +10159,7 @@ function installLaunchd(config, entry, { dryRun = false } = {}) {
 ${plan.plist}`;
   mkdirSync(plan.binDir, { recursive: true });
   for (const f of plan.files) {
-    const rel = f.endsWith("webmcp-bridge-tray") ? join2("tray", basename(f)) : basename(f);
+    const rel = basename(dirname(f)) === "tray" ? join2("tray", basename(f)) : basename(f);
     mkdirSync(dirname(join2(plan.binDir, rel)), { recursive: true });
     copyFileSync(f, join2(plan.binDir, rel));
   }
@@ -27465,6 +27465,7 @@ class Tray {
   #deps;
   #child;
   #timer;
+  #icon;
   constructor(deps) {
     this.#deps = deps;
   }
@@ -27476,6 +27477,10 @@ class Tray {
     ].filter((p) => !!p);
     return candidates.find((p) => existsSync5(p));
   }
+  static iconPath(helper) {
+    const p = process.env.WEBMCP_TRAY_ICON ?? join7(dirname3(helper), "webmcp-bridge-icon.png");
+    return existsSync5(p) ? p : undefined;
+  }
   start() {
     if (process.platform !== "darwin")
       return false;
@@ -27484,6 +27489,9 @@ class Tray {
       log.warn("tray: helper not found; running without a menu bar item");
       return false;
     }
+    this.#icon = Tray.iconPath(helper);
+    if (!this.#icon)
+      log.warn("tray: icon not found next to the helper; using the fallback symbol");
     const child = spawn3(helper, [], { stdio: ["pipe", "pipe", "inherit"] });
     this.#child = child;
     let buf = "";
@@ -27535,8 +27543,16 @@ class Tray {
       { sep: true },
       { id: "stop", title: "Stop daemon" }
     ];
-    const running = { running: true };
-    this.#send({ type: "set", title: `${running ? "●" : "○"} webmcp-bridge`, icon: this.#deps.config.trayText ? "" : "point.3.connected.trianglepath.dotted", tooltip: `webmcp-bridge (webmcp-daemon ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`, items });
+    const text = this.#deps.config.trayText;
+    this.#send({
+      type: "set",
+      title: "● webmcp-bridge",
+      image: text ? "" : this.#icon ?? "",
+      template: true,
+      icon: text ? "" : "point.3.connected.trianglepath.dotted",
+      tooltip: `webmcp-bridge (webmcp-daemon ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`,
+      items
+    });
   }
   #onMessage(msg) {
     if (msg.type === "ready") {

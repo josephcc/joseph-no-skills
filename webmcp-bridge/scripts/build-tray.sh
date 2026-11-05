@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the status-bar helper the daemon spawns on macOS: plugin/daemon/tray/webmcp-bridge-tray (universal binary).
-# Needs only the Xcode Command Line Tools (clang + Cocoa). The result is committed with the plugin.
+# Needs only the Xcode Command Line Tools (clang + Cocoa). The result is committed with the plugin, next to the
+# menu bar icon plugin/daemon/tray/webmcp-bridge-icon.png (regenerate that with scripts/make-tray-icon.py).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$root/plugin/daemon/tray/webmcp-bridge-tray"

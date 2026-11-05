@@ -46,7 +46,7 @@ React chat: `import { AgentChat } from 'webmcp-connector/react'` and render `<Ag
 
 ## The menu bar item
 
-While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 140 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
+While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The icon is the icon as a template image (`plugin/daemon/tray/webmcp-bridge-icon.png`, regenerated from the company logo with `scripts/make-tray-icon.py`), so the menu bar colours it like its neighbours: white in dark mode, black in light mode; `--tray-text` shows the name instead. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
 
 ## For Claude Code users
 

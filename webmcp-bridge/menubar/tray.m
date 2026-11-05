@@ -1,12 +1,17 @@
 // webmcp-bridge-tray: a minimal macOS status-bar item driven by the webmcp-daemon over stdin/stdout.
 // Protocol (one JSON object per line):
-//   daemon → helper: {"type":"set","title":"● webmcp-bridge","tooltip":"…","items":[{"id":"status","title":"…","enabled":false},{"sep":true},{"id":"login","title":"Start at login","checked":true}]}
+//   daemon → helper: {"type":"set","title":"● webmcp-bridge","image":"/path/to/icon.png","template":false,"icon":"<SF Symbol name>","tooltip":"…","items":[{"id":"status","title":"…","enabled":false},{"sep":true},{"id":"login","title":"Start at login","checked":true}]}
+//     The button shows, in order of preference: the PNG at "image" (drawn at 18×18 pt; "template":true turns it into a
+//     monochrome template image), else the SF Symbol named by "icon", else the "title" text. While a non-template image is
+//     shown, the menu bar's legibility drop shadow is switched off (see setMenuBarShadow:), so a coloured logo has no halo.
 //   helper → daemon: {"type":"ready"} once; {"type":"click","id":"login"} on each menu click.
 // The helper exits when stdin closes, so the item disappears with the daemon. Built by scripts/build-tray.sh.
 #import <Cocoa/Cocoa.h>
 
 @interface Tray : NSObject <NSApplicationDelegate>
 @property (strong) NSStatusItem *statusItem;
+@property (strong) NSString *imagePath;   // path of the currently loaded "image", so repeated "set" frames don't reload it
+@property (strong) NSImage *image;
 @end
 
 @implementation Tray
@@ -43,14 +48,21 @@
 }
 - (void)apply:(NSDictionary *)msg {
     if (![msg[@"type"] isEqual:@"set"]) return;
+    NSString *imagePath = [msg[@"image"] isKindOfClass:NSString.class] ? msg[@"image"] : nil;
     NSString *icon = [msg[@"icon"] isKindOfClass:NSString.class] ? msg[@"icon"] : nil;
     NSImage *img = nil;
-    if (icon.length) {
+    if (imagePath.length) {   // a PNG shipped next to the helper (the icon), loaded once per path
+        if (![imagePath isEqualToString:self.imagePath]) { self.image = [[NSImage alloc] initWithContentsOfFile:imagePath]; self.imagePath = imagePath; }
+        img = self.image;
+        if (img) { img.size = NSMakeSize(18, 18); img.template = [msg[@"template"] boolValue]; }
+    }
+    if (!img && icon.length) {
         if (@available(macOS 11.0, *)) img = [NSImage imageWithSystemSymbolName:icon accessibilityDescription:@"webmcp-bridge"];
         if (img) { img.template = YES; }
     }
     if (img) { self.statusItem.button.image = img; self.statusItem.button.imagePosition = NSImageOnly; self.statusItem.button.title = @""; }
     else if ([msg[@"title"] isKindOfClass:NSString.class]) { self.statusItem.button.image = nil; self.statusItem.button.imagePosition = NSNoImage; self.statusItem.button.title = msg[@"title"]; }
+    [self setMenuBarShadow:!(img && !img.template)];   // keep the system shadow for template glyphs and text; drop it for the logo
     if ([msg[@"tooltip"] isKindOfClass:NSString.class]) self.statusItem.button.toolTip = msg[@"tooltip"];
     NSArray *items = [msg[@"items"] isKindOfClass:NSArray.class] ? msg[@"items"] : @[];
     NSMenu *menu = [[NSMenu alloc] init];
@@ -67,6 +79,16 @@
     }
     menu.autoenablesItems = NO;
     self.statusItem.menu = menu;
+}
+// In dark mode the menu bar draws a drop shadow behind every status item for legibility (a Core Animation shadow owned by
+// the private NSStatusBarContentView, property hasCAShadow). Behind a white template glyph it is invisible; behind the
+// coloured icon it reads as a dark halo, so it is switched off while the logo is shown. Private API, hence guarded
+// and best-effort: if a future macOS drops the property the shadow simply stays. Re-applied on every "set" frame, since
+// AppKit could reset it when the appearance changes.
+- (void)setMenuBarShadow:(BOOL)on {
+    NSView *cv = self.statusItem.button.window.contentView;
+    if (!cv || ![cv respondsToSelector:NSSelectorFromString(@"setHasCAShadow:")]) return;
+    @try { if ([[cv valueForKey:@"hasCAShadow"] boolValue] != on) [cv setValue:@(on) forKey:@"hasCAShadow"]; } @catch (NSException *e) { /* leave the system default */ }
 }
 - (void)clicked:(NSMenuItem *)sender { [self emit:@{@"type": @"click", @"id": sender.representedObject ?: @""}]; }
 - (void)emit:(NSDictionary *)obj {
