@@ -161,6 +161,14 @@ describe('findRunningDaemon and identify (Codex audit on the port-discovery buil
     expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toBeNull();
     expect(readDaemonRecord(dir)).toBeNull();
   });
+  test('a legacy record whose port now answers as some new instance (its pid reused) is stale (Codex audit 2)', async () => {
+    const port = await freePort();
+    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 1, version: 'x', instance: 'new' }, healthPid: 424242 });
+    const dir = stateDir();
+    writeFileSync(daemonFilePath(dir), JSON.stringify({ pid: process.pid, port, startedAt: 'x', version: '0.0.1' }));
+    expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toBeNull();
+    expect(readDaemonRecord(dir)).toBeNull();
+  });
   test('identify passes over a daemon of another protocol version', async () => {
     const port = await freePort();
     await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 2, version: 'x', instance: 'i' } });

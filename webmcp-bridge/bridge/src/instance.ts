@@ -120,9 +120,15 @@ export async function findRunningDaemon(stateDir: string, host: string, { waitMs
     if (!rec) { if (existsSync(daemonFilePath(stateDir))) removeDaemonFile(stateDir); return null; }
     if (!pidAlive(rec.pid)) { removeDaemonFile(stateDir); return null; }
     if (rec.port !== null) {
-      const id = await identify(host, rec.port);
-      if (id && (!rec.instance || id.instance === rec.instance)) return { pid: rec.pid, port: rec.port };
-      if (!rec.instance && !id && (await legacyHealthPid(host, rec.port)) === rec.pid) return { pid: rec.pid, port: rec.port, legacy: true };
+      if (rec.instance) {
+        // Ours only when the port answers as the recorded instance: a reused pid plus some other daemon on
+        // that port must not pass.
+        const id = await identify(host, rec.port);
+        if (id && id.instance === rec.instance) return { pid: rec.pid, port: rec.port };
+      } else if ((await legacyHealthPid(host, rec.port)) === rec.pid) {
+        // A record from before /id: only its own /health, carrying the recorded pid, proves it (Codex audit 2).
+        return { pid: rec.pid, port: rec.port, legacy: true };
+      }
     }
     if (Date.now() >= deadline) { removeDaemonFile(stateDir); return null; }
     await new Promise((r) => setTimeout(r, 100));

@@ -67,7 +67,8 @@ async function main(): Promise<void> {
   let port = await waitFor(HOOK_GRACE_MS);
   if (port === null && process.env.WEBMCP_RELAY_START !== '0' && startDaemon()) port = await waitFor(START_WAIT_MS);
   if (port === null) { log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(', ')}); run the plugin's setup`); process.exit(1); }
-  const identity = await identify(HOST, port);
+  // The instance we dialled; a missed first probe is filled in by the first probe that answers (Codex audit 2).
+  let identity = await identify(HOST, port);
   const url = new URL(`http://${HOST}:${port}/mcp`);
   const upstream = new StreamableHTTPClientTransport(url);
   const stdio = new StdioServerTransport();
@@ -98,7 +99,8 @@ async function main(): Promise<void> {
   let misses = 0;
   const liveness = setInterval(() => {
     void identify(HOST, port).then((now) => {
-      if (now && (!identity || now.instance === identity.instance)) { misses = 0; return; }
+      if (now && !identity) { identity = now; misses = 0; return; }
+      if (now && identity && now.instance === identity.instance) { misses = 0; return; }
       if (++misses >= 2) quit(0, now ? 'the daemon restarted; reconnect the MCP server' : 'the daemon went away');
     });
   }, LIVENESS_MS);

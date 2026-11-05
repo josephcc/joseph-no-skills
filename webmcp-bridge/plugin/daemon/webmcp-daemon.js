@@ -10232,11 +10232,13 @@ async function findRunningDaemon(stateDir, host, { waitMs = 2000 } = {}) {
       return null;
     }
     if (rec.port !== null) {
-      const id = await identify(host, rec.port);
-      if (id && (!rec.instance || id.instance === rec.instance))
-        return { pid: rec.pid, port: rec.port };
-      if (!rec.instance && !id && await legacyHealthPid(host, rec.port) === rec.pid)
+      if (rec.instance) {
+        const id = await identify(host, rec.port);
+        if (id && id.instance === rec.instance)
+          return { pid: rec.pid, port: rec.port };
+      } else if (await legacyHealthPid(host, rec.port) === rec.pid) {
         return { pid: rec.pid, port: rec.port, legacy: true };
+      }
     }
     if (Date.now() >= deadline) {
       removeDaemonFile(stateDir);

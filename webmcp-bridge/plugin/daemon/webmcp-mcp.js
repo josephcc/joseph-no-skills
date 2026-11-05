@@ -9200,7 +9200,7 @@ async function main() {
     log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(", ")}); run the plugin's setup`);
     process.exit(1);
   }
-  const identity = await identify(HOST, port);
+  let identity = await identify(HOST, port);
   const url2 = new URL(`http://${HOST}:${port}/mcp`);
   const upstream = new StreamableHTTPClientTransport(url2);
   const stdio = new StdioServerTransport;
@@ -9234,7 +9234,12 @@ async function main() {
   let misses = 0;
   const liveness = setInterval(() => {
     identify(HOST, port).then((now) => {
-      if (now && (!identity || now.instance === identity.instance)) {
+      if (now && !identity) {
+        identity = now;
+        misses = 0;
+        return;
+      }
+      if (now && identity && now.instance === identity.instance) {
         misses = 0;
         return;
       }
