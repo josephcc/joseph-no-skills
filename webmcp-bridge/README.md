@@ -7,7 +7,7 @@ to Claude through the [Agent Client Protocol](https://agentclientprotocol.com), 
 session sees and operates the same page through MCP. Nothing leaves your machine except what Claude Code
 itself sends to Anthropic; the page never holds a key.
 
-![The demo page with the embedded chat: Claude set the sentence, proposed a palette as a card, and suggested two follow-ups](docs/img/demo-hero.png)
+![The demo page with its embedded chat: asked for the author's latest paper, the local Claude Code loaded its paper-search skill, ran it, and set the page's sentence to the title it found](docs/img/demo-chat-skill.png)
 
 Three things ship from this repo:
 
@@ -63,16 +63,23 @@ unregister to watch the tool list change live.
 
 ### Chat with the page in the browser
 
-Click **Connect** in the panel. The chat is your Claude Code (your login, your plan) started by the daemon for
-this page, with the page's instructions as its system prompt and a snapshot of what you see attached to every
-message, so you can say "make it feel like evening" without explaining what "it" is.
+Click **Connect** in the panel. The chat is your Claude Code (your login, your plan, your skills) started by the
+daemon for this page, with the page's instructions as its system prompt and a snapshot of what you see attached
+to every message, so you can say "make it feel like evening" without explaining what "it" is.
 
-![The embedded chat after one turn: a palette card with Use buttons, Claude's one-line reply, and two suggested replies as chips](docs/img/demo-chat.png)
+The picture at the top is one such turn: *Use your s2-paper-search skill to find the most recent paper by Joseph Chee Chang,
+then set this page's sentence to that paper's title.* Claude loaded the `s2-paper-search` skill from the user's
+own `~/.claude/skills`, ran its script (one attempt failed, two succeeded), found the paper, and called the page's
+`set_sentence`; the title is on the page and in the call log. Nothing about papers is in the demo: that is Claude
+Code with its skills, working on the page it was given.
 
-What happened in that turn: Claude called `set_sentence` (the page changed under the panel), `propose_palette`
-(the page drew its own card inside the chat, four options with **Use** buttons that apply one *only when you
-click*), and `suggest_replies` (the two chips; clicking one sends it). When you click **Use**, the page records a
-note, and the next message you send carries it, so Claude knows what you picked without being told.
+A page can also draw its own cards inside the chat. Here the same chat set the sentence, proposed a palette as a
+card with **Use** buttons that apply an option *only when you click*, and suggested two follow-ups as chips:
+
+![The embedded chat with a palette card and two suggested-reply chips beside the recoloured page](docs/img/demo-hero.png)
+
+When you click **Use**, the page records a note, and the next message you send carries it, so Claude knows what
+you picked without being told.
 
 Things to try: **Threads** lists every past conversation about this page (title, age, state); **New** starts one;
 the mode dropdown is Claude Code's permission mode, **auto** by default; the footer shows the context meter and
@@ -83,38 +90,10 @@ questions (Claude's `AskUserQuestion`) appear as a form in the panel.
 
 Open a terminal, run `claude`, and ask about the page. The plugin gives the session the page's tools (as
 `mcp__webmcp__…`), its instructions at session start, and its current state with every prompt. Here a terminal
-Claude Code answers "what color is the demo page?" from the page's state, then "Propose a palette for this page"
+Claude Code answers "what color is the demo page?" from the page's state; then "Propose a palette for this page"
 puts the card on the page itself, floating bottom-right, because a terminal has no chat panel to draw in:
 
 ![Terminal Claude Code beside the demo page: it reads the page's colour, then its palette proposal appears as a floating card on the page](docs/img/terminal-claude.png)
-
-The same kind of session as text, from a `claude -p` run against the demo, trimmed (Claude Code's own
-tool-lookup step omitted, long results shortened):
-
-```text
-> I have a web page open in my browser. What is it showing right now? Then change its
-  sentence to 'Hello from terminal Claude' and propose a warmer palette for it.
-
-⏺ get_state()
-  ⎿  {"backgroundColor":"rgb(138, 182, 214)","sentence":"Local Claude is reading this page", …}
-
-⏺ set_sentence(text: "Hello from terminal Claude")
-  ⎿  {"backgroundColor":"rgb(138, 182, 214)","sentence":"Hello from terminal Claude", …}
-
-⏺ propose_palette(story: "Warm, sunlit tones that replace the current cool blue with something cozier.",
-                  options: [{color: "#f4a261", why: "Soft apricot orange feels friendly and sunny."}, … 4 options])
-  ⎿  {"card":"p2", …}
-
-⏺ The page was showing a soft blue background, rgb(138, 182, 214), with the sentence "Local Claude is
-  reading this page". It's the "WebMCP demo — colour and sentence" page on 127.0.0.1:5179.
-  I changed the sentence to "Hello from terminal Claude". I also put a card on the page with four warmer
-  background options. Each one has a "Use" button, and nothing changes until you click one:
-  1. Apricot #f4a261  2. Honey #e9c46a  3. Terracotta #e76f51  4. Sand #f2cc8f
-```
-
-After that session the sentence it set is on the page and its card waits in the floating tray:
-
-![After the terminal session: the page's sentence reads "Hello from terminal Claude" and the palette card floats bottom-right](docs/img/demo-terminal-card.png)
 
 The tray is a scroll box no taller than the window; close a card with its ×. Clicking **Use** there records the
 same note the chat's cards record, and the next terminal prompt's state ends with it, so "use the blue one" works
