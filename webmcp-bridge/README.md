@@ -265,32 +265,7 @@ API chat uses, one CSS file mapping `--wmc-*` onto its design tokens, and nothin
 
 ### The pieces
 
-```mermaid
-flowchart LR
-  subgraph B["Browser"]
-    P["Your page<br/>tools on document.modelContext"]
-    C["webmcp-connector<br/>connect() · AgentChat · FloatingWidgetPanel"]
-    P --- C
-  end
-  subgraph D["webmcp-daemon on 127.0.0.1 (first free candidate port)"]
-    WS["/ws  pages"]
-    MCP["/mcp  MCP server"]
-    ACP["/acp  ACP relay"]
-    R["page registry · origin approval · per-page workspaces"]
-  end
-  subgraph T["Terminal Claude Code"]
-    PL["webmcp-daemon plugin<br/>hooks · webmcp-mcp relay"]
-  end
-  subgraph A["Embedded chat's agent (one process per open thread)"]
-    AD["claude-agent-acp → Claude Code"]
-  end
-  C -- "WebSocket: hello, tools, calls, context" --> WS
-  C -- "WebSocket: ACP JSON-RPC" --> ACP
-  PL -- "stdio ⇄ streamable HTTP" --> MCP
-  ACP -- "stdio: ACP" --> AD
-  AD -- "MCP: /mcp/by-page/<id>" --> MCP
-  MCP -. "a page tool call goes out over /ws" .-> WS
-```
+![The pieces: the page and webmcp-connector in the browser tab; the daemon with its /mcp, /ws and /acp endpoints; terminal Claude Code through the plugin's relay; the chat's agent process per thread](docs/img/fig-pieces.svg)
 
 - **The page** registers tools on `document.modelContext` (the browser's native API behind a flag, or the
   connector's shim) and calls `connect()`. The connector opens `/ws`, sends a `hello` (origin, title,
@@ -314,57 +289,17 @@ flowchart LR
 
 A page connecting, then a terminal session calling one of its tools:
 
-```mermaid
-sequenceDiagram
-  participant P as Page (connector)
-  participant D as Daemon
-  participant T as Terminal Claude (plugin relay)
-  P->>D: GET /id on each candidate port, in order
-  P->>D: WebSocket /ws, then hello (origin, title, instructions)
-  D-->>P: approval tab the first time an origin connects
-  D-->>P: welcome (page id, mcpUrl, acpUrl, agents)
-  P->>D: tools (the modelContext list, again on every change)
-  T->>D: tools/list over MCP: webmcp_* plus the selected page's tools
-  T->>D: tools/call set_sentence
-  D->>P: call (callId, name, args, timeout)
-  P->>P: executeTool on document.modelContext
-  P-->>D: call/result
-  D-->>T: tool result, the hooks attach the new state to the next prompt
-```
+![A page connecting and a terminal tool call, step by step across the page, the daemon and terminal Claude](docs/img/fig-terminal-call.svg)
 
 A prompt in the embedded chat that ends in a card:
 
-```mermaid
-sequenceDiagram
-  participant U as AgentChat (in the page)
-  participant D as Daemon /acp
-  participant A as claude-agent-acp
-  participant P as Page tools
-  U->>D: session/new (cwd: the page's workspace, mcpServers: /mcp/by-page/id)
-  D->>A: spawn, initialize, forward
-  U->>D: session/prompt (text + page://ui-state from context(), + widget notes)
-  D->>A: session/prompt
-  A->>D: tools/call propose_palette (MCP, the by-page endpoint)
-  D->>P: call over /ws
-  P-->>D: result (what the card needs)
-  D-->>A: tool result
-  A-->>U: session/update: tool_call, then text
-  U->>U: the widget for propose_palette renders from the call's output
-  U->>U: the user clicks Use: the page applies it, note() records it for the next prompt
-```
+![A prompt in the embedded chat ending in a card, step by step across the chat panel, the daemon, the agent and the page's tools](docs/img/fig-chat-card.svg)
 
 ### Finding the daemon, and only one of it
 
-```mermaid
-flowchart TD
-  S["serve (no --port)"] --> Q{"daemon.json in this state directory?"}
-  Q -- "pid alive and GET /id answers as that instance" --> X["exit 0: already running on that port"]
-  Q -- "none, or stale (dead pid, no answer)" --> C["claim daemon.json exclusively, port: null"]
-  C --> W["walk CANDIDATE_PORTS: 8717, 49217, 52431, 55893, 61307"]
-  W -- "first free" --> L["listen, write the port into daemon.json"]
-  W -- "all taken" --> F["exit 1 naming the ports (--port pins one)"]
-  L --> K["pages: GET /id per candidate · hooks and the relay: daemon.json, then the list"]
-```
+![Finding the daemon and keeping to one: the record check, the claim, the candidate ports, and how every client walks the same list](docs/img/fig-ports.svg)
+
+The figures above are hand-laid-out SVGs from `scripts/docs/figures.mjs`; edit the coordinates there and rerun it.
 
 Every side walks the same list, so "first free" and "first found" meet. `GET /id` is the one answer any origin
 may read: the daemon's name, protocol version and a random per-start instance id, nothing about pages. Private

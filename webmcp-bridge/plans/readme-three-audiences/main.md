@@ -159,7 +159,7 @@ Document as published, but don't setup the publication now, do note it in the RE
 
 ## 5. Decisions (locked 2026-11-05 from Joseph's answers)
 
-<decision id="D-1" title="Mermaid figures" status="locked" date="2026-11-05" from="Q-1">
+<decision id="D-1" title="Mermaid figures" status="superseded" date="2026-11-05" from="Q-1">
 Four Mermaid figures in the README: components, the page-connects-and-terminal-calls sequence, the embedded-chat sequence, port discovery.
 <rationale>Rendered by GitHub and kept as text.</rationale>
 </decision>
@@ -183,6 +183,11 @@ The README documents `bun add webmcp-connector` (and the `webmcp-connector/react
 <rationale>Joseph, 2026-11-05: "Document as published, but don't setup the publication now, do note it in the README that its not published yet."</rationale>
 </decision>
 
+<decision id="D-6" title="Our own SVG figures, laid out by a script, instead of Mermaid" status="locked" date="2026-11-05" from="Q-1">
+`scripts/docs/figures.mjs` writes `docs/img/fig-pieces.svg`, `fig-terminal-call.svg`, `fig-chat-card.svg`, `fig-ports.svg`: boxes, arrows and labels with explicit coordinates on a 1200-wide canvas, large type, the daemon's endpoints level with what they talk to. Supersedes D-1.
+<rationale>Joseph, after seeing the Mermaid renders: "tiny dense and hard to read … can we roll our own, especially the first plot." Mermaid's auto-layout packs the components figure into small boxes; hand-laid SVG keeps the type readable at README width and stays text in git.</rationale>
+</decision>
+
 ## 6. Findings and risks
 
 <finding id="F-1" title="Screenshots go stale" severity="p3" status="open" effort="small">
@@ -204,10 +209,10 @@ True today; nothing to do until the repo is public or the package published.
 
 <check id="c1" status="done">The three PNGs exist under `docs/img/`, are referenced from the README, and were produced by the committed script. — evidence: after Joseph's review of the first set (7e8ae86): four images, one job each — `demo-chat-skill.png` (hero: the chat running the s2-paper-search skill and setting the title; Joseph's own turn in the kept window, captured by CDP), `demo-hero.png` (the cards example), `terminal-claude.png` and `menu-bar.png` (Joseph's screenshots). The script produces the first two; the chat-column crop, the after-terminal card and the text transcript were redundant and are gone.</check>
 <check id="c2" status="done">Every section of today's README has a home in the new one (threads, permission mode, widgets, render props, ports, menu bar, plugin commands, privacy, layout, development). — evidence: Try it → Using it/Install and Development; For web developers (connect, tools, the React chat, threads, permission mode, widgets, render props, the floating panel) → Building a site on it; the menu bar item → Development; ports → How it works/Finding the daemon; For Claude Code users → Install; Privacy, Layout (now a table), Development kept.</check>
-<check id="c3" status="done">The four figures render on GitHub (checked in the Mermaid live editor or a GitHub preview). — evidence: all four blocks parsed by mermaid 11 (`mermaid.parse` in a throwaway Chrome, /tmp/mermaid-check.mjs): flowchart, sequence, sequence, flowchart. Semicolons inside sequence messages had to go (the parser splits statements on them).</check>
+<check id="c3" status="done">The four figures render on GitHub (checked in the Mermaid live editor or a GitHub preview). — evidence: superseded by D-6: the four figures are now SVGs from `scripts/docs/figures.mjs`, each rendered in Chrome and checked by eye (type 15–22 px at 1200 wide; no overlaps).</check>
 <check id="c4" status="done">A web developer can follow the builder part from an empty page to a chat with one card without reading the plans. — evidence: the Building part goes install → `connect()` → `registerTool` → `<AgentChat>` → a `PaletteCard` widget with `note()`, each with a snippet; the demo's files are named for the rest.</check>
 <check id="c5" status="done">The contributor part names every process and endpoint that exists in the tree and no others. — evidence: the pieces named are `webmcp-connector`, `webmcp-daemon` (`/ws`, `/mcp`, `/mcp/by-page/<id>`, `/acp`, `/id`), the plugin's `webmcp-mcp` relay, `claude-agent-acp`; the MCP tool names are the daemon's five; nothing else is claimed.</check>
 
 ## 9. Status
 
-Done: the README has the three parts, four screenshots (two by the script, two by Joseph) and four Mermaid figures; the old README's every section has a home. Joseph's review dropped the redundant chat crop, the after-terminal card and the transcript block (D-2's stand-in, superseded by his terminal screenshot). Regenerate the images with `node scripts/docs/screenshots.mjs` after UI changes (a few cents).
+Done: the README has the three parts, four screenshots (two by the script, two by Joseph) and four hand-laid-out SVG figures (D-6, after Joseph found the Mermaid ones unreadable); the old README's every section has a home. Joseph's review dropped the redundant chat crop, the after-terminal card and the transcript block (D-2's stand-in, superseded by his terminal screenshot). Regenerate the images with `node scripts/docs/screenshots.mjs` after UI changes (a few cents).
