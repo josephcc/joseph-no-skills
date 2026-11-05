@@ -82,8 +82,14 @@ questions (Claude's `AskUserQuestion`) appear as a form in the panel.
 ### Terminal Claude on the same page
 
 Open a terminal, run `claude`, and ask about the page. The plugin gives the session the page's tools (as
-`mcp__webmcp__…`), its instructions at session start, and its current state with every prompt. A real session
-against the demo, trimmed (Claude Code's own tool-lookup step omitted, long results shortened):
+`mcp__webmcp__…`), its instructions at session start, and its current state with every prompt. Here a terminal
+Claude Code answers "what color is the demo page?" from the page's state, then "Propose a palette for this page"
+puts the card on the page itself, floating bottom-right, because a terminal has no chat panel to draw in:
+
+![Terminal Claude Code beside the demo page: it reads the page's colour, then its palette proposal appears as a floating card on the page](docs/img/terminal-claude.png)
+
+The same kind of session as text, from a `claude -p` run against the demo, trimmed (Claude Code's own
+tool-lookup step omitted, long results shortened):
 
 ```text
 > I have a web page open in my browser. What is it showing right now? Then change its
@@ -106,13 +112,13 @@ against the demo, trimmed (Claude Code's own tool-lookup step omitted, long resu
   1. Apricot #f4a261  2. Honey #e9c46a  3. Terracotta #e76f51  4. Sand #f2cc8f
 ```
 
-Terminal Claude has no chat panel to draw in, so a card it makes lands on the page itself, bottom-right, in a
-floating tray; the sentence it set is already on the page:
+After that session the sentence it set is on the page and its card waits in the floating tray:
 
 ![After the terminal session: the page's sentence reads "Hello from terminal Claude" and the palette card floats bottom-right](docs/img/demo-terminal-card.png)
 
 The tray is a scroll box no taller than the window; close a card with its ×. Clicking **Use** there records the
-same note the chat's cards record, and the next terminal prompt's state ends with it.
+same note the chat's cards record, and the next terminal prompt's state ends with it, so "use the blue one" works
+as the next message.
 
 ### Stopping it, and what it keeps
 
