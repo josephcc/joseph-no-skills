@@ -39,6 +39,17 @@ export interface PendingPermission {
 
 export interface PlanEntry { content: string; priority?: string; status?: string }
 
+/** An agent-side setting (ACP `configOptions`): the Claude adapter offers the permission mode, the model, the effort level, … */
+export interface ConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: 'select' | 'boolean' | (string & {});
+  currentValue: unknown;
+  options?: Array<{ value: string; name: string; description?: string }>;
+}
+
 export type ElicitationResult = { action: 'accept'; content: Record<string, unknown> } | { action: 'decline' } | { action: 'cancel' };
 /** A form the agent (or an MCP server behind it) asks the user to fill in: ACP `elicitation/create`, form mode. */
 export interface PendingElicitation {
@@ -60,6 +71,8 @@ export interface SessionSnapshot {
   plan: PlanEntry[];
   commands: Array<{ name: string; description?: string }>;
   modes?: { current?: string; available: Array<{ id: string; name: string; description?: string }> };
+  /** The agent's settings, from session/new (or load) and every `config_option_update`; undefined for agents without them. */
+  configOptions?: ConfigOption[];
   usage?: { used?: number; size?: number; cost?: { amount: number; currency: string } };
   title?: string;
 }
@@ -78,7 +91,9 @@ export class SessionModel {
   onChange(l: Listener): () => void { this.#listeners.add(l); return () => this.#listeners.delete(l); }
 
   setState(state: SessionSnapshot['state'], error?: string) { this.#s.state = state; this.#s.error = error; this.#notify(); }
-  setSession(info: { sessionId?: string; agentName?: string; modes?: SessionSnapshot['modes'] }) { Object.assign(this.#s, info); this.#notify(); }
+  setSession(info: { sessionId?: string; agentName?: string; modes?: SessionSnapshot['modes']; configOptions?: ConfigOption[] }) { Object.assign(this.#s, info); this.#notify(); }
+  /** Replace the agent's settings (a `session/set_config_option` reply or a `config_option_update`). */
+  setConfigOptions(options: unknown) { if (Array.isArray(options)) { this.#s.configOptions = options.map(toConfigOption); this.#notify(); } }
 
   /** A user prompt starts a turn; the agent's chunks and tool calls attach to it until the prompt resolves. */
   beginTurn(userText: string): number {
@@ -113,6 +128,7 @@ export class SessionModel {
       case 'plan': this.#s.plan = (u.entries ?? []).map((e: any) => ({ content: e.content, priority: e.priority, status: e.status })); break;
       case 'available_commands_update': this.#s.commands = (u.availableCommands ?? []).map((c: any) => ({ name: c.name, description: c.description })); break;
       case 'current_mode_update': this.#s.modes = { available: this.#s.modes?.available ?? [], current: u.currentModeId }; break;
+      case 'config_option_update': if (Array.isArray(u.configOptions)) this.#s.configOptions = u.configOptions.map(toConfigOption); break;
       case 'usage_update': this.#s.usage = { used: u.used, size: u.size, cost: u.cost }; break;
       case 'session_info_update': if (u.title) this.#s.title = u.title; break;
       default: return;
@@ -194,6 +210,13 @@ export class SessionModel {
     }
     return undefined;
   }
+}
+
+export function toConfigOption(o: any): ConfigOption {
+  return {
+    id: String(o?.id), name: String(o?.name ?? o?.id), description: o?.description, category: o?.category, type: o?.type ?? 'select', currentValue: o?.currentValue,
+    ...(Array.isArray(o?.options) ? { options: o.options.map((x: any) => ({ value: String(x?.value), name: String(x?.name ?? x?.value), description: x?.description })) } : {}),
+  };
 }
 
 /** Coalesce notifications to one per frame; a hidden or occluded tab gets no frames, so a short timer runs it instead. */

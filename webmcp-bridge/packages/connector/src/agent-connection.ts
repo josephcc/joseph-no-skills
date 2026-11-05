@@ -8,7 +8,7 @@
  */
 import * as acp from '@agentclientprotocol/sdk';
 import type { Stream } from '@agentclientprotocol/sdk';
-import { SessionModel, type ElicitationResult, type ToolCallItem } from './session-model.ts';
+import { SessionModel, toConfigOption, type ConfigOption, type ElicitationResult, type ToolCallItem } from './session-model.ts';
 import { ACTIVITY_HEADING, deepEqual, pageToolOf, sanitiseToolName, type ActivityEntry, type CallsApi } from './widgets.ts';
 
 /** Claude Code permission modes as the adapter names them; other agents may use other ids. */
@@ -37,6 +37,8 @@ export interface AgentHandle {
   prompt(text: string): Promise<{ stopReason: string }>;
   cancel(): Promise<void>;
   setMode(modeId: string): Promise<void>;
+  /** `session/set_config_option`: change one of the agent's settings (the model, the effort level, …; ids from the snapshot's `configOptions`). */
+  setConfigOption(configId: string, value: unknown): Promise<ConfigOption[]>;
   /** Toggle client-side auto-approval of the page's read-only tools (shared by every thread of the connection). */
   setAutoAllowReadOnly(on: boolean): void;
   readonly autoAllowReadOnly: boolean;
@@ -297,6 +299,12 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
         await req(acp.methods.agent.session.setMode, { sessionId: t.id, modeId });
         t.model.setSession({ modes: { ...(t.model.snapshot().modes ?? { available: [] }), current: modeId } });
       },
+      async setConfigOption(configId, value) {
+        const r = await req(acp.methods.agent.session.setConfigOption, { sessionId: t.id, configId, value });
+        const options = Array.isArray(r?.configOptions) ? (r.configOptions as unknown[]).map(toConfigOption) : undefined;
+        if (options) t.model.setConfigOptions(options);
+        return options ?? t.model.snapshot().configOptions ?? [];
+      },
       setAutoAllowReadOnly(on) { autoAllow = on; },
       get autoAllowReadOnly() { return autoAllow; },
       close() { void closeThreadInternal(t.id); },
@@ -311,7 +319,7 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
       try { await req(acp.methods.agent.session.setMode, { sessionId: t.id, modeId: defaultMode }); modes = { ...modes, current: defaultMode }; }
       catch { /* keep the agent's own mode */ }
     }
-    t.model.setSession({ sessionId: t.id, agentName, modes });
+    t.model.setSession({ sessionId: t.id, agentName, modes, ...(Array.isArray(r?.configOptions) ? { configOptions: (r.configOptions as unknown[]).map(toConfigOption) } : {}) });
     t.model.setState('ready');
     return t;
   }
@@ -323,7 +331,7 @@ export async function openAgentConnection(params: ConnectionParams): Promise<Age
     try {
       const r = await req(acp.methods.agent.session.load, { sessionId: id, cwd: params.cwd, mcpServers: params.mcpServers, _meta: params.meta });
       t.model.replaying = false;
-      t.model.setSession({ sessionId: id, agentName, modes: toModes(r?.modes) });
+      t.model.setSession({ sessionId: id, agentName, modes: toModes(r?.modes), ...(Array.isArray(r?.configOptions) ? { configOptions: (r.configOptions as unknown[]).map(toConfigOption) } : {}) });
       t.model.setState('ready');
       return t;
     } catch (err) { t.model.replaying = false; t.closed = true; live.delete(id); throw err; }

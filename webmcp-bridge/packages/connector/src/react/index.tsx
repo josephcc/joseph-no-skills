@@ -2,16 +2,72 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type ThreadInfo } from '../agent.ts';
-import type { PendingElicitation, PendingPermission, SessionSnapshot, ToolCallItem, TurnItem } from '../session-model.ts';
+import type { PendingElicitation, PendingPermission, SessionSnapshot, TextItem, ToolCallItem, Turn, TurnItem } from '../session-model.ts';
 import type { ConnectorStatus, PageConnection } from '../types.ts';
 import { pageToolOf, widgetInstanceOf } from '../widgets.ts';
 import { ensureStyles } from './styles.ts';
 import { clearWidgetState, ElicitationView, resolveWidget, sweepWidgetState, threadScope, WidgetHost, type WidgetMap } from './widgets.tsx';
 
 export type { AgentConnection, AgentHandle, AgentOptions, ThreadInfo } from '../agent.ts';
-export type { SessionSnapshot, Turn, TurnItem, ToolCallItem, PendingPermission, PendingElicitation, ElicitationResult } from '../session-model.ts';
+export type { SessionSnapshot, Turn, TurnItem, TextItem, ThoughtItem, ToolCallItem, PendingPermission, PendingElicitation, ElicitationResult, ConfigOption } from '../session-model.ts';
 export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, type WidgetInstance, type WidgetStatus } from '../widgets.ts';
 export { ElicitationView, FloatingWidgetPanel, WidgetHost, useWidgetState, widgetStateKey, threadScope, clearWidgetState, removeWidgetState, sweepWidgetState, resolveWidget, elicitationInitialValues, elicitationContent, elicitationMissing, PAGE_SCOPE, type WidgetProps, type WidgetComponent, type WidgetMap, type WidgetSpec, type WidgetPlacement, type ResolvedWidget, type FloatingWidgetPanelProps } from './widgets.tsx';
+
+/** What a page's own header renders from (`renderHeader`): the panel's state and every action the built-in header offers. */
+export interface AgentChatHeaderContext {
+  /** The panel's state: the thread's (`ready`, `prompting`, …), else `connecting`, `released`, `idle`, or the page connection's state. */
+  state: string;
+  /** The badge text the built-in header shows (`loading` while a thread is being opened). */
+  label: string;
+  /** The page is connected to the daemon. */
+  connected: boolean;
+  /** A connection is being opened. */
+  busy: boolean;
+  /** The daemon closed the chat (idle release); the next message reconnects. */
+  released?: string;
+  error?: string;
+  conn?: AgentConnection;
+  handle?: AgentHandle;
+  snapshot: SessionSnapshot;
+  /** The threads to list (after `threadFilter`). */
+  threads: ThreadInfo[];
+  threadsOn: boolean;
+  showThreads: boolean;
+  /** The thread being opened, or 'new'. */
+  switching?: string;
+  confirmDelete?: string;
+  autoAllow: boolean;
+  agents: Array<{ id: string; name: string; default: boolean }>;
+  chosenAgent: string;
+  actions: {
+    connect(): void;
+    disconnect(): void;
+    openThread(id?: string): void;
+    newThread(): void;
+    deleteThread(id: string): void;
+    askDelete(id?: string): void;
+    toggleThreads(): void;
+    cancel(): void;
+    setMode(modeId: string): void;
+    setAutoAllow(on: boolean): void;
+    setAgent(id: string): void;
+  };
+}
+
+/** What a page's own composer renders from (`renderComposer`). */
+export interface AgentChatComposerContext {
+  /** Send a message to the active thread (reconnects first after an idle release). Resolves when the turn ends. */
+  send(text: string): Promise<void>;
+  /** The composer may accept input right now. */
+  canType: boolean;
+  /** A turn is in flight. */
+  prompting: boolean;
+  cancel(): void;
+  usage?: SessionSnapshot['usage'];
+  placeholder: string;
+  handle?: AgentHandle;
+  commands: SessionSnapshot['commands'];
+}
 
 export interface AgentChatProps {
   page: PageConnection;
@@ -20,10 +76,16 @@ export interface AgentChatProps {
   placeholder?: string;
   /** Reopen the last active thread of this origin after a reload (localStorage). Default true. */
   rememberSession?: boolean;
+  /** The localStorage key for that memory. Default: one per origin (and per agent other than Claude); a page with several workspaces keys it per workspace. */
+  sessionStorageKey?: string;
   /** Show thoughts (agent_thought_chunk) as collapsible blocks. Default true. */
   showThoughts?: boolean;
   /** Show the thread list when the agent can list and resume sessions. Default true. */
   threads?: boolean;
+  /** Which threads to list (and count); the others stay stored but out of sight. Default: all. */
+  threadFilter?: (thread: ThreadInfo) => boolean;
+  /** Show the footer (thread, agent, commands, usage, the daemon link). Default true. */
+  footer?: boolean;
   /** Called with the active thread's handle on connect and on every switch, and with undefined on disconnect. */
   onHandle?: (handle: AgentHandle | undefined) => void;
   className?: string;
@@ -33,6 +95,16 @@ export interface AgentChatProps {
   widgets?: WidgetMap;
   /** Replace the built-in form for agent-asked questions (ACP elicitation). */
   renderElicitation?: (e: PendingElicitation) => ReactNode;
+  /** Replace the header (title, badge, mode, threads, connect) with the page's own. */
+  renderHeader?: (ctx: AgentChatHeaderContext) => ReactNode;
+  /** Replace how a user or agent message renders (chips, the page's markdown). */
+  renderMessage?: (item: TextItem, info: { turn: Turn; index: number; latest: boolean }) => ReactNode;
+  /** Replace the generic tool row (a mapped widget still takes precedence). */
+  renderToolCall?: (item: ToolCallItem, info: { restored: boolean }) => ReactNode;
+  /** Replace the empty-transcript placeholder (starter prompts). */
+  renderEmpty?: (info: { state: string; handle?: AgentHandle }) => ReactNode;
+  /** Replace the composer (the page's own input, with the send and stop actions). */
+  renderComposer?: (ctx: AgentChatComposerContext) => ReactNode;
 }
 
 const EMPTY: SessionSnapshot = { state: 'connecting', turns: [], pendingPermissions: [], pendingElicitations: [], plan: [], commands: [] };
@@ -43,7 +115,7 @@ const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Come back here: this panel connects by itself.',
 ] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, threads: threadsEnabled = true, onHandle, className, setup, widgets, renderElicitation }: AgentChatProps) {
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, sessionStorageKey, showThoughts = true, threads: threadsEnabled = true, threadFilter, footer = true, onHandle, className, setup, widgets, renderElicitation, renderHeader, renderMessage, renderToolCall, renderEmpty, renderComposer }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
   const [conn, setConn] = useState<AgentConnection>();
@@ -72,8 +144,9 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     const q = input.slice(1).toLowerCase();
     return snap.commands.filter((c) => c.name.toLowerCase().startsWith(q)).slice(0, 8);
   }, [input, snap.commands]);
-  /** Last active thread per origin (and per agent other than Claude, so ids never cross agents). */
-  const storageKeyFor = useCallback((agent: string) => `webmcp-connector:session:${location.origin}${agent === 'claude' ? '' : `:${agent}`}`, []);
+  /** Last active thread per origin (and per agent other than Claude, so ids never cross agents); a page may key it itself. */
+  const storageKeyFor = useCallback((agent: string) => `${sessionStorageKey ?? `webmcp-connector:session:${location.origin}`}${agent === 'claude' ? '' : `:${agent}`}`, [sessionStorageKey]);
+  const visibleThreads = useMemo(() => (threadFilter ? threads.filter(threadFilter) : threads), [threads, threadFilter]);
 
   useEffect(() => page.onStatus(setPageStatus), [page]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
@@ -154,8 +227,9 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     if (next) void connRef.current?.listThreads().catch(() => {});
   }, [showThreads]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  /** Send a message to the active thread: after an idle release, reconnect into the same thread first. */
+  const sendText = useCallback(async (raw: string) => {
+    const text = raw.trim();
     if (!text || switching || busy) return;
     let h = handle;
     if (!h) {
@@ -164,9 +238,15 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       h = connRef.current?.active;
       if (!h) return;
     } else if (snap.state === 'prompting') return;
-    setInput('');
     await h.prompt(text).catch(() => { /* surfaced through the model */ });
-  }, [input, handle, snap.state, switching, busy, released, connect]);
+  }, [handle, snap.state, switching, busy, released, connect]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    await sendText(text);
+  }, [input, sendText]);
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab' && commandMatches.length > 0) { e.preventDefault(); setInput(`/${commandMatches[0]!.name} `); return; }
@@ -184,9 +264,29 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const state = handle ? snap.state : conn ? 'connecting' : released ? 'released' : connected ? 'idle' : pageStatus.state;
   const canType = !switching && !busy && (handle ? snap.state !== 'prompting' : !!released && connected);
   const threadsOn = !!conn && conn.supportsThreads && threadsEnabled;
+  const cancel = useCallback(() => { void handle?.cancel(); }, [handle]);
+
+  const headerContext: AgentChatHeaderContext = {
+    state, label: switching ? 'loading' : state, connected, busy, released, error, conn, handle, snapshot: snap,
+    threads: visibleThreads, threadsOn, showThreads, switching, confirmDelete, autoAllow, agents, chosenAgent,
+    actions: {
+      connect: () => void connect(),
+      disconnect,
+      openThread: (id) => void openThread(id),
+      newThread: () => void openThread(),
+      deleteThread: (id) => void deleteThread(id),
+      askDelete: setConfirmDelete,
+      toggleThreads,
+      cancel,
+      setMode: (modeId) => void handle?.setMode(modeId),
+      setAutoAllow: (on) => { setAutoAllow(on); handle?.setAutoAllowReadOnly(on); },
+      setAgent: setAgentId,
+    },
+  };
 
   return (
     <section className={`wmc-chat${className ? ` ${className}` : ''}`} data-state={state}>
+      {renderHeader ? renderHeader(headerContext) : (
       <header className="wmc-head">
         <div className="wmc-head-row">
           <h3 title={snap.title ?? title}>{title}</h3>
@@ -209,24 +309,25 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
           </select>
         )}
         {handle && snap.state === 'prompting' && <button onClick={() => void handle.cancel()}>Stop</button>}
-        {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{threads.length ? ` (${threads.length})` : ''} ▾</button>}
+        {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{visibleThreads.length ? ` (${visibleThreads.length})` : ''} ▾</button>}
         {conn && <button onClick={() => void openThread()} disabled={!!switching} title="Start a new thread" data-role="new-thread">New</button>}
         {conn ? <button onClick={disconnect}>Disconnect</button>
           : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : released ? 'Reconnect' : 'Connect to local Claude'}</button>}
         </div>
       </header>
-      {error && <div className="wmc-error">{error}</div>}
+      )}
+      {error && !renderHeader && <div className="wmc-error">{error}</div>}
       {released && !conn && !busy && <div className="wmc-notice" data-role="released">The connection to local Claude closed (idle chats are released after about ten minutes). Send a message to continue this thread, or <button type="button" data-role="reconnect" onClick={() => void connect()}>reconnect</button> now.</div>}
       {!connected && !conn && <SetupView state={pageStatus.state} setup={setup} />}
       {threadsOn && showThreads && (
-        <ThreadList threads={threads} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}
+        <ThreadList threads={visibleThreads} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}
           onOpen={(id) => void openThread(id)} onNew={() => void openThread()} onRefresh={() => void conn.listThreads().catch(() => {})}
           onAskDelete={setConfirmDelete} onDelete={(id) => void deleteThread(id)} />
       )}
       <div className="wmc-log" ref={logRef}>
-        {snap.turns.length === 0 && <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : conn ? 'Opening a thread…' : 'Connect to start a chat with your local Claude about this page.'}</div>}
+        {snap.turns.length === 0 && (renderEmpty ? renderEmpty({ state, handle }) : <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : conn ? 'Opening a thread…' : 'Connect to start a chat with your local Claude about this page.'}</div>)}
         {snap.turns.map((t, i) => (
-          <TurnView key={t.id} items={t.items} stopReason={t.stopReason} showThoughts={showThoughts} widgets={widgets} page={page} handle={handle} live={snap.state === 'prompting'} prompt={widgetPrompt} isLatest={i === snap.turns.length - 1} />
+          <TurnView key={t.id} turn={t} showThoughts={showThoughts} widgets={widgets} page={page} handle={handle} live={snap.state === 'prompting'} prompt={widgetPrompt} isLatest={i === snap.turns.length - 1} renderMessage={renderMessage} renderToolCall={renderToolCall} />
         ))}
         {snap.pendingPermissions.map((p) => <PermissionView key={p.id} p={p} />)}
         {snap.pendingElicitations.map((e) => (renderElicitation ? <div key={e.id}>{renderElicitation(e)}</div> : <ElicitationView key={e.id} e={e} />))}
@@ -234,6 +335,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
           <div className="wmc-plan"><strong>Plan</strong><ul>{snap.plan.map((e, i) => <li key={i} data-status={e.status}>{e.content}</li>)}</ul></div>
         )}
       </div>
+      {renderComposer ? renderComposer({ send: sendText, canType, prompting: snap.state === 'prompting', cancel, usage: snap.usage, placeholder, handle, commands: snap.commands }) : (<>
       {commandMatches.length > 0 && handle && (
         <ul className="wmc-commands" role="listbox">
           {commandMatches.map((c) => (
@@ -247,6 +349,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         <textarea value={input} placeholder={placeholder} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={!canType} rows={1} />
         <button className="wmc-primary" disabled={!canType || !input.trim()} onClick={() => void send()}>Send</button>
       </div>
+      </>)}
+      {footer && (
       <div className="wmc-foot">
         {snap.sessionId && <span title={`Thread ${snap.sessionId}`}>{snap.title ? `thread: ${snap.title}` : `session ${snap.sessionId.slice(0, 6)}`}</span>}
         {snap.agentName && <span title={snap.agentName}>{snap.agentName.replace(/^@[^/]+\//, '')}</span>}
@@ -256,6 +360,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         {snap.usage?.cost && <span>{snap.usage.cost.amount.toFixed(3)} {snap.usage.cost.currency}</span>}
         {pageStatus.mcpUrl && <a href={new URL('/', pageStatus.mcpUrl).href} target="_blank" rel="noreferrer" title="Daemon status page">daemon</a>}
       </div>
+      )}
     </section>
   );
 }
@@ -288,9 +393,11 @@ function ThreadList({ threads, switching, confirmDelete, canDelete, onOpen, onNe
   );
 }
 
-function threadLabel(t: ThreadInfo): string { return t.title ?? (t.state === 'stored' ? `thread ${t.id.slice(0, 6)}` : 'New thread'); }
+/** A thread's display name: the agent's title, else a placeholder by state. */
+export function threadLabel(t: ThreadInfo): string { return t.title ?? (t.state === 'stored' ? `thread ${t.id.slice(0, 6)}` : 'New thread'); }
 function stateLabel(t: ThreadInfo): string | undefined { return t.state === 'prompting' ? 'running…' : t.state === 'needs-permission' ? 'needs approval' : undefined; }
-function formatAgo(iso?: string): string {
+/** "just now", "5 min ago", "3 h ago", or the date. */
+export function formatAgo(iso?: string): string {
   if (!iso) return '';
   const ms = Date.now() - Date.parse(iso);
   if (!Number.isFinite(ms)) return '';
@@ -319,9 +426,12 @@ function renderCode(text: string) {
   return text.split(/(`[^`]+`)/g).map((part, i) => (part.startsWith('`') && part.endsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : <span key={i}>{part}</span>));
 }
 
-function TurnView({ items, stopReason, showThoughts, widgets, page, handle, live, prompt, isLatest }: {
-  items: TurnItem[]; stopReason?: string; showThoughts: boolean; widgets?: WidgetMap; page: PageConnection; handle?: AgentHandle; live: boolean; prompt: (text: string) => Promise<{ stopReason: string }>; isLatest: boolean;
+function TurnView({ turn, showThoughts, widgets, page, handle, live, prompt, isLatest, renderMessage, renderToolCall }: {
+  turn: Turn; showThoughts: boolean; widgets?: WidgetMap; page: PageConnection; handle?: AgentHandle; live: boolean; prompt: (text: string) => Promise<{ stopReason: string }>; isLatest: boolean;
+  renderMessage?: AgentChatProps['renderMessage']; renderToolCall?: AgentChatProps['renderToolCall'];
 }) {
+  const items: TurnItem[] = turn.items;
+  const stopReason = turn.stopReason;
   const trailing: ReactNode[] = [];   // widgets placed at the end of the turn (suggested replies), in call order
   const widgetFor = (item: ToolCallItem) => {
     const tool = widgets ? pageToolOf(item) : undefined;
@@ -333,9 +443,12 @@ function TurnView({ items, stopReason, showThoughts, widgets, page, handle, live
   };
   return (<>
     {items.map((item, i) => {
-      if (item.kind === 'text') return item.role === 'user'
-        ? <div key={i} className="wmc-msg user">{item.text}</div>
-        : <div key={i} className="wmc-msg agent"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div>;
+      if (item.kind === 'text') {
+        if (renderMessage) return <div key={i} className={`wmc-msg-slot ${item.role}`}>{renderMessage(item, { turn, index: i, latest: isLatest })}</div>;
+        return item.role === 'user'
+          ? <div key={i} className="wmc-msg user">{item.text}</div>
+          : <div key={i} className="wmc-msg agent"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div>;
+      }
       if (item.kind === 'thought') return showThoughts ? <details key={i} className="wmc-thought"><summary>Thinking…</summary>{item.text}</details> : null;
       const tool = widgets ? pageToolOf(item) : undefined;
       const w = tool !== undefined ? resolveWidget(widgets, tool) : undefined;
@@ -345,6 +458,7 @@ function TurnView({ items, stopReason, showThoughts, widgets, page, handle, live
         if (w.placement === 'end') { trailing.push(el); return null; }
         return el;
       }
+      if (renderToolCall) return <div key={item.toolCallId} className="wmc-tool-slot">{renderToolCall(item, { restored: !!item.replayed })}</div>;
       return <ToolCallView key={item.toolCallId} item={item} />;
     })}
     {trailing}
@@ -353,7 +467,7 @@ function TurnView({ items, stopReason, showThoughts, widgets, page, handle, live
 }
 
 /** The generic row's text: input, content blocks, output. */
-function toolBody(item: ToolCallItem): string {
+export function toolBody(item: ToolCallItem): string {
   const parts: string[] = [];
   if (item.rawInput !== undefined) parts.push(`input: ${pretty(item.rawInput)}`);
   for (const c of item.content as Array<Record<string, unknown>>) {

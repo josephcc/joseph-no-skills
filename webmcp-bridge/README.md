@@ -9,7 +9,7 @@ Three things ship from this repo:
 
 | Deliverable | Path | What it is |
 |---|---|---|
-| `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads and page-provided widgets: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`). |
+| `webmcp-connector` (npm, 0.0.4) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads and page-provided widgets: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`). |
 | Demo page | `demo-site` | Vite page with WebMCP tools for the colour and the sentence, two card tools (`propose_palette`, `suggest_replies`), a `show_output` tool that fills a big monospace output box on the page (for results from any Claude, skill or tool), a call log, a bonus tool for dynamic registration, and the embedded chat. |
 | `webmcp-daemon` Claude Code plugin | `plugin` | Ships and runs the local daemon (`bridge/`), points Claude Code at it over MCP, and injects each page's instructions (session start) and live UI state (every prompt) through hooks. |
 
@@ -79,6 +79,17 @@ because history replays every call. The raw input and output stay one click away
 keep the generic row. Agent-asked questions (Claude's `AskUserQuestion`, MCP elicitations) render as a form in the
 panel; `renderElicitation` replaces it, `agentOptions={{ elicitation: false }}` turns the capability off. The
 demo's `demo-site/src/widgets.tsx` has a palette proposal card and suggestion chips.
+
+**Rendering the panel in your own style.** `<AgentChat>` keeps its connection, threads, permissions, elicitations and
+widgets, and lets a page replace the surfaces it draws: `renderHeader={(ctx) => …}` (the badge, the mode, the threads, connect;
+`ctx.actions` carries every built-in action), `renderMessage={(item, info) => …}` (the page's own markdown and chips),
+`renderToolCall={(item, info) => …}` (the generic row for unmapped tools), `renderEmpty={(info) => …}` (starter prompts) and
+`renderComposer={(ctx) => …}` (the page's own input; `ctx.send(text)` sends, `ctx.cancel()` stops, `ctx.usage` is the context
+meter); `footer={false}` drops the footer. `threadFilter={(t) => …}` lists only some of the origin's threads (a page with several
+workspaces scopes them), and `sessionStorageKey` keys the last-thread memory the same way. The agent's settings arrive on the
+snapshot as `configOptions` (Claude Code's adapter offers the permission mode, the model, the effort level, fast mode);
+`handle.setConfigOption(id, value)` changes one and the snapshot follows (`config_option_update`). The CSS variables `--wmc-*`
+on `.wmc-chat` restyle what stays. science-kg's **Use local Claude** panel is the worked example.
 
 **Terminal Claude and cards.** `<FloatingWidgetPanel page={page} widgets={WIDGETS} />` shows the same components,
 bottom-right of the page, for page tool calls that did not come through the chat panel (calls from a terminal

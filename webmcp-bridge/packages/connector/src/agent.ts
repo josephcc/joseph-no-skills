@@ -97,6 +97,7 @@ export function ownedHandle(connection: AgentConnection, h: AgentHandle): AgentH
     prompt: (text) => h.prompt(text),
     cancel: () => h.cancel(),
     setMode: (modeId) => h.setMode(modeId),
+    setConfigOption: (configId, value) => h.setConfigOption(configId, value),
     setAutoAllowReadOnly: (on) => h.setAutoAllowReadOnly(on),
     get autoAllowReadOnly() { return h.autoAllowReadOnly; },
     close() { connection.close(); },

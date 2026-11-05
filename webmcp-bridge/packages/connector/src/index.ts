@@ -13,7 +13,7 @@ export { preamble } from './preamble.ts';
 export * from './protocol.ts';
 export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
 export { CONNECTOR_VERSION } from './version.ts';
-export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult } from './session-model.ts';
+export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type TextItem, type ThoughtItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult, type ConfigOption } from './session-model.ts';
 export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, sanitiseToolName, createActivityLog, deepEqual, ACTIVITY_HEADING, type WidgetInstance, type WidgetStatus, type PendingCall, type ActivityEntry, type ActivityLog } from './widgets.ts';
 
 const DEFAULT_URL = `ws://127.0.0.1:${DEFAULT_PORT}`;
