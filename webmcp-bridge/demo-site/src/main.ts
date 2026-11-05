@@ -12,6 +12,7 @@ const SENTENCES = [
 ];
 const state = { backgroundColor: '', sentence: '', toolCallCount: 0 };
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const el = (tag: string, text: string) => { const n = document.createElement(tag); n.textContent = text; return n; };   // text, never HTML
 
 function render() {
   document.body.style.backgroundColor = state.backgroundColor;
@@ -100,7 +101,7 @@ async function renderTools() {
   $('tool-count').textContent = `(${tools.length})`;
   $('tools').replaceChildren(...tools.map((t) => {
     const li = document.createElement('li');
-    li.innerHTML = `<code>${t.name}</code>${t.annotations?.readOnlyHint ? ' <small>read-only</small>' : ''} — ${t.description}`;
+    li.append(el('code', t.name), t.annotations?.readOnlyHint ? el('small', ' read-only') : '', ` — ${t.description}`);
     return li;
   }));
 }
@@ -124,7 +125,7 @@ function logCall(e: ToolCallEvent) {
   const li = document.createElement('li');
   li.className = e.ok ? 'log-ok' : 'log-err';
   const args = Object.keys(e.args ?? {}).length ? ` ${JSON.stringify(e.args)}` : '';
-  li.innerHTML = `<code>${e.name}</code>${args} → ${e.ok ? `<span>${(e.result ?? 'null').slice(0, 120)}</span>` : `<span>${e.error}</span>`} <small>${Math.round(e.durationMs ?? 0)} ms</small>`;
+  li.append(el('code', e.name), `${args} → `, el('span', e.ok ? (e.result ?? 'null').slice(0, 120) : String(e.error)), ' ', el('small', `${Math.round(e.durationMs ?? 0)} ms`));
   $('log').prepend(li);
 }
 

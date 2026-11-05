@@ -33,6 +33,7 @@ export class OriginPolicy {
 
   /** Resolve the decision for an unknown origin: opens the approval page and waits (up to 5 minutes). */
   async decide(origin: string, title?: string): Promise<boolean> {
+    if (!isSiteOrigin(origin)) { log.warn(`origin ${JSON.stringify(origin)} is not an http(s) site origin: rejecting`); return false; }
     if (this.isAllowed(origin)) return true;
     if (this.isDenied(origin)) return false;
     if (this.#noBrowser) { log.warn(`origin ${origin} unknown and --no-browser set: rejecting`); return false; }
@@ -72,6 +73,11 @@ export class OriginPolicy {
   snapshot(): OriginStore & { preapproved: string[] } { return { ...this.#store, preapproved: this.#preapproved }; }
 
   #save() { writeFileSync(this.#file, JSON.stringify(this.#store, null, 2)); }
+}
+
+/** A real site origin: http(s) scheme, normalised form, never the opaque "null" of sandboxed iframes, data:, blob: or file: contexts. */
+export function isSiteOrigin(origin: string): boolean {
+  try { const u = new URL(origin); return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === origin; } catch { return false; }
 }
 
 function openInBrowser(url: string) {

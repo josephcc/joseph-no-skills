@@ -36,6 +36,19 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
   const url = new URL(req.url ?? '/', 'http://x');
   const { registry, policy, config } = deps;
   const path = url.pathname;
+  const selfOrigin = `http://${config.host}:${config.port}`;
+
+  // State-changing routes: a browser can reach loopback with a `no-cors` POST it cannot read. Such requests cannot
+  // carry application/json, and every browser POST carries Origin; so require JSON and an authorised Origin.
+  if (req.method === 'POST' && (path === '/call' || path === '/approve')) {
+    const ct = String(req.headers['content-type'] ?? '');
+    if (!/^application\/json\b/i.test(ct)) return json(res, 415, { error: 'content-type must be application/json' });
+    const origin = req.headers.origin;
+    if (origin !== undefined) {
+      const ok = path === '/approve' ? origin === selfOrigin : origin === selfOrigin || policy.isAllowed(origin);
+      if (!ok) { log.warn(`refused POST ${path} from origin ${origin}`); return json(res, 403, { error: 'origin not authorised' }); }
+    }
+  }
 
   if (path === '/health') {
     const sel = registry.selected();

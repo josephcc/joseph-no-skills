@@ -2,7 +2,22 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OriginPolicy } from '../src/security.ts';
+import { OriginPolicy, isSiteOrigin } from '../src/security.ts';
+
+describe('isSiteOrigin', () => {
+  test('accepts normalised http(s) origins only', () => {
+    expect(isSiteOrigin('http://127.0.0.1:5173')).toBe(true);
+    expect(isSiteOrigin('https://science-kg.example.org')).toBe(true);
+    for (const bad of ['null', 'file://', 'data:', 'blob:https://x', 'chrome-extension://abc', 'http://a.b/path', 'HTTP://A.B', 'javascript:alert(1)', '']) expect(isSiteOrigin(bad)).toBe(false);
+  });
+  test('decide() rejects an opaque origin without opening the approval page', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'webmcp-'));
+    const opened: string[] = [];
+    const p = new OriginPolicy(dir, [], false, 'http://127.0.0.1:1', (url) => opened.push(url));
+    expect(await p.decide('null')).toBe(false);
+    expect(opened).toEqual([]);
+  });
+});
 
 describe('OriginPolicy', () => {
   test('pre-approved origins pass; unknown origins are rejected under --no-browser', async () => {

@@ -48,7 +48,7 @@ try {
   // per-page endpoint: only the page's tools (+ webmcp_get_context), no meta-tools
   const c2 = new Client({ name: 'e2e-page', version: '0' }, { capabilities: {} });
   await c2.connect(new StreamableHTTPClientTransport(new URL(`${DAEMON}/mcp/by-page/${pageId}`)));
-  out.byPage = { serverName: c2.getServerVersion()?.name, tools: (await c2.listTools()).tools.map((t) => t.name), get_state: (await c2.callTool({ name: 'get_state', arguments: {} })).structuredContent };
+  out.byPage = { serverName: c2.getServerVersion()?.name, tools: (await c2.listTools()).tools.map((t) => t.name), get_state: (await c2.callTool({ name: 'get_state', arguments: {} })).structuredContent, get_context: (await c2.callTool({ name: 'webmcp_get_context', arguments: {} })).content[0].text.slice(0, 60) };
   await c2.close();
   out.console = page.consoleLines.slice(0, 10);
 } catch (err) {

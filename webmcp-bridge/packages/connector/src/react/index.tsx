@@ -35,6 +35,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const [agentId, setAgentId] = useState<string>();
   const [autoAllow, setAutoAllow] = useState(agentOptions?.autoAllowReadOnly ?? true);
   const logRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<AgentHandle | undefined>(undefined);
   const agents = pageStatus.agents ?? [];
   const chosenAgent = agentId ?? agentOptions?.agent ?? agents.find((a) => a.default)?.id ?? 'claude';
   const commandMatches = useMemo(() => {
@@ -46,6 +47,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
 
   useEffect(() => page.onStatus(setPageStatus), [page]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
+  useEffect(() => { if (!handle) return; setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle
+  useEffect(() => () => { handleRef.current?.close(); }, []);   // unmount: close the ACP session so the agent process can stop
 
   const connect = useCallback(async (resume = true) => {
     setBusy(true); setError(undefined);
@@ -53,13 +56,13 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       const resumeSessionId = resume && rememberSession ? localStorage.getItem(storageKey) ?? undefined : undefined;
       const h = await connectAgent(page, { ...agentOptions, agent: chosenAgent, autoAllowReadOnly: autoAllow, resumeSessionId: chosenAgent === 'claude' ? resumeSessionId : undefined });
       if (rememberSession) localStorage.setItem(storageKey, h.sessionId);
-      setHandle(h); setSnap(h.model.snapshot()); h.model.onChange(setSnap); onHandle?.(h);
+      handleRef.current?.close(); handleRef.current = h; setHandle(h); onHandle?.(h);
     } catch (e) { setError(String((e as Error)?.message ?? e)); }
     finally { setBusy(false); }
   }, [page, agentOptions, rememberSession, storageKey, onHandle, chosenAgent, autoAllow]);
 
-  const disconnect = useCallback(() => { handle?.close(); setHandle(undefined); setSnap(EMPTY); onHandle?.(undefined); }, [handle, onHandle]);
-  const newSession = useCallback(async () => { handle?.close(); localStorage.removeItem(storageKey); setHandle(undefined); setSnap(EMPTY); await connect(false); }, [handle, storageKey, connect]);
+  const disconnect = useCallback(() => { handle?.close(); handleRef.current = undefined; setHandle(undefined); setSnap(EMPTY); onHandle?.(undefined); }, [handle, onHandle]);
+  const newSession = useCallback(async () => { handle?.close(); handleRef.current = undefined; localStorage.removeItem(storageKey); setHandle(undefined); setSnap(EMPTY); await connect(false); }, [handle, storageKey, connect]);
 
   const send = useCallback(async () => {
     const text = input.trim();

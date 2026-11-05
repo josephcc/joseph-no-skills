@@ -95,6 +95,12 @@ export class AcpRelay {
         agentStream.readable.pipeThrough(touch2).pipeTo(clientStream.writable).catch(() => {});
         const closed = new Promise<void>((resolve) => {
           child.once('exit', (code, signal) => { this.#children.delete(child); log.info(`acp: agent pid ${child.pid} exited (${code ?? signal})`); resolve(); });
+          child.once('error', (err) => {   // e.g. a misconfigured --agent command: fail this connection, keep the daemon alive
+            this.#children.delete(child);
+            log.error(`acp: could not start agent "${ctx.agentId ?? 'claude'}" (${cmd}): ${err.message}`);
+            clientStream.writable.close().catch(() => {});
+            resolve();
+          });
         });
         return { closed };
       },

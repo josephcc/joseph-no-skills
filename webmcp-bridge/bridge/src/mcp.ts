@@ -18,7 +18,7 @@ export interface McpDeps { registry: Registry; config: DaemonConfig; version: st
 interface Scope { pageId?: string }
 interface Session { id: string; scope: Scope; server: Server; transport: StreamableHTTPServerTransport }
 
-const META_PREFIX = 'webmcp_';
+const META_TOOL_NAMES = new Set(['webmcp_list_pages', 'webmcp_use_page', 'webmcp_list_tools', 'webmcp_call_tool', 'webmcp_get_context']);
 const INSTRUCTIONS_PROMPT = 'page-instructions';
 
 export function createMcpHandler(deps: McpDeps) {
@@ -90,7 +90,7 @@ function makeServer(deps: McpDeps, scope: Scope): Server {
       const taken = new Set(tools.map((t) => t.name));
       for (const t of page.tools) {
         let name = sanitiseToolName(t.name) || 'tool';
-        if (taken.has(name) || name.startsWith(META_PREFIX)) { let i = 2; while (taken.has(`${name}_${i}`)) i++; name = `${name}_${i}`; }
+        if (taken.has(name) || META_TOOL_NAMES.has(name)) { let i = 2; while (taken.has(`${name}_${i}`) || META_TOOL_NAMES.has(`${name}_${i}`)) i++; name = `${name}_${i}`; }
         taken.add(name);
         mirrored.set(name, { pageId: page.id, toolName: t.name });
         tools.push(toMcpTool(name, t, page, !!scope.pageId));
@@ -105,7 +105,7 @@ function makeServer(deps: McpDeps, scope: Scope): Server {
   server.setRequestHandler(CallToolRequestSchema, async (req, extra): Promise<CallToolResult> => {
     const name = req.params.name;
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
-    if (name.startsWith(META_PREFIX)) return runMeta(name, args, registry, config, extra.signal);
+    if (META_TOOL_NAMES.has(name)) return runMeta(name, args, registry, config, extra.signal, scope.pageId);
     if (!mirrored.has(name)) view();
     const target = mirrored.get(name);
     if (!target) return errorResult(name, { name: 'NotFoundError', message: `unknown tool; call ${scope.pageId ? 'tools/list' : 'webmcp_list_tools'} to refresh` });
@@ -166,8 +166,8 @@ function contextTool(pageScoped: boolean): Tool {
   return { name: 'webmcp_get_context', description: 'Fresh deterministic description of what the user currently sees on the page (same text the plugin injects with each prompt).', inputSchema: { type: 'object', properties: pageScoped ? {} : PAGE_ID_ARG }, annotations: { readOnlyHint: true, openWorldHint: false } };
 }
 
-async function runMeta(name: string, args: Record<string, unknown>, registry: Registry, config: DaemonConfig, signal: AbortSignal): Promise<CallToolResult> {
-  const pageId = typeof args.page_id === 'string' ? args.page_id : undefined;
+async function runMeta(name: string, args: Record<string, unknown>, registry: Registry, config: DaemonConfig, signal: AbortSignal, scopePageId?: string): Promise<CallToolResult> {
+  const pageId = scopePageId ?? (typeof args.page_id === 'string' ? args.page_id : undefined);
   const text = (v: unknown): CallToolResult => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
   switch (name) {
     case 'webmcp_list_pages': {
