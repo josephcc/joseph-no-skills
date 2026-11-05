@@ -3,7 +3,16 @@
  * spoken as JSON text frames over the `/ws` WebSocket. See plans/combined/main.md §5.1.
  */
 export const PROTOCOL_VERSION = 1 as const;
-export const DEFAULT_PORT = 8717;
+/**
+ * The ports the daemon tries in order and every client walks in the same order
+ * (plans/daemon-port-discovery/main.md D-1): the historical port first, then
+ * four arbitrary ports from the dynamic range no common tool listens on.
+ */
+export const CANDIDATE_PORTS: readonly number[] = [8717, 49217, 52431, 55893, 61307];
+export const DEFAULT_PORT = CANDIDATE_PORTS[0]!;
+/** What `GET /id` answers: enough to recognise the daemon, nothing private (D-6). */
+export const DAEMON_NAME = 'webmcp-daemon' as const;
+export interface DaemonIdentity { daemon: typeof DAEMON_NAME; protocol: number; version: string; instance: string }
 export const PING_INTERVAL_MS = 20_000;
 export const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 /** Hook-injected context is capped by Claude Code at 10,000 characters; leave headroom. */

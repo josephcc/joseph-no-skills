@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_INJECTED_CHARS } from 'webmcp-protocol';
+import { DAEMON_NAME, MAX_INJECTED_CHARS, PROTOCOL_VERSION } from 'webmcp-protocol';
 import { installLaunchd, uninstallLaunchd } from './launchd.ts';
 import type { DaemonConfig } from './config.ts';
 import { log } from './log.ts';
@@ -23,6 +23,8 @@ export interface HttpDeps {
   acpUpgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
   acpStatus?: () => unknown;
   agents?: () => Array<{ id: string; name: string; default: boolean }>;
+  /** Random per start; `GET /id` reports it so a client can tell a restart (D-6). */
+  instance?: string;
 }
 
 export function createHttpServer(deps: HttpDeps): Server {
@@ -79,6 +81,12 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
     return json(res, 200, { ok: true });
   }
 
+  // Who is on this port: the one answer any origin may read, so a page can walk the candidate ports
+  // without opening a WebSocket to a stranger (plans/daemon-port-discovery D-4, D-6). Nothing private.
+  if (path === '/id' && req.method === 'GET') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return json(res, 200, { daemon: DAEMON_NAME, protocol: PROTOCOL_VERSION, version: config.version, instance: deps.instance ?? '' });
+  }
   if (path === '/health') {
     const sel = registry.selected();
     return json(res, 200, { ok: true, version: config.version, pid: process.pid, pages: registry.all().length, selectedPage: sel ? { id: sel.id, title: sel.title, origin: sel.origin } : null, agents: deps.acpStatus?.() ?? [] });

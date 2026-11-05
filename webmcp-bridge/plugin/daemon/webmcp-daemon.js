@@ -9991,25 +9991,28 @@ var require_content_type = __commonJS((exports) => {
 });
 
 // bridge/src/index.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync4, unlinkSync as unlinkSync2 } from "node:fs";
-import { join as join8 } from "node:path";
-
-// bridge/src/config.ts
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { join as join9 } from "node:path";
 
 // packages/connector/src/protocol.ts
-var DEFAULT_PORT = 8717;
+var PROTOCOL_VERSION = 1;
+var CANDIDATE_PORTS = [8717, 49217, 52431, 55893, 61307];
+var DEFAULT_PORT = CANDIDATE_PORTS[0];
+var DAEMON_NAME = "webmcp-daemon";
 var PING_INTERVAL_MS = 20000;
 var MAX_INJECTED_CHARS = 9500;
 function isPageFrame(value) {
   return typeof value === "object" && value !== null && typeof value.type === "string";
 }
 // bridge/src/config.ts
+import { homedir } from "node:os";
+import { join } from "node:path";
 function parseArgs(argv, version) {
   const config = {
     host: "127.0.0.1",
     port: Number(process.env.WEBMCP_DAEMON_PORT ?? DEFAULT_PORT),
+    portPinned: process.env.WEBMCP_DAEMON_PORT !== undefined,
     stateDir: process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), ".webmcp-daemon"),
     allowOrigins: [],
     noBrowser: process.env.WEBMCP_DAEMON_NO_BROWSER === "1",
@@ -10042,6 +10045,7 @@ function parseArgs(argv, version) {
         break;
       case "--port":
         config.port = Number(next());
+        config.portPinned = true;
         break;
       case "--state-dir":
         config.stateDir = next();
@@ -10104,7 +10108,7 @@ function parseArgs(argv, version) {
   return { command, config };
 }
 var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
-  --port <n>                 listen port (default ${DEFAULT_PORT}, env WEBMCP_DAEMON_PORT)
+  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(", ")}; env WEBMCP_DAEMON_PORT)
   --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected
@@ -10117,24 +10121,133 @@ var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] 
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
 `;
 
+// bridge/src/instance.ts
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { join as join2 } from "node:path";
+class AlreadyRunningError extends Error {
+  pid;
+  port;
+  constructor(pid, port, host) {
+    super(`already running on ${host}:${port} (pid ${pid})`);
+    this.name = "AlreadyRunningError";
+    this.pid = pid;
+    this.port = port;
+  }
+}
+
+class AllPortsTakenError extends Error {
+  ports;
+  constructor(ports, host) {
+    super(`every candidate port is taken on ${host} (${ports.join(", ")}); free one, or pin another with --port <n> / WEBMCP_DAEMON_PORT`);
+    this.name = "AllPortsTakenError";
+    this.ports = ports;
+  }
+}
+var daemonFilePath = (stateDir) => join2(stateDir, "daemon.json");
+function readDaemonRecord(stateDir) {
+  try {
+    const raw = JSON.parse(readFileSync(daemonFilePath(stateDir), "utf8"));
+    if (typeof raw.pid !== "number")
+      return null;
+    return { pid: raw.pid, port: typeof raw.port === "number" ? raw.port : null, startedAt: String(raw.startedAt ?? ""), version: String(raw.version ?? ""), ...raw.instance ? { instance: String(raw.instance) } : {} };
+  } catch {
+    return null;
+  }
+}
+function claimDaemonFile(stateDir, record) {
+  try {
+    writeFileSync(daemonFilePath(stateDir), JSON.stringify(record), { flag: "wx" });
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST")
+      return false;
+    throw err;
+  }
+}
+function updateDaemonFile(stateDir, record) {
+  writeFileSync(daemonFilePath(stateDir), JSON.stringify(record));
+}
+function removeDaemonFile(stateDir) {
+  try {
+    unlinkSync(daemonFilePath(stateDir));
+  } catch {}
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+async function identify(host, port, timeoutMs = 500) {
+  try {
+    const r = await fetch(`http://${host}:${port}/id`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok)
+      return null;
+    const body = await r.json();
+    return body.daemon === DAEMON_NAME && typeof body.protocol === "number" ? body : null;
+  } catch {
+    return null;
+  }
+}
+async function findRunningDaemon(stateDir, host, { waitMs = 2000 } = {}) {
+  const deadline = Date.now() + waitMs;
+  for (;; ) {
+    const rec = readDaemonRecord(stateDir);
+    if (!rec) {
+      if (existsSync(daemonFilePath(stateDir)))
+        removeDaemonFile(stateDir);
+      return null;
+    }
+    if (!pidAlive(rec.pid)) {
+      removeDaemonFile(stateDir);
+      return null;
+    }
+    if (rec.port !== null && await identify(host, rec.port) !== null)
+      return { pid: rec.pid, port: rec.port };
+    if (Date.now() >= deadline) {
+      removeDaemonFile(stateDir);
+      return null;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+async function pickPort(candidates, host) {
+  for (let index = 0;index < candidates.length; index++) {
+    const port = candidates[index];
+    if (await portFree(port, host))
+      return { port, index };
+  }
+  throw new AllPortsTakenError(candidates, host);
+}
+function portFree(port, host) {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, host, () => probe.close(() => resolve(true)));
+  });
+}
+
 // bridge/src/http.ts
-import { createServer } from "node:http";
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { createServer as createServer2 } from "node:http";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // bridge/src/launchd.ts
-import { copyFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync2, mkdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname, join as join2 } from "node:path";
+import { basename, dirname, join as join3 } from "node:path";
 import { execFileSync } from "node:child_process";
 var LAUNCHD_LABEL = "com.webmcp.daemon";
 function launchdPlan(config, entry) {
-  const binDir = join2(config.stateDir, "bin");
-  const daemonCopy = join2(binDir, basename(entry));
-  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray", "tray/webmcp-bridge-icon.png"].map((f) => join2(dirname(entry), f)).filter(existsSync);
-  const plistPath = join2(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, "--port", String(config.port), "--tray"];
+  const binDir = join3(config.stateDir, "bin");
+  const daemonCopy = join3(binDir, basename(entry));
+  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray", "tray/webmcp-bridge-icon.png"].map((f) => join3(dirname(entry), f)).filter(existsSync2);
+  const plistPath = join3(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, ...config.portPinned ? ["--port", String(config.port)] : [], "--tray"];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -10142,8 +10255,8 @@ function launchdPlan(config, entry) {
   <key>ProgramArguments</key><array>${args.map((a) => `<string>${escapeXml(a)}</string>`).join("")}</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${escapeXml(join2(config.stateDir, "launchd.log"))}</string>
-  <key>StandardErrorPath</key><string>${escapeXml(join2(config.stateDir, "launchd.log"))}</string>
+  <key>StandardOutPath</key><string>${escapeXml(join3(config.stateDir, "launchd.log"))}</string>
+  <key>StandardErrorPath</key><string>${escapeXml(join3(config.stateDir, "launchd.log"))}</string>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string></dict>
 </dict></plist>
 `;
@@ -10159,27 +10272,27 @@ function installLaunchd(config, entry, { dryRun = false } = {}) {
 ${plan.plist}`;
   mkdirSync(plan.binDir, { recursive: true });
   for (const f of plan.files) {
-    const rel = basename(dirname(f)) === "tray" ? join2("tray", basename(f)) : basename(f);
-    mkdirSync(dirname(join2(plan.binDir, rel)), { recursive: true });
-    copyFileSync(f, join2(plan.binDir, rel));
+    const rel = basename(dirname(f)) === "tray" ? join3("tray", basename(f)) : basename(f);
+    mkdirSync(dirname(join3(plan.binDir, rel)), { recursive: true });
+    copyFileSync(f, join3(plan.binDir, rel));
   }
   mkdirSync(dirname(plan.plistPath), { recursive: true });
   try {
     execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
   } catch {}
-  writeFileSync(plan.plistPath, plan.plist);
+  writeFileSync2(plan.plistPath, plan.plist);
   execFileSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
-  writeFileSync(join2(config.stateDir, "setup-done"), new Date().toISOString() + `
+  writeFileSync2(join3(config.stateDir, "setup-done"), new Date().toISOString() + `
 `);
   return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
 }
 function uninstallLaunchd() {
-  const plistPath = join2(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  const plistPath = join3(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
   try {
     execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
   } catch {}
-  if (existsSync(plistPath)) {
-    unlinkSync(plistPath);
+  if (existsSync2(plistPath)) {
+    unlinkSync2(plistPath);
     return `removed ${plistPath}`;
   }
   return "no login item installed";
@@ -10237,8 +10350,8 @@ function sanitiseToolName(name) {
 }
 
 // bridge/src/security.ts
-import { mkdirSync as mkdirSync2, readFileSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 class OriginPolicy {
@@ -10255,9 +10368,9 @@ class OriginPolicy {
     this.#baseUrl = baseUrl;
     this.#open = opener;
     mkdirSync2(stateDir, { recursive: true });
-    this.#file = join3(stateDir, "origins.json");
+    this.#file = join4(stateDir, "origins.json");
     try {
-      this.#store = JSON.parse(readFileSync(this.#file, "utf8"));
+      this.#store = JSON.parse(readFileSync2(this.#file, "utf8"));
     } catch {}
   }
   isAllowed(origin) {
@@ -10316,7 +10429,7 @@ class OriginPolicy {
     return { ...this.#store, preapproved: this.#preapproved };
   }
   #save() {
-    writeFileSync2(this.#file, JSON.stringify(this.#store, null, 2));
+    writeFileSync3(this.#file, JSON.stringify(this.#store, null, 2));
   }
 }
 function isSiteOrigin(origin) {
@@ -10354,7 +10467,7 @@ document.getElementById('out').textContent=r.ok?(allow?'Allowed. You can close t
 
 // bridge/src/http.ts
 function createHttpServer(deps) {
-  const server = createServer((req, res) => {
+  const server = createServer2((req, res) => {
     route(deps, req, res).catch((err) => {
       log.error(`http ${req.method} ${req.url}: ${String(err)}`);
       if (!res.headersSent)
@@ -10404,10 +10517,10 @@ async function route(deps, req, res) {
   }
   if (path === "/status.json") {
     const sel = registry.selected()?.id;
-    const loginInstalled = existsSync2(join4(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
+    const loginInstalled = existsSync3(join5(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
     let logTail = "";
     try {
-      logTail = readFileSync2(join4(config.stateDir, "daemon.log"), "utf8").split(`
+      logTail = readFileSync3(join5(config.stateDir, "daemon.log"), "utf8").split(`
 `).slice(-40).join(`
 `);
     } catch {}
@@ -10441,6 +10554,10 @@ async function route(deps, req, res) {
     if (body.origin)
       policy.forget(body.origin);
     return json(res, 200, { ok: true });
+  }
+  if (path === "/id" && req.method === "GET") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return json(res, 200, { daemon: DAEMON_NAME, protocol: PROTOCOL_VERSION, version: config.version, instance: deps.instance ?? "" });
   }
   if (path === "/health") {
     const sel = registry.selected();
@@ -10699,8 +10816,8 @@ function slugify(origin) {
 }
 
 // bridge/src/workspace.ts
-import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, existsSync as existsSync3 } from "node:fs";
-import { join as join5 } from "node:path";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync4, existsSync as existsSync4 } from "node:fs";
+import { join as join6 } from "node:path";
 
 class Workspaces {
   #stateDir;
@@ -10708,11 +10825,11 @@ class Workspaces {
     this.#stateDir = stateDir;
   }
   ensure(page) {
-    const dir = join5(this.#stateDir, "workspaces", page.slug);
-    mkdirSync3(join5(dir, ".claude"), { recursive: true });
-    const settings = join5(dir, ".claude", "settings.json");
-    if (!existsSync3(settings)) {
-      writeFileSync3(settings, JSON.stringify({
+    const dir = join6(this.#stateDir, "workspaces", page.slug);
+    mkdirSync3(join6(dir, ".claude"), { recursive: true });
+    const settings = join6(dir, ".claude", "settings.json");
+    if (!existsSync4(settings)) {
+      writeFileSync4(settings, JSON.stringify({
         permissions: { defaultMode: "auto", disableBypassPermissionsMode: "disable" }
       }, null, 2) + `
 `);
@@ -10729,8 +10846,8 @@ This workspace belongs to the web page at ${page.origin}. The page's tools are a
 
 ${text}
 `;
-    writeFileSync3(join5(dir, "CLAUDE.md"), body);
-    writeFileSync3(join5(dir, "AGENTS.md"), body);
+    writeFileSync4(join6(dir, "CLAUDE.md"), body);
+    writeFileSync4(join6(dir, "AGENTS.md"), body);
   }
 }
 
@@ -19524,7 +19641,7 @@ class Server extends Protocol {
 var X_ALREADY_SENT = "x-hono-already-sent";
 
 // node_modules/@hono/node-server/dist/index.mjs
-import { STATUS_CODES, ServerResponse, createServer as createServer2 } from "node:http";
+import { STATUS_CODES, ServerResponse, createServer as createServer3 } from "node:http";
 import { Http2ServerRequest, constants } from "node:http2";
 import { Readable } from "node:stream";
 
@@ -21953,9 +22070,9 @@ function readJson(req) {
 
 // bridge/src/acp.ts
 import { spawn as spawn2, execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { dirname as dirname2, join as join7 } from "node:path";
 import { Readable as Readable2, Writable } from "node:stream";
 
 // node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
@@ -27393,16 +27510,16 @@ class AcpRelay {
       this.#adapterCmd = { cmd, args };
       return this.#adapterCmd;
     }
-    const sibling = join6(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
-    if (existsSync4(sibling)) {
+    const sibling = join7(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
+    if (existsSync5(sibling)) {
       this.#adapterCmd = { cmd: process.execPath, args: [sibling] };
       return this.#adapterCmd;
     }
     try {
       const require2 = createRequire2(import.meta.url);
       const pkg = require2.resolve(`${ADAPTER_PACKAGE}/package.json`);
-      const entry = join6(dirname2(pkg), "dist", "index.js");
-      if (existsSync4(entry)) {
+      const entry = join7(dirname2(pkg), "dist", "index.js");
+      if (existsSync5(entry)) {
         this.#adapterCmd = { cmd: process.execPath, args: [entry] };
         return this.#adapterCmd;
       }
@@ -27458,8 +27575,8 @@ Content-Length: 0\r
 
 // bridge/src/tray.ts
 import { spawn as spawn3 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname3, join as join7 } from "node:path";
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname3, join as join8 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 class Tray {
   #deps;
@@ -27472,14 +27589,14 @@ class Tray {
   static helperPath() {
     const candidates = [
       process.env.WEBMCP_TRAY_HELPER,
-      join7(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
-      join7(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
+      join8(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
+      join8(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
     ].filter((p) => !!p);
-    return candidates.find((p) => existsSync5(p));
+    return candidates.find((p) => existsSync6(p));
   }
   static iconPath(helper) {
-    const p = process.env.WEBMCP_TRAY_ICON ?? join7(dirname3(helper), "webmcp-bridge-icon.png");
-    return existsSync5(p) ? p : undefined;
+    const p = process.env.WEBMCP_TRAY_ICON ?? join8(dirname3(helper), "webmcp-bridge-icon.png");
+    return existsSync6(p) ? p : undefined;
   }
   start() {
     if (process.platform !== "darwin")
@@ -27530,7 +27647,7 @@ class Tray {
       return;
     const pages = this.#deps.registry.all().length;
     const agents = this.#deps.agentCount();
-    const login = existsSync5(join7(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+    const login = existsSync6(join8(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
     const items = [
       { id: "name", title: `webmcp-bridge ${this.#deps.config.version}`, enabled: false },
       { id: "status", title: `Daemon: running on 127.0.0.1:${this.#deps.config.port} · ${pages} page${pages === 1 ? "" : "s"} · ${agents} chat${agents === 1 ? "" : "s"}`, enabled: false },
@@ -27565,7 +27682,7 @@ class Tray {
     try {
       switch (msg.id) {
         case "login": {
-          const installed = existsSync5(join7(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+          const installed = existsSync6(join8(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
           log.info(installed ? uninstallLaunchd() : installLaunchd(config2, process.argv[1]));
           break;
         }
@@ -27573,7 +27690,7 @@ class Tray {
           spawn3("open", [`http://${config2.host}:${config2.port}/`], { stdio: "ignore", detached: true }).unref();
           break;
         case "log":
-          openPath(join7(config2.stateDir, existsSync5(join7(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
+          openPath(join8(config2.stateDir, existsSync6(join8(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
           break;
         case "folder":
           openPath(config2.stateDir);
@@ -27613,6 +27730,49 @@ function openPath(p) {
 var VERSION = "0.0.1";
 async function serve(config2) {
   mkdirSync4(config2.stateDir, { recursive: true });
+  const running = await findRunningDaemon(config2.stateDir, config2.host);
+  if (running)
+    throw new AlreadyRunningError(running.pid, running.port, config2.host);
+  const instance = randomUUID5();
+  const record3 = { pid: process.pid, port: null, startedAt: new Date().toISOString(), version: VERSION, instance };
+  if (!claimDaemonFile(config2.stateDir, record3)) {
+    const other = await findRunningDaemon(config2.stateDir, config2.host);
+    if (other)
+      throw new AlreadyRunningError(other.pid, other.port, config2.host);
+    if (!claimDaemonFile(config2.stateDir, record3))
+      throw new Error(`could not claim ${join9(config2.stateDir, "daemon.json")}`);
+  }
+  try {
+    const candidates = config2.portPinned ? [config2.port] : config2.portCandidates ?? CANDIDATE_PORTS;
+    for (let attempt = 1;; attempt++) {
+      const picked = await pickPort(candidates, config2.host);
+      config2.port = picked.port;
+      const built = build(config2, instance);
+      try {
+        await new Promise((resolve, reject2) => {
+          built.server.once("error", reject2);
+          built.server.listen(config2.port, config2.host, () => {
+            built.server.off("error", reject2);
+            resolve();
+          });
+        });
+      } catch (err) {
+        await built.dispose();
+        if (err.code === "EADDRINUSE" && attempt < 3)
+          continue;
+        throw err;
+      }
+      updateDaemonFile(config2.stateDir, { ...record3, port: config2.port });
+      const which = candidates.length > 1 ? ` (candidate ${picked.index + 1} of ${candidates.length})` : "";
+      log.info(`listening on http://${config2.host}:${config2.port}${which} (ws: /ws, mcp: /mcp, acp: /acp, state dir: ${config2.stateDir}, pre-approved origins: ${config2.allowOrigins.join(", ") || "none"})`);
+      return built.start();
+    }
+  } catch (err) {
+    removeDaemonFile(config2.stateDir);
+    throw err;
+  }
+}
+function build(config2, instance) {
   const httpBase = `http://${config2.host}:${config2.port}`;
   const wsBase = `ws://${config2.host}:${config2.port}`;
   const registry2 = new Registry;
@@ -27621,35 +27781,29 @@ async function serve(config2) {
   const mcp = createMcpHandler({ registry: registry2, config: config2, version: VERSION });
   const acpRelay = new AcpRelay({ registry: registry2, policy, workspaces, config: config2 });
   const pages = new PageServer({ registry: registry2, policy, workspaces, version: VERSION, callTimeoutMs: config2.callTimeoutMs, httpBase, wsBase, agents: () => acpRelay.agents() });
-  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents() });
-  await new Promise((resolve, reject2) => {
-    server.once("error", reject2);
-    server.listen(config2.port, config2.host, () => {
-      server.off("error", reject2);
-      resolve();
-    });
-  });
-  const pidFile = join8(config2.stateDir, "daemon.json");
-  writeFileSync4(pidFile, JSON.stringify({ pid: process.pid, port: config2.port, startedAt: new Date().toISOString(), version: VERSION }));
-  log.info(`listening on ${httpBase} (ws: /ws, mcp: /mcp, acp: /acp, state dir: ${config2.stateDir}, pre-approved origins: ${config2.allowOrigins.join(", ") || "none"})`);
-  registry2.on("selection", ({ pageId }) => log.info(`selected page: ${pageId ?? "none"}`));
-  let tray;
-  const close = async () => {
-    tray?.stop();
+  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents(), instance });
+  const dispose = async () => {
     await acpRelay.close();
     await mcp.close();
-    await new Promise((resolve) => server.close(() => resolve()));
-    try {
-      unlinkSync2(pidFile);
-    } catch {}
   };
-  if (config2.tray) {
-    tray = new Tray({ registry: registry2, config: config2, agentCount: () => acpRelay.status().length, shutdown: () => {
-      close().then(() => process.exit(0));
-    } });
-    tray.start();
-  }
-  return { close, port: config2.port, registry: registry2 };
+  const start = () => {
+    registry2.on("selection", ({ pageId }) => log.info(`selected page: ${pageId ?? "none"}`));
+    let tray;
+    const close = async () => {
+      tray?.stop();
+      await dispose();
+      await new Promise((resolve) => server.close(() => resolve()));
+      removeDaemonFile(config2.stateDir);
+    };
+    if (config2.tray) {
+      tray = new Tray({ registry: registry2, config: config2, agentCount: () => acpRelay.status().length, shutdown: () => {
+        close().then(() => process.exit(0));
+      } });
+      tray.start();
+    }
+    return { close, port: config2.port, instance, registry: registry2 };
+  };
+  return { server, dispose, start };
 }
 async function main() {
   let parsed;
@@ -27666,12 +27820,13 @@ ${HELP}`);
     return;
   }
   if (command === "status") {
+    const port = config2.portPinned ? config2.port : readDaemonRecord(config2.stateDir)?.port ?? config2.port;
     try {
-      const r = await fetch(`http://${config2.host}:${config2.port}/health`);
+      const r = await fetch(`http://${config2.host}:${port}/health`);
       process.stdout.write(await r.text() + `
 `);
     } catch {
-      process.stdout.write(`no daemon on ${config2.host}:${config2.port}
+      process.stdout.write(`no daemon on ${config2.host}:${port}
 `);
       process.exitCode = 1;
     }
@@ -27679,7 +27834,7 @@ ${HELP}`);
   }
   if (command === "stop") {
     try {
-      const { pid } = JSON.parse(readFileSync3(join8(config2.stateDir, "daemon.json"), "utf8"));
+      const { pid } = JSON.parse(readFileSync4(join9(config2.stateDir, "daemon.json"), "utf8"));
       process.kill(pid, "SIGTERM");
       process.stdout.write(`sent SIGTERM to ${pid}
 `);
@@ -27707,7 +27862,17 @@ ${HELP}`);
 `);
     return;
   }
-  const daemon = await serve(config2);
+  let daemon;
+  try {
+    daemon = await serve(config2);
+  } catch (err) {
+    if (err instanceof AlreadyRunningError) {
+      process.stdout.write(`${err.message}
+`);
+      return;
+    }
+    throw err;
+  }
   const shutdown = (sig) => {
     log.info(`${sig}: shutting down`);
     daemon.close().then(() => process.exit(0));

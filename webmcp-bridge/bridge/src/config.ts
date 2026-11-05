@@ -1,10 +1,15 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_PORT } from 'webmcp-protocol';
+import { CANDIDATE_PORTS, DEFAULT_PORT } from 'webmcp-protocol';
 
 export interface DaemonConfig {
   host: string;
+  /** The port in use: the pinned one, or the first free candidate once `serve` has picked it. */
   port: number;
+  /** `--port` / WEBMCP_DAEMON_PORT given: exactly that port, no fallback (plans/daemon-port-discovery D-2). */
+  portPinned: boolean;
+  /** The ports to walk when not pinned; tests substitute free ones. Default CANDIDATE_PORTS. */
+  portCandidates?: readonly number[];
   stateDir: string;
   /** Origins allowed without the approval page (in addition to the persisted store). */
   allowOrigins: string[];
@@ -28,6 +33,7 @@ export function parseArgs(argv: string[], version: string): { command: string; c
   const config: DaemonConfig = {
     host: '127.0.0.1',
     port: Number(process.env.WEBMCP_DAEMON_PORT ?? DEFAULT_PORT),
+    portPinned: process.env.WEBMCP_DAEMON_PORT !== undefined,
     stateDir: process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), '.webmcp-daemon'),
     allowOrigins: [],
     noBrowser: process.env.WEBMCP_DAEMON_NO_BROWSER === '1',
@@ -47,7 +53,7 @@ export function parseArgs(argv: string[], version: string): { command: string; c
     const next = () => { const v = args.shift(); if (v === undefined) throw new Error(`missing value for ${a}`); return v; };
     switch (a) {
       case 'serve': case 'stop': case 'status': case 'install-launchd': case 'uninstall-launchd': command = a; break;
-      case '--port': config.port = Number(next()); break;
+      case '--port': config.port = Number(next()); config.portPinned = true; break;
       case '--state-dir': config.stateDir = next(); break;
       case '--allow-origin': config.allowOrigins.push(...next().split(',').map((s) => s.trim()).filter(Boolean)); break;
       case '--no-browser': config.noBrowser = true; config.approval = 'reject'; break;
@@ -68,7 +74,7 @@ export function parseArgs(argv: string[], version: string): { command: string; c
 }
 
 export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
-  --port <n>                 listen port (default ${DEFAULT_PORT}, env WEBMCP_DAEMON_PORT)
+  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(', ')}; env WEBMCP_DAEMON_PORT)
   --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected

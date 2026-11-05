@@ -16,7 +16,8 @@ export function launchdPlan(config: DaemonConfig, entry: string): { plistPath: s
   const daemonCopy = join(binDir, basename(entry));
   const siblings = ['claude-agent-acp.js', 'tray/webmcp-bridge-tray', 'tray/webmcp-bridge-icon.png'].map((f) => join(dirname(entry), f)).filter(existsSync);
   const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
-  const args = [process.execPath, daemonCopy, 'serve', '--state-dir', config.stateDir, '--port', String(config.port), '--tray'];
+  // The login item walks the candidate ports like any other start unless the user pinned one (D-7).
+  const args = [process.execPath, daemonCopy, 'serve', '--state-dir', config.stateDir, ...(config.portPinned ? ['--port', String(config.port)] : []), '--tray'];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
