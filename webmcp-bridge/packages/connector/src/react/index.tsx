@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type ThreadInfo } from '../agent.ts';
-import type { PendingPermission, SessionSnapshot, ToolCallItem, TurnItem } from '../session-model.ts';
+import type { PendingElicitation, PendingPermission, SessionSnapshot, ToolCallItem, TurnItem } from '../session-model.ts';
 import type { ConnectorStatus, PageConnection } from '../types.ts';
+import { pageToolOf, widgetInstanceOf } from '../widgets.ts';
 import { ensureStyles } from './styles.ts';
+import { clearWidgetState, ElicitationView, resolveWidget, sweepWidgetState, threadScope, WidgetHost, type WidgetMap } from './widgets.tsx';
 
 export type { AgentConnection, AgentHandle, AgentOptions, ThreadInfo } from '../agent.ts';
-export type { SessionSnapshot, Turn, TurnItem, ToolCallItem, PendingPermission } from '../session-model.ts';
+export type { SessionSnapshot, Turn, TurnItem, ToolCallItem, PendingPermission, PendingElicitation, ElicitationResult } from '../session-model.ts';
+export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, type WidgetInstance, type WidgetStatus } from '../widgets.ts';
+export { ElicitationView, FloatingWidgetPanel, WidgetHost, useWidgetState, widgetStateKey, threadScope, clearWidgetState, removeWidgetState, sweepWidgetState, resolveWidget, elicitationInitialValues, elicitationContent, elicitationMissing, PAGE_SCOPE, type WidgetProps, type WidgetComponent, type WidgetMap, type WidgetSpec, type WidgetPlacement, type ResolvedWidget, type FloatingWidgetPanelProps } from './widgets.tsx';
 
 export interface AgentChatProps {
   page: PageConnection;
@@ -25,9 +29,13 @@ export interface AgentChatProps {
   className?: string;
   /** Shown while no daemon is reachable: how to get one. Steps are inline markdown-ish text; `code` spans render as code. */
   setup?: { title?: string; steps?: string[] };
+  /** Page tool name → component rendered in place of the generic tool row (plan in-chat-widgets). */
+  widgets?: WidgetMap;
+  /** Replace the built-in form for agent-asked questions (ACP elicitation). */
+  renderElicitation?: (e: PendingElicitation) => ReactNode;
 }
 
-const EMPTY: SessionSnapshot = { state: 'connecting', turns: [], pendingPermissions: [], plan: [], commands: [] };
+const EMPTY: SessionSnapshot = { state: 'connecting', turns: [], pendingPermissions: [], pendingElicitations: [], plan: [], commands: [] };
 
 const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Start the local daemon on this computer; it shows up as "webmcp-bridge" in the menu bar while it runs.',
@@ -35,7 +43,7 @@ const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Come back here: this panel connects by itself.',
 ] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, threads: threadsEnabled = true, onHandle, className, setup }: AgentChatProps) {
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, threads: threadsEnabled = true, onHandle, className, setup, widgets, renderElicitation }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
   const [conn, setConn] = useState<AgentConnection>();
@@ -101,7 +109,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         try { await c.openThread(stored); }
         catch { localStorage.removeItem(key); await c.openThread(); }
       } else await c.openThread();
-      if (c.supportsThreads) void c.listThreads().catch(() => {});
+      const agentId = c.agentId;
+      if (c.supportsThreads) void c.listThreads().then((list) => sweepWidgetState(location.origin, agentId, list.map((t) => t.id))).catch(() => {});
     } catch (e) {
       if (!mountedRef.current) { c?.close(); return; }
       setError(String((e as Error)?.message ?? e));
@@ -128,7 +137,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const deleteThread = useCallback(async (id: string) => {
     const c = connRef.current; if (!c) return;
     setConfirmDelete(undefined);
-    try { await c.deleteThread(id); if (!c.active && !c.closed) await c.openThread(); }
+    try { await c.deleteThread(id); clearWidgetState(location.origin, threadScope(c.agentId, id)); if (!c.active && !c.closed) await c.openThread(); }
     catch (e) { if (mountedRef.current) setError(String((e as Error)?.message ?? e)); }
   }, []);
 
@@ -149,6 +158,13 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     if (e.key === 'Tab' && commandMatches.length > 0) { e.preventDefault(); setInput(`/${commandMatches[0]!.name} `); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
   };
+
+  /** What widgets send with: refused while the thread is mid-turn (chips are disabled then anyway). */
+  const widgetPrompt = useCallback((text: string) => {
+    if (!handle) return Promise.reject(new Error('no thread'));
+    if (handle.model.snapshot().state === 'prompting') return Promise.reject(new Error('the thread is busy'));
+    return handle.prompt(text);
+  }, [handle]);
 
   const connected = pageStatus.state === 'connected';
   const state = handle ? snap.state : conn ? 'connecting' : connected ? 'idle' : pageStatus.state;
@@ -194,10 +210,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       )}
       <div className="wmc-log" ref={logRef}>
         {snap.turns.length === 0 && <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : conn ? 'Opening a thread…' : 'Connect to start a chat with your local Claude about this page.'}</div>}
-        {snap.turns.map((t) => (
-          <TurnView key={t.id} items={t.items} stopReason={t.stopReason} showThoughts={showThoughts} />
+        {snap.turns.map((t, i) => (
+          <TurnView key={t.id} items={t.items} stopReason={t.stopReason} showThoughts={showThoughts} widgets={widgets} page={page} handle={handle} live={snap.state === 'prompting'} prompt={widgetPrompt} isLatest={i === snap.turns.length - 1} />
         ))}
         {snap.pendingPermissions.map((p) => <PermissionView key={p.id} p={p} />)}
+        {snap.pendingElicitations.map((e) => (renderElicitation ? <div key={e.id}>{renderElicitation(e)}</div> : <ElicitationView key={e.id} e={e} />))}
         {snap.plan.length > 0 && (
           <div className="wmc-plan"><strong>Plan</strong><ul>{snap.plan.map((e, i) => <li key={i} data-status={e.status}>{e.content}</li>)}</ul></div>
         )}
@@ -287,31 +304,54 @@ function renderCode(text: string) {
   return text.split(/(`[^`]+`)/g).map((part, i) => (part.startsWith('`') && part.endsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : <span key={i}>{part}</span>));
 }
 
-function TurnView({ items, stopReason, showThoughts }: { items: TurnItem[]; stopReason?: string; showThoughts: boolean }) {
+function TurnView({ items, stopReason, showThoughts, widgets, page, handle, live, prompt, isLatest }: {
+  items: TurnItem[]; stopReason?: string; showThoughts: boolean; widgets?: WidgetMap; page: PageConnection; handle?: AgentHandle; live: boolean; prompt: (text: string) => Promise<{ stopReason: string }>; isLatest: boolean;
+}) {
+  const trailing: ReactNode[] = [];   // widgets placed at the end of the turn (suggested replies), in call order
+  const widgetFor = (item: ToolCallItem) => {
+    const tool = widgets ? pageToolOf(item) : undefined;
+    const w = tool !== undefined ? resolveWidget(widgets, tool) : undefined;
+    if (!w || !handle) return undefined;
+    const instance = widgetInstanceOf(item, { sessionId: handle.sessionId });
+    return <WidgetHost key={item.toolCallId} Component={w.Component} instance={instance} origin={location.origin} scope={threadScope(handle.agentId, handle.sessionId)} live={live} prompt={prompt} thread={handle}
+      note={(text) => page.activity.note(text, { tool: instance.tool, id: instance.id })} raw={toolBody(item)} />;
+  };
   return (<>
     {items.map((item, i) => {
       if (item.kind === 'text') return item.role === 'user'
         ? <div key={i} className="wmc-msg user">{item.text}</div>
         : <div key={i} className="wmc-msg agent"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div>;
       if (item.kind === 'thought') return showThoughts ? <details key={i} className="wmc-thought"><summary>Thinking…</summary>{item.text}</details> : null;
+      const tool = widgets ? pageToolOf(item) : undefined;
+      const w = tool !== undefined ? resolveWidget(widgets, tool) : undefined;
+      if (w && handle) {
+        if (w.latestOnly && !isLatest) return null;             // its moment has passed
+        const el = widgetFor(item);
+        if (w.placement === 'end') { trailing.push(el); return null; }
+        return el;
+      }
       return <ToolCallView key={item.toolCallId} item={item} />;
     })}
+    {trailing}
     {stopReason && stopReason !== 'end_turn' && <div className="wmc-stop">stopped: {stopReason}</div>}
   </>);
 }
 
+/** The generic row's text: input, content blocks, output. */
+function toolBody(item: ToolCallItem): string {
+  const parts: string[] = [];
+  if (item.rawInput !== undefined) parts.push(`input: ${pretty(item.rawInput)}`);
+  for (const c of item.content as Array<Record<string, unknown>>) {
+    if (c.type === 'content' && (c.content as { type?: string; text?: string })?.type === 'text') parts.push(String((c.content as { text?: string }).text));
+    else if (c.type === 'diff') parts.push(`diff ${String(c.path)}\n${String(c.newText ?? '')}`);
+    else if (c.type === 'terminal') parts.push(`terminal ${String(c.terminalId)}`);
+  }
+  if (item.rawOutput !== undefined) parts.push(`output: ${pretty(item.rawOutput)}`);
+  return parts.join('\n\n');
+}
+
 function ToolCallView({ item }: { item: ToolCallItem }) {
-  const body = useMemo(() => {
-    const parts: string[] = [];
-    if (item.rawInput !== undefined) parts.push(`input: ${pretty(item.rawInput)}`);
-    for (const c of item.content as Array<Record<string, unknown>>) {
-      if (c.type === 'content' && (c.content as { type?: string; text?: string })?.type === 'text') parts.push(String((c.content as { text?: string }).text));
-      else if (c.type === 'diff') parts.push(`diff ${String(c.path)}\n${String(c.newText ?? '')}`);
-      else if (c.type === 'terminal') parts.push(`terminal ${String(c.terminalId)}`);
-    }
-    if (item.rawOutput !== undefined) parts.push(`output: ${pretty(item.rawOutput)}`);
-    return parts.join('\n\n');
-  }, [item]);
+  const body = useMemo(() => toolBody(item), [item]);
   return (
     <details className="wmc-tool" data-status={item.status}>
       <summary><span className="wmc-title" title={item.title}>{item.title}</span>{item.toolKind && item.toolKind !== 'other' && <span className="wmc-kind">{item.toolKind}</span>}<span className="wmc-status">{item.status}</span></summary>

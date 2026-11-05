@@ -15,6 +15,7 @@ export const AGENT_CHAT_CSS = `
 .wmc-chat button.wmc-primary{background:var(--wmc-accent);border-color:var(--wmc-accent);color:#fff}
 .wmc-chat select{font:inherit;font-size:.8rem;padding:.2rem .4rem;border-radius:6px;border:1px solid var(--wmc-border)}
 .wmc-log{flex:1;overflow-y:auto;overflow-x:hidden;padding:.8rem;display:flex;flex-direction:column;gap:.6rem}
+.wmc-log>*{flex-shrink:0}
 .wmc-empty{color:var(--wmc-muted);text-align:center;margin:auto;padding:2rem 1rem}
 .wmc-msg{max-width:92%;padding:.5rem .75rem;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
 .wmc-msg.user{align-self:flex-end;background:var(--wmc-user)}
@@ -62,6 +63,30 @@ export const AGENT_CHAT_CSS = `
 .wmc-chat .wmc-thread-del{border:0;background:none;color:var(--wmc-muted);padding:.2rem .5rem;font-size:1rem;line-height:1}.wmc-chat .wmc-thread-del:hover{color:var(--wmc-err)}
 .wmc-thread-confirm{display:flex;gap:.3rem;align-items:center;font-size:.75rem;padding-right:.3rem;white-space:nowrap}
 .wmc-chat .wmc-thread-confirm button{padding:.1rem .4rem;font-size:.75rem}
+.wmc-widget{align-self:stretch;min-width:0;max-width:100%;border:1px solid var(--wmc-border);border-left:3px solid var(--wmc-accent);border-radius:8px;background:#fff;padding:.5rem .6rem;display:flex;flex-direction:column;gap:.4rem;font-size:.9rem}
+.wmc-widget[data-status=completed]{border-left-color:var(--wmc-ok)}.wmc-widget[data-status=failed],.wmc-widget[data-status=cancelled]{border-left-color:var(--wmc-err)}
+.wmc-widget[data-restored=true]{border-style:dashed;border-left-style:solid}
+.wmc-widget-raw{font-size:.75rem;color:var(--wmc-muted)}.wmc-widget-raw summary{cursor:pointer;display:flex;gap:.5rem;align-items:center}
+.wmc-widget-raw summary .wmc-title{font-family:ui-monospace,monospace;font-size:.95em}.wmc-widget-raw summary .wmc-status{margin-left:auto}
+.wmc-widget-raw pre{margin:.3rem 0 0;max-height:12rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--wmc-tool);padding:.4rem .5rem;border-radius:6px;font-size:.95em}
+.wmc-widget-error{color:var(--wmc-err);font-size:.85rem}
+.wmc-elicit{border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;padding:.5rem .75rem;align-self:stretch;font-size:.9rem}
+.wmc-elicit .wmc-elicit-title{font-weight:600;margin-bottom:.4rem}
+.wmc-elicit fieldset{border:0;padding:0;margin:0 0 .5rem;min-width:0}.wmc-elicit legend{font-weight:600;font-size:.85rem;padding:0;margin-bottom:.2rem}
+.wmc-elicit label{display:flex;gap:.4rem;align-items:flex-start;font-size:.85rem;margin:.15rem 0;cursor:pointer}
+.wmc-elicit .wmc-elicit-desc{color:var(--wmc-muted);font-size:.78rem;font-weight:400}
+.wmc-elicit input[type=text],.wmc-elicit input[type=number]{font:inherit;font-size:.85rem;padding:.25rem .4rem;border:1px solid var(--wmc-border);border-radius:6px;width:100%;box-sizing:border-box;background:#fff}
+.wmc-elicit .wmc-elicit-actions{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem}
+.wmc-float{--wmc-bg:#fff;--wmc-fg:#1a1a1a;--wmc-muted:#6b7280;--wmc-border:#e5e7eb;--wmc-accent:#2563eb;--wmc-user:#eef2ff;--wmc-tool:#f8fafc;--wmc-warn:#fff7ed;--wmc-err:#b91c1c;--wmc-ok:#047857;
+  position:fixed;z-index:2147483000;display:flex;flex-direction:column;gap:.5rem;width:min(22rem,calc(100vw - 2rem));font:14px/1.5 system-ui,sans-serif;color:var(--wmc-fg)}
+.wmc-float[data-position=bottom-right]{right:1rem;bottom:1rem}.wmc-float[data-position=bottom-left]{left:1rem;bottom:1rem}.wmc-float[data-position=top-right]{right:1rem;top:1rem}.wmc-float[data-position=top-left]{left:1rem;top:1rem}
+.wmc-float-card{display:flex;flex-direction:column;gap:.2rem}
+.wmc-float .wmc-widget{box-shadow:0 6px 24px rgba(0,0,0,.15)}
+.wmc-float-head{display:flex;align-items:center;gap:.5rem;font-size:.75rem;color:var(--wmc-muted);padding:0 .2rem}
+.wmc-float-head span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace}
+.wmc-float-head button{font:inherit;border:0;background:none;cursor:pointer;color:inherit;font-size:1rem;line-height:1;padding:0 .2rem}
+.wmc-float button,.wmc-widget button{font:inherit;font-size:.8rem;padding:.25rem .6rem;border-radius:6px;border:1px solid var(--wmc-border);background:#fff;cursor:pointer}
+.wmc-float button.wmc-primary,.wmc-widget button.wmc-primary{background:var(--wmc-accent);border-color:var(--wmc-accent);color:#fff}
 `;
 
 let injected = false;
