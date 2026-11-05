@@ -1,5 +1,7 @@
 // M5: the embedded chat inside the demo page, driven through the real browser (CDP).
-// Needs: daemon on 8717 + vite on 5173. Launches its own Chrome. Uses your Claude login/model.
+// Needs: daemon on 8717 + vite on 5173. Launches its own Chrome. Uses your Claude login/model (costs tokens).
+// Since the threads-and-auto-mode plan: new threads start in auto mode (a mutating page tool may run without a
+// prompt), and a thread switch through the Threads panel is exercised with real Claude titles.
 import { launchChrome, waitFor, sleep } from './cdp.mjs';
 
 const DEMO = process.env.DEMO_URL ?? 'http://127.0.0.1:5173/';
@@ -17,7 +19,7 @@ try {
   await page.evaluate('document.querySelector(".wmc-chat button.wmc-primary").click(); "clicked"');
   await waitFor(() => page.evaluate('!!window.__demo.agent'), 'agent handle', { tries: 60 });
   const s0 = await waitFor(async () => { const s = await snap(); return s && s.state === 'ready' ? s : null; }, 'session ready');
-  step('session ready', { sessionId: s0.sessionId?.slice(0, 8), agent: s0.agentName, modes: s0.modes?.available?.map((m) => m.id), badge: await page.evaluate('document.querySelector(".wmc-badge").textContent') });
+  step('session ready', { sessionId: s0.sessionId?.slice(0, 8), agent: s0.agentName, mode: s0.modes?.current, autoMode: s0.modes?.current === 'auto', modes: s0.modes?.available?.map((m) => m.id), badge: await page.evaluate('document.querySelector(".wmc-badge").textContent') });
   // 2. prompt through the UI (textarea + Enter)
   await page.evaluate(`(() => { const ta = document.querySelector('.wmc-input textarea'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, 'Reply with exactly one word: pong'); ta.dispatchEvent(new Event('input', { bubbles: true })); return 'typed'; })()`);
   await sleep(100);
@@ -30,11 +32,13 @@ try {
   step('read-only tool', { reply: lastAgentText(s2).slice(0, 160), tools: toolNames(s2), permissionsPending: s2.pendingPermissions.length, toolCards: await page.evaluate('document.querySelectorAll(".wmc-tool").length') });
   // 4. mutating page tool → permission prompt in the UI → allow once
   await page.evaluate(`window.__demo.agent.prompt('Set the page background to #0066cc with the page tool, then confirm in one line.'); 'sent'`);
-  await waitFor(async () => (await snap()).pendingPermissions.length > 0, 'permission prompt', { tries: 120 });
-  step('permission prompt shown', { title: (await snap()).pendingPermissions[0]?.title, buttons: await page.evaluate('[...document.querySelectorAll(".wmc-perm button")].map(b => b.dataset.kind)') });
-  await page.evaluate('document.querySelector(".wmc-perm button[data-kind=allow_once]").click(); "allowed"');
+  const s3a = await waitFor(async () => { const s = await snap(); return s.pendingPermissions.length > 0 || (s.turns.length >= 3 && s.state === 'ready') ? s : null; }, 'permission prompt or auto-approved turn', { tries: 120 });
+  if (s3a.pendingPermissions.length) {
+    step('permission prompt shown', { title: s3a.pendingPermissions[0]?.title, buttons: await page.evaluate('[...document.querySelectorAll(".wmc-perm button")].map(b => b.dataset.kind)') });
+    await page.evaluate('document.querySelector(".wmc-perm button[data-kind=allow_once]").click(); "allowed"');
+  } else step('permission prompt', { skipped: `auto-approved in mode ${s3a.modes?.current}` });
   const s3 = await waitFor(async () => { const s = await snap(); return s.turns.length >= 3 && s.state === 'ready' ? s : null; }, 'mutating turn', { tries: 120 });
-  step('mutating tool allowed', { reply: lastAgentText(s3).slice(0, 160), tools: toolNames(s3), bg: await page.evaluate('document.body.style.backgroundColor') });
+  step('mutating tool ran', { reply: lastAgentText(s3).slice(0, 160), tools: toolNames(s3), prompted: s3a.pendingPermissions.length > 0, bg: await page.evaluate('document.body.style.backgroundColor') });
   // 5. shell → permission prompt (full Claude Code per D-24) → reject
   await page.evaluate(`window.__demo.agent.prompt('Run this exact shell command: echo hi > note.txt. If you cannot, say so in one sentence.'); 'sent'`);
   const s4 = await waitFor(async () => { const s = await snap(); return s.pendingPermissions.length > 0 || (s.turns.length >= 4 && s.state === 'ready') ? s : null; }, 'bash prompt or done', { tries: 120 });
@@ -57,7 +61,22 @@ try {
   await waitFor(() => page.evaluate('document.readyState === "complete" && !!window.__demo && JSON.parse(JSON.stringify(window.__demo.page.status)).state === "connected"').catch(() => false), 'reloaded + connected', { tries: 60 });
   await page.evaluate('document.querySelector(".wmc-chat button.wmc-primary").click(); "clicked"');
   const s6 = await waitFor(async () => { const s = await snap().catch(() => null); return s && s.state === 'ready' ? s : null; }, 'resumed session', { tries: 90 });
-  step('resume after reload', { sameSession: s6.sessionId === sid, replayedTurns: s6.turns.length, firstUser: s6.turns[0]?.items[0]?.text?.slice(0, 40) });
+  step('resume after reload', { sameSession: s6.sessionId === sid, replayedTurns: s6.turns.length, firstUser: s6.turns[0]?.items[0]?.text?.slice(0, 40), mode: s6.modes?.current });
+  // 6b. threads: New → second thread on the same connection → Threads panel lists both with Claude's titles → switch back → history replays
+  const firstId = s6.sessionId;
+  const adaptersBefore = (await (await fetch(`${DAEMON}/health`)).json()).agents?.length;
+  await page.evaluate('document.querySelector("button[data-role=new-thread]").click(); "new"');
+  const s6b = await waitFor(async () => { const s = await snap().catch(() => null); return s && s.state === 'ready' && s.sessionId && s.sessionId !== firstId ? s : null; }, 'new thread ready', { tries: 60 });
+  step('new thread', { sessionId: s6b.sessionId?.slice(0, 8), mode: s6b.modes?.current, turns: s6b.turns.length, adaptersBefore, adaptersAfter: (await (await fetch(`${DAEMON}/health`)).json()).agents?.length });
+  await page.evaluate(`window.__demo.agent.prompt('Reply with exactly one word: mango'); 'sent'`);
+  const s6c = await waitFor(async () => { const s = await snap(); return s.turns.length >= 1 && s.state === 'ready' ? s : null; }, 'mango turn', { tries: 120 });
+  step('second thread prompt', { reply: lastAgentText(s6c).slice(0, 60) });
+  await page.evaluate('document.querySelector("button[data-role=threads-toggle]").click(); "threads"');
+  const list = await waitFor(async () => { const l = JSON.parse(await page.evaluate('JSON.stringify([...document.querySelectorAll(".wmc-thread")].map(li => ({ id: li.dataset.id, active: li.dataset.active, state: li.dataset.state, title: li.querySelector(".wmc-thread-title").textContent })))')); return l.length >= 2 ? l : null; }, 'thread list', { tries: 40 });
+  step('thread list', { count: list.length, entries: list.slice(0, 4) });
+  await page.evaluate(`document.querySelector('.wmc-thread[data-id="${firstId}"] .wmc-thread-open').click(); "switch"`);
+  const s6d = await waitFor(async () => { const s = await snap().catch(() => null); return s && s.state === 'ready' && s.sessionId === firstId ? s : null; }, 'switched back', { tries: 90 });
+  step('switch back', { sessionId: s6d.sessionId?.slice(0, 8), replayedTurns: s6d.turns.length, firstUser: s6d.turns[0]?.items[0]?.text?.slice(0, 40), mode: s6d.modes?.current, adapters: (await (await fetch(`${DAEMON}/health`)).json()).agents?.length });
   // 7. agent picker: disconnect, choose the fake echo agent (if the daemon offers it), connect, prompt
   const agents = JSON.parse(await page.evaluate('JSON.stringify(window.__demo.page.status.agents || [])'));
   if (agents.some((a) => a.id === 'echo')) {

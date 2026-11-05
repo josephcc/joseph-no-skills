@@ -66,7 +66,7 @@ try {
       };
       await prompt('pong', 'Reply with exactly one word: pong');
       await prompt('read-only page tool (pre-allowed, expect no permission prompt)', 'Use the page tool get_state and tell me the background colour in one short sentence.');
-      await prompt('mutating page tool (expect a permission prompt, which I reject)', 'Set the page background to teal using the page tool. If you are not allowed, say so in one sentence.');
+      await prompt('mutating page tool (Manual workspace: a permission prompt, which I reject; a fresh workspace starts in auto and may run it without asking)', 'Set the page background to teal using the page tool. If you are not allowed, say so in one sentence.');
       return sessionId;
     });
 } catch (err) { out.error = String(err?.stack ?? err); }
