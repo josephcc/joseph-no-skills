@@ -4,12 +4,14 @@ import { DaemonLink } from './link.ts';
 import { callTool, debounce, listTools } from './mirror.ts';
 import { hasNativeModelContext, installShim } from './shim.ts';
 import type { ConnectOptions, ConnectorStatus, PageConnection, ToolCallEvent } from './types.ts';
+import { CONNECTOR_VERSION } from './version.ts';
 
 export type { ConnectOptions, ConnectorState, ConnectorStatus, PageConnection, ToolCallEvent, ToolPolicy } from './types.ts';
 export { installShim, hasNativeModelContext } from './shim.ts';
 export { preamble } from './preamble.ts';
 export * from './protocol.ts';
-export { connectAgent, type AgentHandle, type AgentOptions } from './agent.ts';
+export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
+export { CONNECTOR_VERSION } from './version.ts';
 export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type ToolCallItem, type PendingPermission } from './session-model.ts';
 
 const DEFAULT_URL = `ws://127.0.0.1:${DEFAULT_PORT}`;
@@ -68,7 +70,7 @@ export function connect(options: ConnectOptions = {}): PageConnection {
       instructions,
       instructionsSummary,
       hasContext: typeof options.context === 'function',
-      client: 'webmcp-connector/0.0.1',
+      client: `webmcp-connector/${CONNECTOR_VERSION}`,
     });
   });
 
