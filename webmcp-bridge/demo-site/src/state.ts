@@ -8,6 +8,9 @@ export const SENTENCES = [
   'Hello from a web page that speaks WebMCP.',
 ];
 export const state = { backgroundColor: '', sentence: '', toolCallCount: 0 };
+/** The big monospace box under the sentence: whatever a tool (any Claude, any skill) last put there. */
+export const output = { title: '', text: '', updatedAt: 0 };
+export const OUTPUT_MAX_CHARS = 200_000;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 export function render() {
@@ -16,7 +19,33 @@ export function render() {
   $('swatch').style.backgroundColor = state.backgroundColor;
   $('color').textContent = state.backgroundColor;
 }
-export function snapshot() { return { ...state, backgroundColor: document.body.style.backgroundColor || state.backgroundColor }; }
+export function snapshot() { return { ...state, backgroundColor: document.body.style.backgroundColor || state.backgroundColor, output: outputSummary() }; }
+
+/** What the model sees of the box: counts and a short head, never the whole text (it wrote it). */
+export function outputSummary() {
+  const lines = output.text ? output.text.split('\n').length : 0;
+  return { title: output.title, lines, chars: output.text.length, preview: output.text.slice(0, 240) };
+}
+export function renderOutput() {
+  const empty = output.text.length === 0;
+  $('output').textContent = output.text;
+  $('output-title').textContent = output.title;
+  $('output-section').dataset.empty = empty ? 'true' : 'false';
+  $('output-meta').textContent = empty ? 'empty' : `${outputSummary().lines} lines · ${output.text.length} chars`;
+  for (const id of ['output-copy', 'output-clear']) (document.getElementById(id) as HTMLButtonElement).disabled = empty;
+}
+/** Replace or append the box's text; an empty replace clears it (and its title unless a new one is given). */
+export function setOutput(args: { text: string; title?: string; mode?: 'replace' | 'append' }) {
+  const text = String(args.text ?? '');
+  const append = args.mode === 'append' && output.text.length > 0;
+  const next = append ? `${output.text.replace(/\n*$/, '')}\n\n${text}` : text;
+  output.text = next.length > OUTPUT_MAX_CHARS ? next.slice(next.length - OUTPUT_MAX_CHARS) : next;
+  if (args.title !== undefined) output.title = String(args.title).slice(0, 120);
+  else if (!append && !text) output.title = '';
+  output.updatedAt = Date.now();
+  renderOutput();
+  return { shown: text.length > 0, mode: append ? 'append' : 'replace', ...outputSummary() };
+}
 export function isCssColor(value: string): boolean { return typeof value === 'string' && CSS.supports('color', value); }
 export function pick<T>(list: readonly T[], not?: T): T { let v = list[Math.floor(Math.random() * list.length)]!; while (v === not && list.length > 1) v = list[Math.floor(Math.random() * list.length)]!; return v; }
 export function randomize() { state.backgroundColor = pick(COLOURS, state.backgroundColor); state.sentence = pick(SENTENCES, state.sentence); render(); return snapshot(); }

@@ -20,6 +20,16 @@
         <p id="hint" class="hint"></p>
       </header>
 
+      <section id="output-section" class="output" data-empty="true" aria-label="Output box">
+        <div class="output-head">
+          <h2>Output <span id="output-title" class="output-title"></span></h2>
+          <span id="output-meta" class="output-meta">empty</span>
+          <button id="output-copy" type="button" disabled>Copy</button>
+          <button id="output-clear" type="button" disabled>Clear</button>
+        </div>
+        <pre id="output" class="output-box" aria-live="polite"></pre>
+      </section>
+
       <section class="columns">
         <div>
           <h2>Registered tools <small id="tool-count"></small></h2>

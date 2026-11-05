@@ -10,7 +10,7 @@ Three things ship from this repo:
 | Deliverable | Path | What it is |
 |---|---|---|
 | `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads and page-provided widgets: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`). |
-| Demo page | `demo-site` | Vite page with four WebMCP tools (colour + sentence), a call log, a bonus tool for dynamic registration, and the embedded chat. |
+| Demo page | `demo-site` | Vite page with WebMCP tools for the colour and the sentence, two card tools (`propose_palette`, `suggest_replies`), a `show_output` tool that fills a big monospace output box on the page (for results from any Claude, skill or tool), a call log, a bonus tool for dynamic registration, and the embedded chat. |
 | `webmcp-daemon` Claude Code plugin | `plugin` | Ships and runs the local daemon (`bridge/`), points Claude Code at it over MCP, and injects each page's instructions (session start) and live UI state (every prompt) through hooks. |
 
 ## Try it (this checkout)

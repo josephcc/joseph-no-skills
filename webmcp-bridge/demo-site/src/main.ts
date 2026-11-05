@@ -1,11 +1,12 @@
 import { connect, preamble, type ConnectorStatus, type ToolCallEvent } from 'webmcp-connector';
 import { mountChat, mountFloatingPanel } from './chat.tsx';
-import { isCssColor, randomize, render, snapshot, state } from './state.ts';
+import { isCssColor, output, randomize, render, renderOutput, setOutput, snapshot, state } from './state.ts';
 
 // ---------- page state (demo-site/src/state.ts; the cards in widgets.tsx use it too) ----------
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const el = (tag: string, text: string) => { const n = document.createElement(tag); n.textContent = text; return n; };   // text, never HTML
 randomize();
+renderOutput();
 
 // ---------- WebMCP tools (native API, or the connector's shim) ----------
 // connect() must run before registerTool so the shim exists in browsers without the flag.
@@ -18,8 +19,9 @@ const page = connect({
     'The page shows one sentence on a coloured background. Keep replies short and playful.',
     'Never use the word "nodes"; say "sentence" and "background".',
     'When the user asks for ideas, options or suggestions for the page, call propose_palette instead of listing them in prose; the card shows them. When an answer has natural next steps, call suggest_replies first and then write the answer; the chips land under it.',
+    'Long or structured results (code, logs, tables, command output, anything from another tool or skill) go into the page\'s output box with show_output, not into the chat; then say in one line what you put there.',
   ].join('\n'),
-  instructionsSummary: 'This page shows a sentence on a coloured background; tools can read and change both. Keep replies short. Never use the word "nodes".',
+  instructionsSummary: 'This page shows a sentence on a coloured background; tools can read and change both. Keep replies short. Never use the word "nodes". show_output puts long or structured text (code, logs, tables, results from other tools and skills) into the page\'s big monospace output box; use it whenever a result is worth showing on the page.',
   context: () => JSON.stringify({ lookingAt: 'demo page', ...snapshot(), tab: document.visibilityState }, null, 2),
   autoConnect: true,
   onStatus: showStatus,
@@ -59,6 +61,25 @@ void mc.registerTool({
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   execute: () => { state.toolCallCount++; return randomize(); },
 });
+
+// The output box: any Claude (embedded or terminal, with whatever skills it has) can put text on the page.
+void mc.registerTool({
+  name: 'show_output',
+  description: 'Puts text into the page\'s large monospace output box (the "Output" panel under the sentence) so the user can read a result on the page: logs, code, tables, data, anything long or structured, including results from other tools and skills. Whitespace is preserved and nothing is rendered as markdown. mode "replace" (default) replaces what is shown; "append" adds a new section under it; an empty text with "replace" clears the box. Returns the box\'s title, line and character counts and a short preview. The user sees the output immediately: your message should say what it is in one line, not repeat it.',
+  inputSchema: { type: 'object', properties: {
+    text: { type: 'string', maxLength: 50_000, description: 'The text to show, verbatim' },
+    title: { type: 'string', maxLength: 120, description: 'A short heading for the box; kept from before when omitted on append' },
+    mode: { type: 'string', enum: ['replace', 'append'], description: 'replace (default) or append' },
+  }, required: ['text'], additionalProperties: false },
+  execute: ({ text, title, mode }: { text: string; title?: string; mode?: 'replace' | 'append' }) => {
+    if (typeof text !== 'string') throw new Error('text must be a string');
+    if (mode !== undefined && mode !== 'replace' && mode !== 'append') throw new Error('mode must be "replace" or "append"');
+    state.toolCallCount++;
+    return setOutput({ text, ...(title !== undefined ? { title: String(title) } : {}), ...(mode ? { mode } : {}) });
+  },
+});
+$('output-clear').addEventListener('click', () => { setOutput({ text: '' }); });
+$('output-copy').addEventListener('click', () => { void navigator.clipboard?.writeText(output.text); });
 
 // Widget tools (plan in-chat-widgets §4.10): their results render as cards in the chat (demo-site/src/widgets.tsx).
 let paletteSeq = 0;

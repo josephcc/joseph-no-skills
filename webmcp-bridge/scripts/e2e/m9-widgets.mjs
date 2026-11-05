@@ -110,13 +110,25 @@ try {
   step('unmapped tool', generic);
   if (generic.widget || !generic.row) fail('an unmapped tool must render the generic row');
 
+  // 5b. the output box: a page tool any Claude can call fills the big monospace box; the chat keeps the generic row
+  await typeAndSend('widget:show_output {"title":"Hello","text":"line 1\\nline 2"}');
+  await turnDone(7);
+  const box = await page.evaluate('JSON.stringify({ text: document.getElementById("output").textContent, title: document.getElementById("output-title").textContent, empty: document.getElementById("output-section").dataset.empty, meta: document.getElementById("output-meta").textContent, lines: window.__demo.snapshot().output.lines })').then(JSON.parse);
+  step('output box', box);
+  if (box.text !== 'line 1\nline 2' || box.title !== 'Hello' || box.empty !== 'false' || box.lines !== 2) fail('show_output did not fill the box as asked');
+  await typeAndSend('widget:show_output {"text":"line 3","mode":"append"}');
+  await turnDone(8);
+  const appended = await page.evaluate('JSON.stringify({ text: document.getElementById("output").textContent, title: document.getElementById("output-title").textContent })').then(JSON.parse);
+  if (appended.text !== 'line 1\nline 2\n\nline 3' || appended.title !== 'Hello') fail(`append did not add a section: ${JSON.stringify(appended)}`);
+  await click('#output-clear');
+  if ((await page.evaluate('document.getElementById("output-section").dataset.empty')) !== 'true') fail('Clear did not empty the box');
   // 6. a form elicitation renders and its answer reaches the agent (c51)
   await typeAndSend('ask-form please');
   await waitFor(() => page.evaluate('!!document.querySelector(".wmc-elicit")'), 'elicitation form');
   await click('.wmc-elicit input[type=radio][value="b"]');
   await setInput('.wmc-elicit input[type=text]', 'with a note');
   await click('.wmc-elicit button[data-action=accept]');
-  const s6 = await turnDone(7);
+  const s6 = await turnDone(9);
   step('form answered', { reply: texts(s6).at(-1), formGone: !(await page.evaluate('!!document.querySelector(".wmc-elicit")')) });
   if (texts(s6).at(-1) !== 'form: {"action":"accept","content":{"choice":"b","choice_custom":"with a note"}}') fail('the form answer did not reach the agent as sent');
 

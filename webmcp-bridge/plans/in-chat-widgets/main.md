@@ -707,6 +707,10 @@ Observations worth keeping:
 - **Tool rows collapsed to 2 px in a scrolling log** (manual test, 2026-11-05): `.wmc-tool` has `overflow:hidden` (from an earlier audit fix for long titles), which lets a flex column shrink it to nothing once the log overflows; messages and cards, without it, kept their height, so a long thread showed two "divider lines" where the tool rows were. Pre-existing, visible only in the wide layout with a long thread. Fixed with `.wmc-log>*{flex-shrink:0}` (`react/styles.ts`); `m9` now runs in a 1,400 px window and asserts no transcript entry is under 16 px once the log scrolls (step "log layout").
 - The first `m9` run timed out on the chips once, most likely the React input lagging the model by a frame; `typeAndSend` now waits for the input to be enabled, and the failure did not recur.
 
+### 12.1 Addendum (2026-11-05): the output box
+
+After the manual test the user asked for "a big monospace font box that the tool can populate, to showcase outputs from other Claude skills and tools on the page". Built as a demo-page feature, not a chat widget: an "Output" panel under the sentence (`demo-site/index.html`, `.output-box` in `style.css`, state in `state.ts`) and a `show_output { text, title?, mode: replace | append }` tool (`main.ts`) that fills it, with Copy and Clear buttons. The page snapshot carries the box's title, line and character counts and a 240-character preview, so either Claude knows what is on screen without re-reading it; the page's instructions and the terminal summary tell Claude to put long or structured results there. The box keeps the last 200,000 characters. `m9` step "output box" covers replace, append and Clear through the page tool. In the chat the call shows as the generic row; a card for it would be a one-line follow-up if wanted.
+
 ## Codex audit — 2026-11-05 (1 of the pre-browser-test budget)
 
 **Scope:** the uncommitted W1, W2 and W4 work plus the unit tests (the end-to-end scripts and the README were excluded).

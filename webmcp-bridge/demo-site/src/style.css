@@ -36,3 +36,13 @@ button:disabled { opacity: .5; cursor: default; }
 .demo-option small { color: #6b7280; }
 .demo-replies { display: flex; flex-wrap: wrap; gap: .4rem; }
 .demo-replies button { border-radius: 999px; }
+
+/* the output box (show_output) */
+.output { margin: 1.25rem 0 0; }
+.output-head { display: flex; align-items: center; gap: .6rem; }
+.output-head h2 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.output-title { font-weight: 400; color: #374151; }
+.output-title:not(:empty)::before { content: '· '; color: #9ca3af; }
+.output-meta { color: #6b7280; font-size: .85rem; white-space: nowrap; }
+.output-box { margin: .5rem 0 0; background: #111827; color: #e5e7eb; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: .9rem 1rem; border-radius: 10px; min-height: 14rem; max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.output[data-empty="true"] .output-box::before { content: 'Nothing here yet. A tool call to show_output puts text here, from the chat or from a terminal Claude.'; color: #6b7280; }
