@@ -105,6 +105,9 @@ export function buildFakeAgent(opts: FakeAgentOptions = {}): FakeAgent {
       if (!(opts.loadSession ?? true)) throw acp.RequestError.methodNotFound('session/load');
       const s = session(String(ctx.params.sessionId));
       loaded.add(s.id);
+      // The page endpoint a reload reconnects under (a new page id): the real adapter takes the
+      // mcpServers of session/load too, so a `widget:` prompt after a reload reaches the page.
+      if (Array.isArray(ctx.params.mcpServers)) { s.mcpServers = ctx.params.mcpServers; persist(); }
       for (const c of s.chunks) {
         if (c.role === 'tool') { for (const f of toolCallFrames(c)) await update(ctx, s.id, f); continue; }
         await update(ctx, s.id, { sessionUpdate: c.role === 'user' ? 'user_message_chunk' : 'agent_message_chunk', content: { type: 'text', text: c.text } });
