@@ -198,6 +198,11 @@ The chat-to-card figure uses the same three lanes as the terminal figure (page, 
 <rationale>Joseph: "why do we need a page tools column, just use the AgentChat / Page first column".</rationale>
 </decision>
 
+<decision id="D-9" title="Figure 1: a few words under every numbered arrow, and a register-tools arrow from the page to the connector" status="locked" date="2026-11-05">
+Six numbered arrows, each with a short label under it: ① register tools (the page to the connector, new), ② register and call (the connector and `/ws`), ③ chat (the panel and `/acp`), ④ stdio relay (`/acp` and the agent), ⑤ call a tool (the agent to `/mcp`), ⑥ list + call (`/mcp` and the terminal session). The caption walks through them in that order, so it starts at the page registering its tools.
+<rationale>Joseph: "i like the number labels, but can we also have a very short description under the lines as well … 1 would be like 'register tools' … register and call? … also need an arrow between 'your page' and 'webmcp-connector' for 'register tools' i think". The new arrow is the first step of the story, so it took ① and the rest moved up one.</rationale>
+</decision>
+
 ## 6. Findings and risks
 
 <finding id="F-1" title="Screenshots go stale" severity="p3" status="open" effort="small">
