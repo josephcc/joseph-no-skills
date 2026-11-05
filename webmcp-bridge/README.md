@@ -293,7 +293,7 @@ A page connecting, then a terminal session calling one of its tools:
 
 A prompt in the embedded chat that ends in a card:
 
-![A prompt in the embedded chat ending in a card, step by step across the chat panel, the daemon, the agent and the page's tools](docs/img/fig-chat-card.svg)
+![A prompt in the embedded chat ending in a card, step by step across the page (the chat panel and its tools), the daemon and the agent](docs/img/fig-chat-card.svg)
 
 ### Finding the daemon, and only one of it
 

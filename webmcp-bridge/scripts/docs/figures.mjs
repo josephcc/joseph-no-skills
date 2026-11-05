@@ -123,24 +123,29 @@ ${body}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Figure 3: a prompt in the embedded chat that ends in a card.
+// Figure 3: a prompt in the embedded chat that ends in a card. Three lanes, like figure 2: the page lane holds both the
+// chat panel and the page's tools (the tool runs in the same page the panel is in); arrows that cross the daemon lane
+// are relayed by it and say over which endpoints.
 {
-  const lane = (x, title, fill, edge) => box({ x, y: 30, w: 265, h: 60, title, fill, edge, titleSize: 21, pad: 14 });
-  const stepBox = (x, y, text, n, w = 265) => `${box({ x, y, w, h: 54, fill: C.white, edge: '#c9d3d6', lines: [], pad: 0 })}<circle cx="${x + 24}" cy="${y + 27}" r="15" fill="${C.accent}"/><text x="${x + 24}" y="${y + 33}" font-size="16" font-weight="700" text-anchor="middle" fill="${C.white}">${n}</text><text x="${x + 50}" y="${y + 33}" font-size="15" fill="${C.ink}">${esc(text)}</text>`;
-  const L = [25, 320, 615, 910];
+  const lane = (x, title, fill, edge) => box({ x, y: 30, w: 340, h: 60, title, fill, edge, titleSize: 22, pad: 16 });
+  const stepBox = (x, y, text, n) => `${box({ x, y, w: 340, h: 54, fill: C.white, edge: '#c9d3d6', lines: [], pad: 0 })}<circle cx="${x + 24}" cy="${y + 27}" r="15" fill="${C.accent}"/><text x="${x + 24}" y="${y + 33}" font-size="16" font-weight="700" text-anchor="middle" fill="${C.white}">${n}</text><text x="${x + 50}" y="${y + 33}" font-size="17" fill="${C.ink}">${esc(text)}</text>`;
+  const L = [40, 430, 820];
   const body = [
-    lane(L[0], 'AgentChat (page)', C.page, C.pageEdge), lane(L[1], 'Daemon /acp', C.daemon, C.daemonEdge), lane(L[2], 'claude-agent-acp', C.claude, C.claudeEdge), lane(L[3], 'Page tools', C.page, C.pageEdge),
-    stepBox(L[0], 120, 'session/new (page workspace)', 1),
-    stepBox(L[1], 190, 'spawn the agent, forward', 2),
+    lane(L[0], 'Page (AgentChat + tools)', C.page, C.pageEdge), lane(L[1], 'Daemon', C.daemon, C.daemonEdge), lane(L[2], 'Agent (claude-agent-acp)', C.claude, C.claudeEdge),
+    stepBox(L[0], 120, 'session/new, from the chat panel', 1),
+    stepBox(L[1], 190, 'spawn the agent in its workspace', 2),
     stepBox(L[0], 260, 'prompt + page://ui-state', 3),
     stepBox(L[2], 330, 'tools/call propose_palette', 4),
-    stepBox(L[3], 400, 'the tool runs in the page', 5),
-    stepBox(L[2], 470, 'result, then the reply text', 6),
-    stepBox(L[0], 540, 'the card, from the result', 7),
+    stepBox(L[0], 400, 'the tool runs in the page; result', 5),
+    stepBox(L[2], 470, 'the reply text, after the result', 6),
+    stepBox(L[0], 540, 'the card, from the tool result', 7),
     stepBox(L[0], 610, 'Use: applied; note() recorded', 8),
-    arrow({ points: [[290, 147], [320, 147]] }), arrow({ points: [[585, 217], [615, 217]] }), arrow({ points: [[290, 287], [320, 287]] }),
-    arrow({ points: [[585, 357], [615, 357]], both: false }), arrow({ points: [[880, 427], [910, 427]] }), arrow({ points: [[880, 497], [910, 497]], both: true }),
-    arrow({ points: [[615, 567], [290, 567]] }),
+    arrow({ points: [[380, 147], [430, 147]] }),
+    arrow({ points: [[770, 217], [820, 217]] }),
+    arrow({ points: [[380, 287], [820, 287]], label: 'ACP, relayed by the daemon', labelSize: 15 }),
+    arrow({ points: [[820, 357], [380, 357]], label: '/mcp → /ws', labelSize: 15 }),
+    arrow({ points: [[380, 427], [820, 427]], label: '/ws → /mcp', labelSize: 15 }),
+    arrow({ points: [[820, 497], [380, 497]], label: 'ACP', labelSize: 15 }),
     note({ x: 600, y: 700, lines: ['The note rides with the next prompt, so Claude learns what the user picked.'], anchor: 'middle' }),
   ].join('\n');
   writeFileSync(join(OUT, 'fig-chat-card.svg'), svg(1200, 730, body));

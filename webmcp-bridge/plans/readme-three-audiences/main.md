@@ -193,6 +193,11 @@ The components figure shows one "Local Claude Code" box (your login, your skills
 <rationale>Joseph, on the first render: "the first figure does not explain how embedded chat works, there's also two blocks of claude code on the right, technically this isnt wrong, but maybe we can have a parent block that says 'Local Claude Code'", then "we dont need the mcp scoped to this page, and the dash line, jsut the same solid line is fine, also why is mcp not connected to the browser tab, that's confusing".</rationale>
 </decision>
 
+<decision id="D-8" title="Figure 3: three lanes; the page lane holds the chat panel and the page's tools" status="locked" date="2026-11-05">
+The chat-to-card figure uses the same three lanes as the terminal figure (page, daemon, agent); the tool runs in the page lane, since it runs in the same page the panel is in; arrows that cross the daemon lane carry a label naming the endpoints that relay them.
+<rationale>Joseph: "why do we need a page tools column, just use the AgentChat / Page first column".</rationale>
+</decision>
+
 ## 6. Findings and risks
 
 <finding id="F-1" title="Screenshots go stale" severity="p3" status="open" effort="small">
