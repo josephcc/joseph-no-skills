@@ -36,6 +36,8 @@ Then run `claude` once, in any directory. The plugin's session hook starts the d
 appears in the menu bar (macOS), and, until setup is finished, Claude offers to make the daemon start at login
 (`/webmcp-daemon:setup` does the same at any time). After that the browser chat works with no terminal open.
 
+<img src="docs/img/menu-bar.png" alt="The webmcp-bridge menu bar item: the daemon's port, page and chat counts, the status page, Start at login, the log, the state folder, the MCP URL, Stop daemon" width="412">
+
 From a checkout instead: `bun install`, then `claude --plugin-dir ./plugin`, or `bun run daemon` to run the daemon
 by hand (`-- --allow-origin http://127.0.0.1:5173` skips the approval tab for the demo).
 
