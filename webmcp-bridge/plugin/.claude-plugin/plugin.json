@@ -1,0 +1,9 @@
+{
+  "name": "webmcp-daemon",
+  "displayName": "WebMCP daemon",
+  "version": "0.0.1",
+  "description": "Lets Claude Code see and operate web pages that expose WebMCP tools: runs the local webmcp-daemon, connects to it over MCP, and injects each page's instructions and live UI state.",
+  "author": { "name": "Joseph Chee Chang" },
+  "license": "MIT",
+  "keywords": ["webmcp", "mcp", "browser", "acp"]
+}

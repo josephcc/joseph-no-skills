@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebMCP demo — colour and sentence</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1 id="sentence">…</h1>
+        <p class="swatch"><span id="swatch"></span> <code id="color">…</code></p>
+        <p class="status">
+          <span id="api-badge" class="badge">modelContext: …</span>
+          <span id="daemon-badge" class="badge">daemon: idle</span>
+          <button id="connect-btn" type="button">Connect to local Claude</button>
+        </p>
+        <p id="hint" class="hint"></p>
+      </header>
+
+      <section class="columns">
+        <div>
+          <h2>Registered tools <small id="tool-count"></small></h2>
+          <ul id="tools"></ul>
+          <p>
+            <button id="bonus-btn" type="button">Register bonus tool (shout)</button>
+            <button id="unbonus-btn" type="button" disabled>Unregister bonus tool</button>
+            <button id="randomize-btn" type="button">Randomize (from the page)</button>
+          </p>
+        </div>
+        <div>
+          <h2>Call log</h2>
+          <ol id="log" reversed></ol>
+        </div>
+      </section>
+
+      <section id="chat-mount"></section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

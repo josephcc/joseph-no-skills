@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "webmcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:8717/mcp"
+    }
+  }
+}

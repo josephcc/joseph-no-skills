@@ -1,0 +1,54 @@
+{
+  "name": "webmcp-connector",
+  "version": "0.0.1",
+  "description": "Connect a web page's WebMCP tools (and an embedded chat) to a local Claude Code daemon.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "source": "./src/react/index.tsx",
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    },
+    "./webmcp": {
+      "source": "./src/webmcp-global.ts",
+      "types": "./dist/webmcp-global.d.ts",
+      "default": "./dist/webmcp-global.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && NODE_ENV=production bun build src/index.ts src/react/index.tsx src/webmcp-global.ts --target=browser --format=esm --splitting --outdir=dist --external react --external react-dom --external react/jsx-runtime --external react-markdown --external remark-gfm --external '@agentclientprotocol/sdk' --external '@agentclientprotocol/sdk/*' && tsc -p tsconfig.build.json && node ../../scripts/fix-dts-extensions.mjs dist",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "2.4.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "peerDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
+}

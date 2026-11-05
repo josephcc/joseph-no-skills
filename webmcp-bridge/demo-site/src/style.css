@@ -1,0 +1,20 @@
+:root { color-scheme: light; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; transition: background-color .3s; min-height: 100vh; }
+main { max-width: 64rem; margin: 0 auto; padding: 2rem 1.5rem; }
+h1 { font-size: 2rem; margin: 0 0 .5rem; background: rgba(255,255,255,.75); display: inline-block; padding: .3rem .6rem; border-radius: 8px; }
+h2 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; }
+.swatch span { display: inline-block; width: 1.1em; height: 1.1em; vertical-align: middle; border: 1px solid #0003; border-radius: 4px; }
+.badge { display: inline-block; background: #fff; border: 1px solid #0003; border-radius: 999px; padding: .15rem .7rem; margin-right: .5rem; font-size: .85rem; }
+.badge[data-state="connected"] { border-color: #0a7; color: #0a7; }
+.badge[data-state="absent"], .badge[data-state="denied"] { border-color: #c33; color: #c33; }
+.badge[data-state="needs-approval"] { border-color: #e90; color: #e90; }
+.hint { background: #fff8e1; border: 1px solid #f0d080; padding: .5rem .8rem; border-radius: 6px; display: none; }
+.hint:not(:empty) { display: block; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+ul, ol { background: #fff; border-radius: 8px; padding: .6rem 1rem .6rem 2rem; max-height: 22rem; overflow: auto; }
+li { margin: .25rem 0; }
+code { font-family: ui-monospace, monospace; font-size: .9em; }
+button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #888; background: #fff; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.log-ok { color: #0a7; } .log-err { color: #c33; }
+#chat-mount { margin-top: 2rem; }
