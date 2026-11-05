@@ -26,6 +26,8 @@ const pinned = process.env.WEBMCP_DAEMON_PORT ? Number(process.env.WEBMCP_DAEMON
 /** The SessionStart hook usually starts the daemon at the same moment; give it this long before starting one here. */
 const HOOK_GRACE_MS = Number(process.env.WEBMCP_RELAY_WAIT_MS ?? 5_000);
 const START_WAIT_MS = 20_000;
+/** How often the relay checks the daemon is still the one it dialled. */
+const LIVENESS_MS = Number(process.env.WEBMCP_RELAY_LIVENESS_MS ?? 5_000);
 const log = (msg: string) => process.stderr.write(`webmcp-mcp: ${msg}\n`);
 
 async function locate(): Promise<number | null> {
@@ -65,11 +67,22 @@ async function main(): Promise<void> {
   let port = await waitFor(HOOK_GRACE_MS);
   if (port === null && process.env.WEBMCP_RELAY_START !== '0' && startDaemon()) port = await waitFor(START_WAIT_MS);
   if (port === null) { log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(', ')}); run the plugin's setup`); process.exit(1); }
+  const identity = await identify(HOST, port);
   const url = new URL(`http://${HOST}:${port}/mcp`);
   const upstream = new StreamableHTTPClientTransport(url);
   const stdio = new StdioServerTransport();
-  const quit = (code: number) => { void upstream.close().catch(() => undefined); process.exit(code); };
-  stdio.onmessage = (message) => { void upstream.send(message).catch((err) => { log(`daemon unreachable: ${String((err as Error).message ?? err)}`); quit(1); }); };
+  // One exit, with the first code: the SDK's close() calls onclose, which must not re-enter.
+  let exiting = false;
+  const quit = (code: number, why?: string) => {
+    if (exiting) return;
+    exiting = true;
+    if (why) log(why);
+    upstream.onclose = undefined;
+    clearInterval(liveness);
+    void upstream.close().catch(() => undefined);
+    process.exit(code);
+  };
+  stdio.onmessage = (message) => { void upstream.send(message).catch((err) => quit(1, `daemon unreachable: ${String((err as Error).message ?? err)}`)); };
   upstream.onmessage = (message) => { void stdio.send(message).catch(() => quit(0)); };
   upstream.onerror = (err) => log(`upstream: ${err.message}`);
   upstream.onclose = () => quit(0);
@@ -80,6 +93,16 @@ async function main(): Promise<void> {
   process.stdin.on('close', () => quit(0));
   process.on('SIGTERM', () => quit(0));
   process.on('SIGINT', () => quit(0));
+  // The daemon going away, or restarting as a new instance, ends the relay: an idle session would
+  // otherwise keep a relay whose upstream is gone (plan F-3; the SDK only reports that through onerror).
+  let misses = 0;
+  const liveness = setInterval(() => {
+    void identify(HOST, port).then((now) => {
+      if (now && (!identity || now.instance === identity.instance)) { misses = 0; return; }
+      if (++misses >= 2) quit(0, now ? 'the daemon restarted; reconnect the MCP server' : 'the daemon went away');
+    });
+  }, LIVENESS_MS);
+  liveness.unref();
   await upstream.start();
   await stdio.start();
   log(`relaying stdio ⇄ ${url}`);

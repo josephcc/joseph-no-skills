@@ -1,15 +1,16 @@
 // One daemon per state directory, on the first free candidate port (plans/daemon-port-discovery/main.md c1–c6).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonConfig } from '../src/config.ts';
-import { AllPortsTakenError, AlreadyRunningError, claimDaemonFile, daemonFilePath, findRunningDaemon, pickPort, readDaemonRecord } from '../src/instance.ts';
+import { AllPortsTakenError, AlreadyRunningError, claimDaemonFile, daemonFilePath, findRunningDaemon, identify, pickPort, readDaemonRecord } from '../src/instance.ts';
 import { serve, type Daemon } from '../src/index.ts';
 
 const HOST = '127.0.0.1';
-const squatters: Server[] = [];
+const squatters: Array<Server | HttpServer> = [];
 const daemons: Daemon[] = [];
 const dirs: string[] = [];
 
@@ -24,6 +25,18 @@ function freePort(): Promise<number> {
 }
 function squat(port: number): Promise<void> {
   return new Promise((resolve) => { const s = createServer(); squatters.push(s); s.listen(port, HOST, () => resolve()); });
+}
+/** A fake daemon answering /id with `id` (or 404 without it) and /health with `healthPid`. */
+function fakeDaemon(port: number, { id, healthPid }: { id?: Record<string, unknown>; healthPid?: number }): Promise<void> {
+  return new Promise((resolve) => {
+    const s = createHttpServer((req, res) => {
+      if (req.url === '/id' && id) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(id)); return; }
+      if (req.url === '/health' && healthPid !== undefined) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, pid: healthPid })); return; }
+      res.writeHead(404); res.end();
+    });
+    squatters.push(s);
+    s.listen(port, HOST, () => resolve());
+  });
 }
 function stateDir(): string { const d = mkdtempSync(join(tmpdir(), 'webmcp-instance-')); dirs.push(d); return d; }
 function config(dir: string, candidates: number[]): DaemonConfig {
@@ -124,5 +137,33 @@ describe('serve', () => {
     expect(claimDaemonFile(dir, { pid: process.pid, port: null, startedAt: 'x', version: 'test' })).toBe(true);
     expect(claimDaemonFile(dir, { pid: process.pid, port: null, startedAt: 'x', version: 'test' })).toBe(false);
     expect(JSON.parse(readFileSync(daemonFilePath(dir), 'utf8')).port).toBeNull();
+  });
+});
+
+describe('findRunningDaemon and identify (Codex audit on the port-discovery build)', () => {
+  test('a daemon from before /id, whose /health carries the recorded pid, counts as running and keeps its record', async () => {
+    const port = await freePort();
+    await fakeDaemon(port, { healthPid: process.pid });
+    const dir = stateDir();
+    writeFileSync(daemonFilePath(dir), JSON.stringify({ pid: process.pid, port, startedAt: 'x', version: '0.0.1' }));
+    expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toEqual({ pid: process.pid, port, legacy: true });
+    expect(readDaemonRecord(dir)?.port).toBe(port);
+    let err: unknown;
+    try { await serve(config(dir, [await freePort()])); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(AlreadyRunningError);
+    expect((err as Error).message).toMatch(/predates port discovery/);
+  });
+  test('a record whose port answers as another instance is stale, not ours', async () => {
+    const port = await freePort();
+    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 1, version: 'x', instance: 'theirs' } });
+    const dir = stateDir();
+    writeFileSync(daemonFilePath(dir), JSON.stringify({ pid: process.pid, port, startedAt: 'x', version: 'x', instance: 'ours' }));
+    expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toBeNull();
+    expect(readDaemonRecord(dir)).toBeNull();
+  });
+  test('identify passes over a daemon of another protocol version', async () => {
+    const port = await freePort();
+    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 2, version: 'x', instance: 'i' } });
+    expect(await identify(HOST, port)).toBeNull();
   });
 });

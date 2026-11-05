@@ -29,7 +29,7 @@ export interface Daemon { close(): Promise<void>; port: number; instance: string
 export async function serve(config: DaemonConfig): Promise<Daemon> {
   mkdirSync(config.stateDir, { recursive: true });
   const running = await findRunningDaemon(config.stateDir, config.host);
-  if (running) throw new AlreadyRunningError(running.pid, running.port, config.host);
+  if (running) throw new AlreadyRunningError(running.pid, running.port, config.host, running.legacy);
   const instance = randomUUID();
   const record: DaemonRecord = { pid: process.pid, port: null, startedAt: new Date().toISOString(), version: VERSION, instance };
   if (!claimDaemonFile(config.stateDir, record)) {

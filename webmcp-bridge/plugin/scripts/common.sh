@@ -21,5 +21,6 @@ webmcp_resolve_port() {
   return 1
 }
 WEBMCP_PORT="$(webmcp_resolve_port || true)"
-WEBMCP_URL="http://127.0.0.1:${WEBMCP_PORT:-8717}"
+# Empty when no daemon identified itself: a hook must then read nothing, not whatever sits on 8717.
+WEBMCP_URL="${WEBMCP_PORT:+http://127.0.0.1:$WEBMCP_PORT}"
 webmcp_healthy() { [ -n "$WEBMCP_PORT" ] && curl -sf --max-time 1 "$WEBMCP_URL/health" >/dev/null 2>&1; }

@@ -7,10 +7,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/common.sh"
 inject="${CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT:-true}"
 instructions=""
-if [ "$inject" != "false" ]; then
+if [ "$inject" != "false" ] && [ -n "$WEBMCP_URL" ]; then
   instructions="$(curl -sf --max-time 3 "$WEBMCP_URL/instructions?page=selected" 2>/dev/null || true)"
 fi
-notice="[webmcp] The webmcp-daemon is running (pages that embed webmcp-connector connect to it). A connected page has its own chat panel in the browser; that panel is the intended place to work on the page, and this terminal session is not required for it."
+if [ -n "$WEBMCP_URL" ]; then
+  notice="[webmcp] The webmcp-daemon is running on 127.0.0.1:$WEBMCP_PORT (pages that embed webmcp-connector connect to it). A connected page has its own chat panel in the browser; that panel is the intended place to work on the page, and this terminal session is not required for it."
+else
+  notice="[webmcp] No webmcp-daemon answered on its candidate ports (and starting one failed; see ~/.webmcp-daemon/daemon.log). Run /webmcp-daemon:setup to diagnose."
+fi
 setup_needed=0
 if [ ! -f "$WEBMCP_STATE/setup-done" ] && [ ! -f "$HOME/Library/LaunchAgents/com.webmcp.daemon.plist" ] && ! pgrep -x webmcp-bridge >/dev/null 2>&1; then
   setup_needed=1

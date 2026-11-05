@@ -54,7 +54,13 @@ export function parseArgs(argv: string[], version: string): { command: string; c
     switch (a) {
       case 'serve': case 'stop': case 'status': case 'install-launchd': case 'uninstall-launchd': command = a; break;
       case '--port': config.port = Number(next()); config.portPinned = true; break;
-      case '--ports': { const ports = next().split(',').map((p) => Number(p.trim())).filter((p) => Number.isInteger(p) && p > 0); if (!ports.length) throw new Error('--ports expects a comma-separated list'); config.portCandidates = ports; config.port = ports[0]!; break; }
+      case '--ports': {
+        // A list to walk: it also unpins WEBMCP_DAEMON_PORT or an earlier --port (the last of --port/--ports wins).
+        const ports = next().split(',').map((p) => p.trim()).filter(Boolean).map((p) => { const n = Number(p); if (!Number.isInteger(n) || n <= 0 || n > 65535) throw new Error(`--ports: not a port: ${p}`); return n; });
+        if (!ports.length) throw new Error('--ports expects a comma-separated list');
+        config.portCandidates = ports; config.port = ports[0]!; config.portPinned = false;
+        break;
+      }
       case '--state-dir': config.stateDir = next(); break;
       case '--allow-origin': config.allowOrigins.push(...next().split(',').map((s) => s.trim()).filter(Boolean)); break;
       case '--no-browser': config.noBrowser = true; config.approval = 'reject'; break;

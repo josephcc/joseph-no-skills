@@ -13,6 +13,12 @@ if [ -f "$bin_dir/webmcp-daemon.js" ]; then
     src="$here/../daemon/$f"
     if [ -f "$src" ] && ! cmp -s "$src" "$bin_dir/$f"; then mkdir -p "$(dirname "$bin_dir/$f")" && cp "$src" "$bin_dir/$f" && changed=1; fi
   done
+  plist="$HOME/Library/LaunchAgents/com.webmcp.daemon.plist"
+  if [ -z "${WEBMCP_DAEMON_PORT:-}" ] && [ -f "$plist" ] && grep -q '<string>--port</string><string>8717</string>' "$plist" 2>/dev/null; then
+    # A login item written before port discovery pins the old default; rewrite it so launchd's daemon walks
+    # the candidates too (plans/daemon-port-discovery D-7). install-launchd rewrites the plist and re-bootstraps.
+    node "$bin_dir/webmcp-daemon.js" install-launchd --state-dir "$WEBMCP_STATE" >/dev/null 2>&1 && changed=0 || true
+  fi
   if [ "$changed" = 1 ] && command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1; then
     launchctl kickstart -k "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1 || true
   fi

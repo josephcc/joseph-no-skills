@@ -78,6 +78,23 @@ describe('webmcp-mcp relay', () => {
     expect(await r.exited).toBe(0);
   }, 20_000);
 
+  test('the daemon going away ends the relay, once (Codex audit)', async () => {
+    const port = await freePort();
+    const dir = stateDir();
+    const d = await serve({ ...config(dir, [port]), port, portPinned: true });
+    daemons.push(d);
+    const r = relay({ WEBMCP_DAEMON_STATE: dir, WEBMCP_RELAY_START: '0', WEBMCP_RELAY_WAIT_MS: '3000', WEBMCP_RELAY_LIVENESS_MS: '200' });
+    const init = await r.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
+    expect((init.result as { serverInfo: { name: string } }).serverInfo.name).toBe('webmcp');
+    r.notify('notifications/initialized');
+    // Let the notification's POST complete, so the exit comes from the liveness probe, not a failed send.
+    await new Promise((r2) => setTimeout(r2, 400));
+    await d.close();
+    daemons.length = 0;
+    expect(await r.exited).toBe(0);
+    expect(r.stderr()).toContain('the daemon went away');
+  }, 20_000);
+
   test('no daemon within the wait, and starting disabled, is a clear exit 1', async () => {
     const r = relay({ WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_RELAY_START: '0', WEBMCP_RELAY_WAIT_MS: '300', WEBMCP_DAEMON_PORT: String(await freePort()) });
     expect(await r.exited).toBe(1);

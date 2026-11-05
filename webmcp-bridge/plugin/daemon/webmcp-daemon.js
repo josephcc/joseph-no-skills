@@ -10048,11 +10048,17 @@ function parseArgs(argv, version) {
         config.portPinned = true;
         break;
       case "--ports": {
-        const ports = next().split(",").map((p) => Number(p.trim())).filter((p) => Number.isInteger(p) && p > 0);
+        const ports = next().split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+          const n = Number(p);
+          if (!Number.isInteger(n) || n <= 0 || n > 65535)
+            throw new Error(`--ports: not a port: ${p}`);
+          return n;
+        });
         if (!ports.length)
           throw new Error("--ports expects a comma-separated list");
         config.portCandidates = ports;
         config.port = ports[0];
+        config.portPinned = false;
         break;
       }
       case "--state-dir":
@@ -10137,8 +10143,8 @@ import { join as join2 } from "node:path";
 class AlreadyRunningError extends Error {
   pid;
   port;
-  constructor(pid, port, host) {
-    super(`already running on ${host}:${port} (pid ${pid})`);
+  constructor(pid, port, host, legacy = false) {
+    super(`already running on ${host}:${port} (pid ${pid})${legacy ? "; it predates port discovery: restart it (webmcp-daemon stop, then the plugin or the login item starts the new one)" : ""}`);
     this.name = "AlreadyRunningError";
     this.pid = pid;
     this.port = port;
@@ -10196,7 +10202,18 @@ async function identify(host, port, timeoutMs = 500) {
     if (!r.ok)
       return null;
     const body = await r.json();
-    return body.daemon === DAEMON_NAME && typeof body.protocol === "number" ? body : null;
+    return body.daemon === DAEMON_NAME && body.protocol === PROTOCOL_VERSION ? body : null;
+  } catch {
+    return null;
+  }
+}
+async function legacyHealthPid(host, port, timeoutMs = 500) {
+  try {
+    const r = await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok)
+      return null;
+    const body = await r.json();
+    return body.ok === true && typeof body.pid === "number" ? body.pid : null;
   } catch {
     return null;
   }
@@ -10214,8 +10231,13 @@ async function findRunningDaemon(stateDir, host, { waitMs = 2000 } = {}) {
       removeDaemonFile(stateDir);
       return null;
     }
-    if (rec.port !== null && await identify(host, rec.port) !== null)
-      return { pid: rec.pid, port: rec.port };
+    if (rec.port !== null) {
+      const id = await identify(host, rec.port);
+      if (id && (!rec.instance || id.instance === rec.instance))
+        return { pid: rec.pid, port: rec.port };
+      if (!rec.instance && !id && await legacyHealthPid(host, rec.port) === rec.pid)
+        return { pid: rec.pid, port: rec.port, legacy: true };
+    }
     if (Date.now() >= deadline) {
       removeDaemonFile(stateDir);
       return null;
@@ -27741,7 +27763,7 @@ async function serve(config2) {
   mkdirSync4(config2.stateDir, { recursive: true });
   const running = await findRunningDaemon(config2.stateDir, config2.host);
   if (running)
-    throw new AlreadyRunningError(running.pid, running.port, config2.host);
+    throw new AlreadyRunningError(running.pid, running.port, config2.host, running.legacy);
   const instance = randomUUID5();
   const record3 = { pid: process.pid, port: null, startedAt: new Date().toISOString(), version: VERSION, instance };
   if (!claimDaemonFile(config2.stateDir, record3)) {

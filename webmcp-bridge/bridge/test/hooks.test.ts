@@ -62,6 +62,17 @@ describe('common.sh resolves the daemon port', () => {
   });
 });
 
+describe('with no daemon identified, the hooks read nothing (Codex audit)', () => {
+  test('WEBMCP_URL stays empty; inject-state prints nothing; inject-instructions says no daemon answered', async () => {
+    const a = await freePort();
+    const env = { ...process.env, WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_CANDIDATE_PORTS: String(a), CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT: 'true' };
+    expect(execFileSync('bash', ['-c', `. "${SCRIPTS}/common.sh"; printf '%s|%s' "$WEBMCP_PORT" "$WEBMCP_URL"`], { env, encoding: 'utf8' })).toBe('|');
+    expect(execFileSync('bash', [join(SCRIPTS, 'inject-state.sh')], { env, encoding: 'utf8' })).toBe('');
+    const out = JSON.parse(execFileSync('bash', [join(SCRIPTS, 'inject-instructions.sh')], { env, encoding: 'utf8' })) as { hookSpecificOutput: { additionalContext: string } };
+    expect(out.hookSpecificOutput.additionalContext).toMatch(/No webmcp-daemon answered/);
+  });
+});
+
 describe('ensure-daemon.sh', () => {
   test('finds a running daemon on a fallback port and starts nothing', async () => {
     const [a, b] = [await freePort(), await freePort()];

@@ -5,7 +5,7 @@
  * anything else is a stranger and is skipped, so no WebSocket upgrade and no
  * approval prompt ever reaches a foreign service.
  */
-import { CANDIDATE_PORTS, DAEMON_NAME, type DaemonIdentity } from './protocol.ts';
+import { CANDIDATE_PORTS, DAEMON_NAME, PROTOCOL_VERSION, type DaemonIdentity } from './protocol.ts';
 
 export interface DiscoveredDaemon {
   port: number;
@@ -32,7 +32,8 @@ export async function identifyDaemon(host: string, port: number, timeoutMs = PRO
     const r = await fetchImpl(`http://${host}:${port}/id`, { mode: 'cors', signal: AbortSignal.timeout(timeoutMs) });
     if (!r.ok) return null;
     const body = (await r.json()) as Partial<DaemonIdentity> | null;
-    return body && body.daemon === DAEMON_NAME && typeof body.protocol === 'number' ? (body as DaemonIdentity) : null;
+    // Ours, and speaking our protocol: a daemon of another version on an earlier candidate is passed over.
+    return body && body.daemon === DAEMON_NAME && body.protocol === PROTOCOL_VERSION ? (body as DaemonIdentity) : null;
   } catch {
     return null;
   }

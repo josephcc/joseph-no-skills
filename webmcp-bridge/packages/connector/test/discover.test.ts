@@ -59,6 +59,12 @@ describe('discoverDaemon', () => {
     await serveId(c, identity());
     expect((await discoverDaemon({ candidates: [a, b, c], timeoutMs: 200 }))?.port).toBe(c);
   });
+  test('a daemon of another protocol version on an earlier candidate is passed over (Codex audit)', async () => {
+    const [a, b] = [await freePort(), await freePort()];
+    await serveId(a, { ...identity('old'), protocol: 2 });
+    await serveId(b, identity('ours'));
+    expect((await discoverDaemon({ candidates: [a, b], timeoutMs: 200 }))?.port).toBe(b);
+  });
   test('no daemon on any candidate is null, within the sum of the budgets', async () => {
     const [a, b] = [await freePort(), await freePort()];
     const t0 = Date.now();

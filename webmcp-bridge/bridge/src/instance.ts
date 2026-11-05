@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { DAEMON_NAME, type DaemonIdentity } from 'webmcp-protocol';
+import { DAEMON_NAME, PROTOCOL_VERSION, type DaemonIdentity } from 'webmcp-protocol';
 
 export interface DaemonRecord {
   pid: number;
@@ -26,8 +26,8 @@ export interface DaemonRecord {
 export class AlreadyRunningError extends Error {
   readonly pid: number;
   readonly port: number;
-  constructor(pid: number, port: number, host: string) {
-    super(`already running on ${host}:${port} (pid ${pid})`);
+  constructor(pid: number, port: number, host: string, legacy = false) {
+    super(`already running on ${host}:${port} (pid ${pid})${legacy ? '; it predates port discovery: restart it (webmcp-daemon stop, then the plugin or the login item starts the new one)' : ''}`);
     this.name = 'AlreadyRunningError';
     this.pid = pid;
     this.port = port;
@@ -84,7 +84,20 @@ export async function identify(host: string, port: number, timeoutMs = 500): Pro
     const r = await fetch(`http://${host}:${port}/id`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!r.ok) return null;
     const body = (await r.json()) as Partial<DaemonIdentity>;
-    return body.daemon === DAEMON_NAME && typeof body.protocol === 'number' ? (body as DaemonIdentity) : null;
+    // Ours, and speaking our protocol; a daemon of another version on a candidate port is passed over.
+    return body.daemon === DAEMON_NAME && body.protocol === PROTOCOL_VERSION ? (body as DaemonIdentity) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A daemon from before `/id` existed: its `/health` carries its pid, which the record must match. */
+async function legacyHealthPid(host: string, port: number, timeoutMs = 500): Promise<number | null> {
+  try {
+    const r = await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return null;
+    const body = (await r.json()) as { ok?: boolean; pid?: number };
+    return body.ok === true && typeof body.pid === 'number' ? body.pid : null;
   } catch {
     return null;
   }
@@ -94,15 +107,23 @@ export async function identify(host: string, port: number, timeoutMs = 500): Pro
  * The instance already serving this state directory, if any. A record whose pid
  * is dead is stale and removed. A live pid with no port yet (a start in
  * progress) or a port that does not answer is given `waitMs` to come up before
- * it is treated as stale too.
+ * it is treated as stale too. The port must answer as the recorded instance
+ * (`/id`), so a reused pid plus some other daemon on that port is not mistaken
+ * for ours; a record without an instance id is from a daemon older than `/id`,
+ * which still counts when its `/health` carries the recorded pid (an upgrade
+ * must not start a second daemon beside it).
  */
-export async function findRunningDaemon(stateDir: string, host: string, { waitMs = 2000 }: { waitMs?: number } = {}): Promise<{ pid: number; port: number } | null> {
+export async function findRunningDaemon(stateDir: string, host: string, { waitMs = 2000 }: { waitMs?: number } = {}): Promise<{ pid: number; port: number; legacy?: boolean } | null> {
   const deadline = Date.now() + waitMs;
   for (;;) {
     const rec = readDaemonRecord(stateDir);
     if (!rec) { if (existsSync(daemonFilePath(stateDir))) removeDaemonFile(stateDir); return null; }
     if (!pidAlive(rec.pid)) { removeDaemonFile(stateDir); return null; }
-    if (rec.port !== null && (await identify(host, rec.port)) !== null) return { pid: rec.pid, port: rec.port };
+    if (rec.port !== null) {
+      const id = await identify(host, rec.port);
+      if (id && (!rec.instance || id.instance === rec.instance)) return { pid: rec.pid, port: rec.port };
+      if (!rec.instance && !id && (await legacyHealthPid(host, rec.port)) === rec.pid) return { pid: rec.pid, port: rec.port, legacy: true };
+    }
     if (Date.now() >= deadline) { removeDaemonFile(stateDir); return null; }
     await new Promise((r) => setTimeout(r, 100));
   }

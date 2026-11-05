@@ -9101,6 +9101,7 @@ class StdioServerTransport {
 }
 
 // packages/connector/src/protocol.ts
+var PROTOCOL_VERSION = 1;
 var CANDIDATE_PORTS = [8717, 49217, 52431, 55893, 61307];
 var DEFAULT_PORT = CANDIDATE_PORTS[0];
 var DAEMON_NAME = "webmcp-daemon";
@@ -9132,7 +9133,7 @@ async function identify(host, port, timeoutMs = 500) {
     if (!r.ok)
       return null;
     const body = await r.json();
-    return body.daemon === DAEMON_NAME && typeof body.protocol === "number" ? body : null;
+    return body.daemon === DAEMON_NAME && body.protocol === PROTOCOL_VERSION ? body : null;
   } catch {
     return null;
   }
@@ -9153,6 +9154,7 @@ var stateDir = process.env.WEBMCP_DAEMON_STATE ?? join2(homedir(), ".webmcp-daem
 var pinned = process.env.WEBMCP_DAEMON_PORT ? Number(process.env.WEBMCP_DAEMON_PORT) : undefined;
 var HOOK_GRACE_MS = Number(process.env.WEBMCP_RELAY_WAIT_MS ?? 5000);
 var START_WAIT_MS = 20000;
+var LIVENESS_MS = Number(process.env.WEBMCP_RELAY_LIVENESS_MS ?? 5000);
 var log = (msg) => process.stderr.write(`webmcp-mcp: ${msg}
 `);
 async function locate() {
@@ -9198,20 +9200,26 @@ async function main() {
     log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(", ")}); run the plugin's setup`);
     process.exit(1);
   }
+  const identity = await identify(HOST, port);
   const url2 = new URL(`http://${HOST}:${port}/mcp`);
   const upstream = new StreamableHTTPClientTransport(url2);
   const stdio = new StdioServerTransport;
-  const quit = (code) => {
+  let exiting = false;
+  const quit = (code, why) => {
+    if (exiting)
+      return;
+    exiting = true;
+    if (why)
+      log(why);
+    upstream.onclose = undefined;
+    clearInterval(liveness);
     upstream.close().catch(() => {
       return;
     });
     process.exit(code);
   };
   stdio.onmessage = (message) => {
-    upstream.send(message).catch((err) => {
-      log(`daemon unreachable: ${String(err.message ?? err)}`);
-      quit(1);
-    });
+    upstream.send(message).catch((err) => quit(1, `daemon unreachable: ${String(err.message ?? err)}`));
   };
   upstream.onmessage = (message) => {
     stdio.send(message).catch(() => quit(0));
@@ -9223,6 +9231,18 @@ async function main() {
   process.stdin.on("close", () => quit(0));
   process.on("SIGTERM", () => quit(0));
   process.on("SIGINT", () => quit(0));
+  let misses = 0;
+  const liveness = setInterval(() => {
+    identify(HOST, port).then((now) => {
+      if (now && (!identity || now.instance === identity.instance)) {
+        misses = 0;
+        return;
+      }
+      if (++misses >= 2)
+        quit(0, now ? "the daemon restarted; reconnect the MCP server" : "the daemon went away");
+    });
+  }, LIVENESS_MS);
+  liveness.unref();
   await upstream.start();
   await stdio.start();
   log(`relaying stdio ⇄ ${url2}`);
