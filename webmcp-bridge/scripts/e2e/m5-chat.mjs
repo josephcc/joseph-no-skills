@@ -95,7 +95,7 @@ try {
   if (applied.activity.length < 1) throw new Error('c46: Use did not record an activity note');
   const s9 = await promptAndWait('What did I just pick from your card? Answer in one short sentence.', 'activity turn');
   step('use + activity note', { ...applied, reply: lastAgentText(s9).slice(0, 240) });
-  const s10 = await promptAndWait('Reply with one word, then call suggest_replies with two short follow-up questions.', 'chips turn');
+  const s10 = await promptAndWait('Call suggest_replies with two short follow-up questions, then reply with one word.', 'chips turn');
   const chips = await page.evaluate('[...document.querySelectorAll(".wmc-chat .wmc-widget[data-tool=suggest_replies] .demo-replies button")].map(b => b.textContent)');
   step('suggestion chips (Claude)', { chips, reply: lastAgentText(s10).slice(0, 120) });
   if (chips.length < 1) throw new Error('c47: Claude was asked for suggest_replies but no chips rendered');

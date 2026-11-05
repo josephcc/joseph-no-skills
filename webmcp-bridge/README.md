@@ -70,7 +70,9 @@ receives the call (`input`, the parsed `output` and the raw `text`, `status`, a 
 and `note(text)` to record what the user did: notes since the thread's last prompt ride along with the next one as
 a `page://widget-activity` resource, and the state text terminal Claude receives ends with the same list. Three
 rules make a card work: the tool's description says what the card shows and that the assistant's message should
-not repeat it (`preamble()` tells Claude the same in general); the tool returns what the card needs as its
+not repeat it (`preamble()` tells Claude the same in general; a tool that accompanies an answer, like suggested
+replies, should ask to be called *before* the answer, because Claude writes a text after every tool result and an
+answer-then-tool order makes it restate the answer); the tool returns what the card needs as its
 result, because that is what replays after a reload; and the card does nothing in render, only in click handlers,
 because history replays every call. The raw input and output stay one click away under every card; unmapped tools
 keep the generic row. Agent-asked questions (Claude's `AskUserQuestion`, MCP elicitations) render as a form in the

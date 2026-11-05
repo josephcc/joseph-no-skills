@@ -17,7 +17,7 @@ const page = connect({
     '## About this page',
     'The page shows one sentence on a coloured background. Keep replies short and playful.',
     'Never use the word "nodes"; say "sentence" and "background".',
-    'When the user asks for ideas, options or suggestions for the page, call propose_palette instead of listing them in prose; the card shows them. End an answer with suggest_replies when there are natural next steps.',
+    'When the user asks for ideas, options or suggestions for the page, call propose_palette instead of listing them in prose; the card shows them. When an answer has natural next steps, call suggest_replies first and then write the answer; the chips land under it.',
   ].join('\n'),
   instructionsSummary: 'This page shows a sentence on a coloured background; tools can read and change both. Keep replies short. Never use the word "nodes".',
   context: () => JSON.stringify({ lookingAt: 'demo page', ...snapshot(), tab: document.visibilityState }, null, 2),
@@ -84,13 +84,13 @@ void mc.registerTool({
 });
 void mc.registerTool({
   name: 'suggest_replies',
-  description: 'Shows the user up to four short follow-up messages as clickable chips under your answer; clicking one sends it as their next message. Use it at the end of an answer when there are natural next steps. Returns how many were shown. Do not repeat the suggestions in your message.',
+  description: 'Shows the user up to four short follow-up messages as clickable chips under your answer; clicking one sends it as their next message. Call it BEFORE you write your answer, as the first step of the turn (you already know the question, so you know the natural next steps); then, after it returns, write your answer once. Never call it after the answer, and never write the answer twice. The chips are placed under your answer automatically. Do not repeat the suggestions in your message.',
   inputSchema: { type: 'object', properties: { replies: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 80 } } }, required: ['replies'], additionalProperties: false },
   annotations: { readOnlyHint: true },
   execute: ({ replies }: { replies: string[] }) => {
     if (!Array.isArray(replies) || replies.length === 0) throw new Error('replies must list at least one message');
     state.toolCallCount++;
-    return { shown: Math.min(replies.length, 4) };
+    return { shown: Math.min(replies.length, 4), next: 'The chips will appear under your answer. Now write your answer, once.' };
   },
 });
 
