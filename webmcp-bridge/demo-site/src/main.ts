@@ -1,29 +1,10 @@
 import { connect, preamble, type ConnectorStatus, type ToolCallEvent } from 'webmcp-connector';
-import { mountChat } from './chat.tsx';
+import { mountChat, mountFloatingPanel } from './chat.tsx';
+import { isCssColor, randomize, render, snapshot, state } from './state.ts';
 
-// ---------- page state ----------
-const COLOURS = ['#f4a261', '#2a9d8f', '#e9c46a', '#8ab6d6', '#c3b1e1', '#f7cac9', '#b5ead7', '#ffdac1'];
-const SENTENCES = [
-  'The quick brown fox jumps over the lazy dog.',
-  'A page is just a program that forgot it was one.',
-  'Every tool call lands exactly where the user is looking.',
-  'Colours are cheap; sentences are the expensive part.',
-  'Hello from a web page that speaks WebMCP.',
-];
-const state = { backgroundColor: '', sentence: '', toolCallCount: 0 };
+// ---------- page state (demo-site/src/state.ts; the cards in widgets.tsx use it too) ----------
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const el = (tag: string, text: string) => { const n = document.createElement(tag); n.textContent = text; return n; };   // text, never HTML
-
-function render() {
-  document.body.style.backgroundColor = state.backgroundColor;
-  $('sentence').textContent = state.sentence;
-  $('swatch').style.backgroundColor = state.backgroundColor;
-  $('color').textContent = state.backgroundColor;
-}
-function snapshot() { return { ...state, backgroundColor: document.body.style.backgroundColor || state.backgroundColor }; }
-function isCssColor(value: string): boolean { return CSS.supports('color', value); }
-function pick<T>(list: readonly T[], not?: T): T { let v = list[Math.floor(Math.random() * list.length)]!; while (v === not && list.length > 1) v = list[Math.floor(Math.random() * list.length)]!; return v; }
-function randomize() { state.backgroundColor = pick(COLOURS, state.backgroundColor); state.sentence = pick(SENTENCES, state.sentence); render(); return snapshot(); }
 randomize();
 
 // ---------- WebMCP tools (native API, or the connector's shim) ----------
@@ -36,6 +17,7 @@ const page = connect({
     '## About this page',
     'The page shows one sentence on a coloured background. Keep replies short and playful.',
     'Never use the word "nodes"; say "sentence" and "background".',
+    'When the user asks for ideas, options or suggestions for the page, call propose_palette instead of listing them in prose; the card shows them. End an answer with suggest_replies when there are natural next steps.',
   ].join('\n'),
   instructionsSummary: 'This page shows a sentence on a coloured background; tools can read and change both. Keep replies short. Never use the word "nodes".',
   context: () => JSON.stringify({ lookingAt: 'demo page', ...snapshot(), tab: document.visibilityState }, null, 2),
@@ -76,6 +58,40 @@ void mc.registerTool({
   description: 'Picks a new random background colour and sentence. Returns the resulting state.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   execute: () => { state.toolCallCount++; return randomize(); },
+});
+
+// Widget tools (plan in-chat-widgets §4.10): their results render as cards in the chat (demo-site/src/widgets.tsx).
+let paletteSeq = 0;
+void mc.registerTool({
+  name: 'propose_palette',
+  description: 'Shows the user a card with up to four palette ideas (a background colour plus a sentence each, with a one-line reason) under your one-sentence story. Each option has a "Use" button; the user applies one themselves and nothing on the page changes until they do. Returns the card id and the options as shown. Because the card shows the story and every option in full, your message after this call should be empty or add only what the card does not show.',
+  inputSchema: { type: 'object', properties: {
+    story: { type: 'string', minLength: 1, maxLength: 200, description: 'One sentence on what these ideas have in common.' },
+    options: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'object', properties: {
+      color: { type: 'string', description: 'Any CSS colour, e.g. "#2a9d8f" or "teal"' },
+      sentence: { type: 'string', minLength: 1, maxLength: 200 },
+      why: { type: 'string', maxLength: 160, description: 'One line on why this pairing works' },
+    }, required: ['color', 'sentence'], additionalProperties: false } },
+  }, required: ['story', 'options'], additionalProperties: false },
+  annotations: { readOnlyHint: true },
+  execute: ({ story, options }: { story: string; options: Array<{ color: string; sentence: string; why?: string }> }) => {
+    if (!Array.isArray(options) || options.length === 0) throw new Error('options must list at least one idea');
+    const bad = options.find((o) => !isCssColor(o?.color));
+    if (bad) throw new Error(`"${String(bad?.color)}" is not a CSS colour`);
+    state.toolCallCount++;
+    return { card: `p${++paletteSeq}`, story: String(story ?? ''), options: options.slice(0, 4).map((o, i) => ({ index: i + 1, color: o.color, sentence: String(o.sentence ?? '').trim(), ...(o.why ? { why: String(o.why) } : {}) })) };
+  },
+});
+void mc.registerTool({
+  name: 'suggest_replies',
+  description: 'Shows the user up to four short follow-up messages as clickable chips under your answer; clicking one sends it as their next message. Use it at the end of an answer when there are natural next steps. Returns how many were shown. Do not repeat the suggestions in your message.',
+  inputSchema: { type: 'object', properties: { replies: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 80 } } }, required: ['replies'], additionalProperties: false },
+  annotations: { readOnlyHint: true },
+  execute: ({ replies }: { replies: string[] }) => {
+    if (!Array.isArray(replies) || replies.length === 0) throw new Error('replies must list at least one message');
+    state.toolCallCount++;
+    return { shown: Math.min(replies.length, 4) };
+  },
 });
 
 // Bonus tool: exercises dynamic registration/unregistration (toolchange → list_changed).
@@ -129,8 +145,9 @@ function logCall(e: ToolCallEvent) {
   $('log').prepend(li);
 }
 
-// embedded chat (M5)
+// embedded chat (M5) and the floating widget panel for calls made outside it (terminal Claude)
 mountChat($('chat-mount'), page);
+mountFloatingPanel(page);
 
 // expose for scripted tests
 Object.assign(window, { __demo: { state, page, snapshot } });

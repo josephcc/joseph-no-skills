@@ -22,3 +22,17 @@ code { font-family: ui-monospace, monospace; font-size: .9em; }
 button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #888; background: #fff; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 .log-ok { color: #0a7; } .log-err { color: #c33; }
+
+/* in-chat widgets (demo-site/src/widgets.tsx) */
+.demo-card { display: flex; flex-direction: column; gap: .4rem; }
+.demo-card-story { margin: 0; font-weight: 600; }
+.demo-card-error { color: #b91c1c; }
+.demo-card-note { color: #6b7280; }
+.demo-palette { list-style: none; margin: 0; padding: 0; background: none; max-height: none; display: flex; flex-direction: column; gap: .35rem; }
+.demo-palette li { display: flex; align-items: center; gap: .6rem; margin: 0; padding: .35rem .4rem; border-radius: 8px; border: 1px solid #e5e7eb; }
+.demo-palette li[data-applied="true"] { border-color: #047857; background: #ecfdf5; }
+.demo-swatch { flex: none; width: 1.6rem; height: 1.6rem; border-radius: 6px; border: 1px solid #0003; }
+.demo-option { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.demo-option small { color: #6b7280; }
+.demo-replies { display: flex; flex-wrap: wrap; gap: .4rem; }
+.demo-replies button { border-radius: 999px; }
