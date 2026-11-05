@@ -124,3 +124,15 @@ export function portFree(port: number, host: string): Promise<boolean> {
     probe.listen(port, host, () => probe.close(() => resolve(true)));
   });
 }
+
+/**
+ * Read-only lookup for clients (the MCP relay, the CLI): the record's port when
+ * it answers as the daemon, else the first candidate that does, else null.
+ * Never removes a record: only a starter decides what is stale.
+ */
+export async function locateDaemon(stateDir: string, host: string, candidates: readonly number[], timeoutMs = 300): Promise<number | null> {
+  const rec = readDaemonRecord(stateDir);
+  if (rec && rec.port !== null && pidAlive(rec.pid) && (await identify(host, rec.port, timeoutMs))) return rec.port;
+  for (const port of candidates) if (await identify(host, port, timeoutMs)) return port;
+  return null;
+}
