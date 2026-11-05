@@ -21,7 +21,7 @@ export async function launchChrome({ url, webmcp = true, port = 9333, extraArgs 
   const profile = mkdtempSync(join(tmpdir(), 'webmcp-e2e-'));
   const args = [
     `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-sync',
-    `--remote-debugging-port=${port}`, '--window-size=1000,700', '--disable-background-timer-throttling',
+    `--remote-debugging-port=${port}`, '--window-size=1000,700', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     ...(webmcp ? ['--enable-features=WebMCP'] : []), ...(process.env.CHROME_EXTRA_ARGS ? process.env.CHROME_EXTRA_ARGS.split(' ') : []), ...extraArgs, url,
   ];
   const proc = spawn(CHROME, args, { stdio: 'ignore', detached: true });

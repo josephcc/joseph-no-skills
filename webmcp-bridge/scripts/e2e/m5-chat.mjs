@@ -77,6 +77,42 @@ try {
   await page.evaluate(`document.querySelector('.wmc-thread[data-id="${firstId}"] .wmc-thread-open').click(); "switch"`);
   const s6d = await waitFor(async () => { const s = await snap().catch(() => null); return s && s.state === 'ready' && s.sessionId === firstId ? s : null; }, 'switched back', { tries: 90 });
   step('switch back', { sessionId: s6d.sessionId?.slice(0, 8), replayedTurns: s6d.turns.length, firstUser: s6d.turns[0]?.items[0]?.text?.slice(0, 40), mode: s6d.modes?.current, adapters: (await (await fetch(`${DAEMON}/health`)).json()).agents?.length });
+  // 6c. widgets (plan in-chat-widgets, D-53): a palette card and a short reply, the activity note, chips, an AskUserQuestion form
+  const promptAndWait = async (text, label) => {
+    const n = (await snap()).turns.length;
+    await page.evaluate(`window.__demo.agent.prompt(${JSON.stringify(text)}); 'sent'`);
+    return waitFor(async () => { const s = await snap(); return s.turns.length > n && s.state === 'ready' ? s : null; }, label, { tries: 120 });
+  };
+  const s8 = await promptAndWait('Give me two palette ideas for this page with your propose_palette tool.', 'palette turn');
+  const paletteCard = await page.evaluate('JSON.stringify({ cards: document.querySelectorAll(".wmc-chat .wmc-widget[data-tool=propose_palette][data-status=completed]").length, rows: document.querySelectorAll(".wmc-chat .wmc-widget[data-tool=propose_palette] .demo-palette li").length, story: document.querySelector(".wmc-chat .wmc-widget[data-tool=propose_palette] .demo-card-story")?.textContent, genericRowForIt: [...document.querySelectorAll(".wmc-chat .wmc-tool summary .wmc-title")].some(e => e.textContent.includes("propose_palette")) })').then(JSON.parse);
+  const paletteReply = lastAgentText(s8);
+  step('palette card (Claude)', { ...paletteCard, tools: toolNames(s8), replyChars: paletteReply.length, reply: paletteReply.slice(0, 240) });
+  if (paletteCard.cards < 1 || paletteCard.rows < 1) throw new Error('c55: Claude was asked for propose_palette but no palette card rendered');
+  if (paletteCard.genericRowForIt) throw new Error('c55: the generic row must not show for propose_palette');
+  await page.evaluate('document.querySelector(".wmc-chat .wmc-widget[data-tool=propose_palette] .demo-palette li button[data-action=use]").click(); "used"');
+  await sleep(300);
+  const applied = await page.evaluate('JSON.stringify({ bg: document.body.style.backgroundColor, sentence: document.getElementById("sentence").textContent, activity: window.__demo.page.activity.entries.map(e => e.text) })').then(JSON.parse);
+  if (applied.activity.length < 1) throw new Error('c46: Use did not record an activity note');
+  const s9 = await promptAndWait('What did I just pick from your card? Answer in one short sentence.', 'activity turn');
+  step('use + activity note', { ...applied, reply: lastAgentText(s9).slice(0, 240) });
+  const s10 = await promptAndWait('Reply with one word, then call suggest_replies with two short follow-up questions.', 'chips turn');
+  const chips = await page.evaluate('[...document.querySelectorAll(".wmc-chat .wmc-widget[data-tool=suggest_replies] .demo-replies button")].map(b => b.textContent)');
+  step('suggestion chips (Claude)', { chips, reply: lastAgentText(s10).slice(0, 120) });
+  if (chips.length < 1) throw new Error('c47: Claude was asked for suggest_replies but no chips rendered');
+  const turnsBeforeAsk = (await snap()).turns.length;
+  await page.evaluate(`window.__demo.agent.prompt('Use your AskUserQuestion tool to ask me which of two sentences I prefer for this page; offer two options.'); 'sent'`);
+  const form = await waitFor(() => page.evaluate('!!document.querySelector(".wmc-elicit")'), 'question form', { tries: 90 }).catch(() => false);
+  if (form) {
+    const options = await page.evaluate('JSON.stringify([...document.querySelectorAll(".wmc-elicit input[type=radio]")].map(i => i.value))').then(JSON.parse);
+    await page.evaluate('document.querySelector(".wmc-elicit input[type=radio]").click(); "chose"');
+    await page.evaluate('document.querySelector(".wmc-elicit button[data-action=accept]").click(); "submitted"');
+    const s11 = await waitFor(async () => { const s = await snap(); return s.turns.length > turnsBeforeAsk && s.state === 'ready' ? s : null; }, 'question turn', { tries: 120 });
+    step('AskUserQuestion form', { options, chosen: options[0], formGone: !(await page.evaluate('!!document.querySelector(".wmc-elicit")')), reply: lastAgentText(s11).slice(0, 240) });
+  } else {
+    const s11 = await waitFor(async () => { const s = await snap(); return s.turns.length > turnsBeforeAsk && s.state === 'ready' ? s : null; }, 'question turn (no form)', { tries: 120 });
+    step('AskUserQuestion form', { failed: 'no form appeared', tools: toolNames(s11), reply: lastAgentText(s11).slice(0, 160) });
+    throw new Error('c51/c55: Claude was asked to use AskUserQuestion but no form rendered');
+  }
   // 7. agent picker: disconnect, choose the fake echo agent (if the daemon offers it), connect, prompt
   const agents = JSON.parse(await page.evaluate('JSON.stringify(window.__demo.page.status.agents || [])'));
   if (agents.some((a) => a.id === 'echo')) {
