@@ -841,6 +841,8 @@ Where things are: `packages/connector` (npm package, `./react` subpath), `demo-s
 
 ---
 
+**Addendum (2026-11-05):** the fixed port in §5 is now the first of an ordered candidate list, with one daemon per state directory and a stdio relay for Claude Code's MCP config: [daemon-port-discovery/main.md](../daemon-port-discovery/main.md).
+
 ## 13. Future work (not in scope)
 
 - **Chrome extension for third-party WebMCP sites**: content script = the package's mirror module in the isolated world, service worker as the `/ws` client, popup for approval; design and hacks recorded in the [Stage 1 plan](../stage1-webmcp-bridge/main.md) (its §5.4, F-3, F-6, F-9). Also the only way to put a Claude chat *beside* a site you do not control (extension side panel).

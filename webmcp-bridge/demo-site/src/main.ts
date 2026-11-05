@@ -10,9 +10,13 @@ renderOutput();
 
 // ---------- WebMCP tools (native API, or the connector's shim) ----------
 // connect() must run before registerTool so the shim exists in browsers without the flag.
-const daemonOverride = new URLSearchParams(location.search).get('daemon') ?? undefined;   // tests point the page at another daemon
+const params = new URLSearchParams(location.search);
+const daemonOverride = params.get('daemon') ?? undefined;   // tests point the page at another daemon
+// tests give the sweep their own candidate ports (plans/daemon-port-discovery), e.g. ?ports=50001,50002
+const portsOverride = params.get('ports')?.split(',').map((p) => Number(p.trim())).filter((p) => Number.isInteger(p) && p > 0);
 const page = connect({
   daemonUrl: daemonOverride,
+  ...(portsOverride?.length ? { candidatePorts: portsOverride } : {}),
   title: 'WebMCP demo — colour and sentence',
   instructions: preamble({ pageTitle: 'WebMCP demo' }) + '\n\n' + [
     '## About this page',

@@ -17,7 +17,7 @@ Three things ship from this repo:
 
 ```bash
 bun install
-bun run daemon -- --allow-origin http://127.0.0.1:5173     # http://127.0.0.1:8717: /ws /mcp /acp
+bun run daemon -- --allow-origin http://127.0.0.1:5173     # http://127.0.0.1:8717 (or the next free candidate port): /ws /mcp /acp
 bun run demo                                                # http://127.0.0.1:5173
 claude --plugin-dir ./plugin                                # in any directory; ask about "the demo page"
 ```
@@ -99,6 +99,8 @@ if its transcript item arrives late, and goes away as soon as the claim lands. W
 `page.onCall()`, `page.claimOf()`, `page.onClaim()` and `page.activity` carry the same information.
 
 ## The menu bar item
+
+**Ports and the single daemon.** The daemon listens on the first free of five candidate ports, `8717, 49217, 52431, 55893, 61307` (`CANDIDATE_PORTS` in `webmcp-protocol`), and records the one it took in `~/.webmcp-daemon/daemon.json`; `--port <n>` or `WEBMCP_DAEMON_PORT` pins one with no fallback, `--ports a,b,…` substitutes the list. Every client walks the same list: a page's `connect()` probes `GET /id` on each port (the one CORS-open, non-private answer) and opens its WebSocket only where the daemon identified itself, so a stranger on 8717 never sees an upgrade or an approval prompt; the plugin's hooks read the record, then the list; Claude Code's MCP server is a stdio relay (`plugin/daemon/webmcp-mcp.js`) that finds the daemon the same way, starts one if none is up, and passes JSON-RPC through to `/mcp`. A second `serve` for the same state directory probes first and exits 0 as "already running on …"; the record is created exclusively before listening, so two starts racing at login end with one daemon. Private daemons with their own `--state-dir` (the e2e runs) are separate instances on purpose. See `plans/daemon-port-discovery/main.md`.
 
 While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The icon is the icon as a template image (`plugin/daemon/tray/webmcp-bridge-icon.png`, regenerated from the company logo with `scripts/make-tray-icon.py`), so the menu bar colours it like its neighbours: white in dark mode, black in light mode; `--tray-text` shows the name instead. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
 

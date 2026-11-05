@@ -10047,6 +10047,14 @@ function parseArgs(argv, version) {
         config.port = Number(next());
         config.portPinned = true;
         break;
+      case "--ports": {
+        const ports = next().split(",").map((p) => Number(p.trim())).filter((p) => Number.isInteger(p) && p > 0);
+        if (!ports.length)
+          throw new Error("--ports expects a comma-separated list");
+        config.portCandidates = ports;
+        config.port = ports[0];
+        break;
+      }
       case "--state-dir":
         config.stateDir = next();
         break;
@@ -10109,6 +10117,7 @@ function parseArgs(argv, version) {
 }
 var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
   --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(", ")}; env WEBMCP_DAEMON_PORT)
+  --ports <a,b,…>            the candidate ports to walk instead (tests, private daemons)
   --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected
