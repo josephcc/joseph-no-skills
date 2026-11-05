@@ -10,7 +10,7 @@ export const AGENT_CHAT_CSS = `
 .wmc-badge[data-state=ready]{color:var(--wmc-ok);border-color:var(--wmc-ok)}
 .wmc-badge[data-state=prompting]{color:var(--wmc-accent);border-color:var(--wmc-accent)}
 .wmc-badge[data-state=error]{color:var(--wmc-err);border-color:var(--wmc-err)}
-.wmc-chat button{font:inherit;font-size:.8rem;padding:.25rem .6rem;border-radius:6px;border:1px solid var(--wmc-border);background:#fff;cursor:pointer;white-space:nowrap}
+:where(.wmc-chat) button{font:inherit;font-size:.8rem;padding:.25rem .6rem;border-radius:6px;border:1px solid var(--wmc-border);background:#fff;cursor:pointer;white-space:nowrap}
 .wmc-chat button:hover{border-color:#9ca3af}.wmc-chat button:disabled{opacity:.5;cursor:default}
 .wmc-chat button.wmc-primary{background:var(--wmc-accent);border-color:var(--wmc-accent);color:#fff}
 .wmc-chat select{font:inherit;font-size:.8rem;padding:.2rem .4rem;border-radius:6px;border:1px solid var(--wmc-border)}
@@ -81,15 +81,15 @@ export const AGENT_CHAT_CSS = `
 .wmc-elicit input[type=text],.wmc-elicit input[type=number]{font:inherit;font-size:.85rem;padding:.25rem .4rem;border:1px solid var(--wmc-border);border-radius:6px;width:100%;box-sizing:border-box;background:#fff}
 .wmc-elicit .wmc-elicit-actions{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem}
 .wmc-float{--wmc-bg:#fff;--wmc-fg:#1a1a1a;--wmc-muted:#6b7280;--wmc-border:#e5e7eb;--wmc-accent:#2563eb;--wmc-user:#eef2ff;--wmc-tool:#f8fafc;--wmc-warn:#fff7ed;--wmc-err:#b91c1c;--wmc-ok:#047857;
-  position:fixed;z-index:2147483000;display:flex;flex-direction:column;gap:.5rem;width:min(22rem,calc(100vw - 2rem));font:14px/1.5 system-ui,sans-serif;color:var(--wmc-fg)}
+  position:fixed;z-index:2147483000;display:flex;flex-direction:column;gap:.5rem;width:min(22rem,calc(100vw - 2rem));max-height:calc(100vh - 2rem);overflow-y:auto;overscroll-behavior:contain;font:14px/1.5 system-ui,sans-serif;color:var(--wmc-fg)}
 .wmc-float[data-position=bottom-right]{right:1rem;bottom:1rem}.wmc-float[data-position=bottom-left]{left:1rem;bottom:1rem}.wmc-float[data-position=top-right]{right:1rem;top:1rem}.wmc-float[data-position=top-left]{left:1rem;top:1rem}
 .wmc-float-card{display:flex;flex-direction:column;gap:.2rem}
-.wmc-float .wmc-widget{box-shadow:0 6px 24px rgba(0,0,0,.15)}
+.wmc-float .wmc-widget{box-shadow:0 6px 24px rgba(0,0,0,.15);background:var(--wmc-bg);flex:none}
 .wmc-float-head{display:flex;align-items:center;gap:.5rem;font-size:.75rem;color:var(--wmc-muted);padding:0 .2rem}
 .wmc-float-head span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace}
 .wmc-float-head button{font:inherit;border:0;background:none;cursor:pointer;color:inherit;font-size:1rem;line-height:1;padding:0 .2rem}
-.wmc-float button,.wmc-widget button{font:inherit;font-size:.8rem;padding:.25rem .6rem;border-radius:6px;border:1px solid var(--wmc-border);background:#fff;cursor:pointer}
-.wmc-float button.wmc-primary,.wmc-widget button.wmc-primary{background:var(--wmc-accent);border-color:var(--wmc-accent);color:#fff}
+:where(.wmc-float,.wmc-widget) button{font:inherit;font-size:.8rem;padding:.25rem .6rem;border-radius:6px;border:1px solid var(--wmc-border);background:#fff;cursor:pointer}
+:where(.wmc-float,.wmc-widget) button.wmc-primary{background:var(--wmc-accent);border-color:var(--wmc-accent);color:#fff}
 `;
 
 let injected = false;

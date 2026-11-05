@@ -89,7 +89,7 @@ meter); `footer={false}` drops the footer; `autoConnect` opens the chat as soon 
 workspaces scopes them), and `sessionStorageKey` keys the last-thread memory the same way. The agent's settings arrive on the
 snapshot as `configOptions` (Claude Code's adapter offers the permission mode, the model, the effort level, fast mode);
 `handle.setConfigOption(id, value)` changes one and the snapshot follows (`config_option_update`). The CSS variables `--wmc-*`
-on `.wmc-chat` restyle what stays. science-kg's **Use local Claude** panel is the worked example.
+on `.wmc-chat` restyle what stays. science-kg's **Use local Claude** panel is the worked example. The package's button defaults (`:where(.wmc-chat) button`, `:where(.wmc-float, .wmc-widget) button`) carry no specificity, so a page's own classes on the buttons it renders — in a header, a composer or a widget — win without `!important`. The floating widget panel is a scroll box no taller than the window, and its cards are opaque (`--wmc-bg`), so a tall card from terminal Claude never runs off the screen or shows the page through (0.0.5).
 
 **Terminal Claude and cards.** `<FloatingWidgetPanel page={page} widgets={WIDGETS} />` shows the same components,
 bottom-right of the page, for page tool calls that did not come through the chat panel (calls from a terminal
