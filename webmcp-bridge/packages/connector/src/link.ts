@@ -17,9 +17,13 @@ export class DaemonLink {
   #openedAt: number | undefined;
   #handlers: Partial<LinkEvents> = {};
   #watchdog: ReturnType<typeof setTimeout> | undefined;
-  readonly #url: string;
+  #url: string;
 
-  constructor(url: string) { this.#url = url; }
+  constructor(url = '') { this.#url = url; }
+
+  /** The daemon found by the port sweep (or the pinned one); read by the next open(). */
+  setUrl(url: string): void { this.#url = url; }
+  get url(): string { return this.#url; }
 
   on<K extends keyof LinkEvents>(event: K, handler: LinkEvents[K]): void {
     this.#handlers[event] = handler;
@@ -31,6 +35,7 @@ export class DaemonLink {
 
   open(): void {
     this.close();
+    if (!this.#url) throw new Error('DaemonLink: no URL to open');
     const ws = new WebSocket(this.#url);
     this.#ws = ws;
     this.#openedAt = undefined;

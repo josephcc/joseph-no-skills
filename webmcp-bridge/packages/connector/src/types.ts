@@ -21,6 +21,10 @@ export interface ConnectorStatus {
   agents?: Array<{ id: string; name: string; default: boolean }>;
   lastError?: string;
   toolCount: number;
+  /** The daemon's port once found (the pinned URL's, or the sweep's). */
+  port?: number;
+  /** The WebSocket base in use, e.g. ws://127.0.0.1:49217. */
+  daemonUrl?: string;
 }
 
 export interface ToolPolicy {
@@ -29,8 +33,16 @@ export interface ToolPolicy {
 }
 
 export interface ConnectOptions {
-  /** WebSocket base of the daemon. Default ws://127.0.0.1:8717 */
+  /**
+   * WebSocket base of the daemon, e.g. ws://127.0.0.1:8720: pins it, no sweep.
+   * Default: the first of the candidate ports (8717, 49217, 52431, 55893, 61307)
+   * that answers `GET /id` as the daemon (plans/daemon-port-discovery D-4).
+   */
   daemonUrl?: string;
+  /** The ports the sweep walks, in order. Default CANDIDATE_PORTS (tests and private daemons substitute). */
+  candidatePorts?: readonly number[];
+  /** Per-port budget for the sweep's `GET /id`. Default 300 ms. */
+  probeTimeoutMs?: number;
   /** Full system prompt for the embedded chat (replaces Claude Code's preset, D-27). */
   instructions?: string;
   /** Short version (≤ 9,500 chars) injected into terminal sessions by the plugin hook. */

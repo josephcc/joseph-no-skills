@@ -1,6 +1,6 @@
 {
   "name": "webmcp-connector",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Connect a web page's WebMCP tools (and an embedded chat) to a local Claude Code daemon.",
   "license": "MIT",
   "type": "module",

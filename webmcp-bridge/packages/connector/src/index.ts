@@ -1,5 +1,6 @@
 import './webmcp-global.ts';
-import { DEFAULT_PORT, PROTOCOL_VERSION, type DaemonFrame, type ToolInfo, type WelcomeFrame } from './protocol.ts';
+import { PROTOCOL_VERSION, type DaemonFrame, type ToolInfo, type WelcomeFrame } from './protocol.ts';
+import { discoverDaemon } from './discover.ts';
 import { DaemonLink } from './link.ts';
 import { callTool, debounce, listTools } from './mirror.ts';
 import { hasNativeModelContext, installShim } from './shim.ts';
@@ -10,13 +11,13 @@ import { ACTIVITY_HEADING, createActivityLog, type PendingCall } from './widgets
 export type { ConnectOptions, ConnectorState, ConnectorStatus, PageConnection, ToolCallEvent, ToolPolicy } from './types.ts';
 export { installShim, hasNativeModelContext } from './shim.ts';
 export { preamble } from './preamble.ts';
+export { discoverDaemon, identifyDaemon, PROBE_TIMEOUT_MS, type DiscoveredDaemon, type DiscoverOptions } from './discover.ts';
 export * from './protocol.ts';
 export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
 export { CONNECTOR_VERSION } from './version.ts';
 export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type TextItem, type ThoughtItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult, type ConfigOption } from './session-model.ts';
 export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, sanitiseToolName, createActivityLog, deepEqual, ACTIVITY_HEADING, type WidgetInstance, type WidgetStatus, type PendingCall, type ActivityEntry, type ActivityLog } from './widgets.ts';
 
-const DEFAULT_URL = `ws://127.0.0.1:${DEFAULT_PORT}`;
 const APPROVAL_GRACE_MS = 1_500;
 const MIN_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 15_000;
@@ -33,8 +34,11 @@ export function connect(options: ConnectOptions = {}): PageConnection {
   const mc: ModelContext = (document as Document).modelContext ?? (options.shim === false ? undefined : installShim())!;
   if (!mc) throw new Error('webmcp-connector: document.modelContext is unavailable and the shim is disabled');
   const usingShim = !hasNativeModelContext();
-  const base = (options.daemonUrl ?? DEFAULT_URL).replace(/\/+$/, '');
-  const link = new DaemonLink(`${base}/ws?title=${encodeURIComponent(options.title ?? document.title)}`);
+  // A pinned daemonUrl is dialled as given; otherwise every attempt sweeps the candidate ports first (D-4).
+  const pinnedBase = options.daemonUrl ? options.daemonUrl.replace(/\/+$/, '') : undefined;
+  const wsUrl = (base: string) => `${base}/ws?title=${encodeURIComponent(options.title ?? document.title)}`;
+  const link = new DaemonLink(pinnedBase ? wsUrl(pinnedBase) : '');
+  const portOf = (base: string) => { const m = /:(\d+)(?:\/|$)/.exec(base); return m ? Number(m[1]) : undefined; };
   const minRetry = options.retry?.minMs ?? MIN_RETRY_MS;
   const maxRetry = options.retry?.maxMs ?? MAX_RETRY_MS;
 
@@ -119,6 +123,19 @@ export function connect(options: ConnectOptions = {}): PageConnection {
 
   function attempt() {
     emit({ state: 'searching', attempts: status.attempts + 1 });
+    const generation = status.attempts;
+    if (pinnedBase) { dial(pinnedBase); return; }
+    void discoverDaemon({ candidates: options.candidatePorts, timeoutMs: options.probeTimeoutMs }).then((found) => {
+      // A disconnect() or a newer attempt while the sweep ran: this one is over.
+      if (!wantConnected || status.attempts !== generation) return;
+      if (!found) { emit({ state: 'absent', lastError: 'no daemon on the known ports' }); scheduleRetry(); return; }
+      dial(found.wsBase);
+    });
+  }
+
+  function dial(base: string) {
+    emit({ port: portOf(base), daemonUrl: base });
+    link.setUrl(wsUrl(base));
     link.open();
     // If the socket neither opens nor closes promptly, the daemon is holding the upgrade for approval.
     clearTimeout(approvalTimer);
