@@ -48,6 +48,20 @@ export const AGENT_CHAT_CSS = `
 .wmc-setup{margin:.8rem;padding:.8rem 1rem;border:1px solid #fdba74;background:var(--wmc-warn);border-radius:8px;font-size:.9rem}
 .wmc-setup ol{margin:.5rem 0 0;padding-left:1.3rem}.wmc-setup li{margin:.3rem 0}.wmc-setup code{background:#fff;padding:.05rem .3rem;border-radius:4px;font-size:.9em}
 .wmc-setup-note{margin-top:.6rem;color:var(--wmc-muted);font-size:.8rem}
+.wmc-threads{border-bottom:1px solid var(--wmc-border);background:#fff;max-height:15rem;overflow:auto;font-size:.85rem;flex:none}
+.wmc-threads-head{display:flex;gap:.4rem;padding:.4rem .6rem;border-bottom:1px solid var(--wmc-border);align-items:center;position:sticky;top:0;background:#fff}
+.wmc-threads-head span{color:var(--wmc-muted);margin-left:auto;font-size:.75rem;white-space:nowrap}
+.wmc-threads ul{list-style:none;margin:0;padding:.25rem}
+.wmc-thread{display:flex;align-items:center;gap:.2rem;border-radius:6px;min-width:0}
+.wmc-thread:hover{background:#f3f4f6}.wmc-thread[data-active=true]{background:var(--wmc-user)}
+.wmc-chat .wmc-thread-open{flex:1;min-width:0;text-align:left;border:0;background:none;padding:.3rem .5rem;display:flex;gap:.5rem;align-items:center;font-size:.85rem;border-radius:6px}
+.wmc-chat .wmc-thread-open:disabled{opacity:1;cursor:default}.wmc-thread[data-active=true] .wmc-thread-title{font-weight:600}
+.wmc-thread-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wmc-thread-meta{color:var(--wmc-muted);font-size:.72rem;white-space:nowrap;flex:none}
+.wmc-thread[data-state=prompting] .wmc-thread-meta{color:var(--wmc-accent)}.wmc-thread[data-state=needs-permission] .wmc-thread-meta{color:#ea580c;font-weight:600}
+.wmc-chat .wmc-thread-del{border:0;background:none;color:var(--wmc-muted);padding:.2rem .5rem;font-size:1rem;line-height:1}.wmc-chat .wmc-thread-del:hover{color:var(--wmc-err)}
+.wmc-thread-confirm{display:flex;gap:.3rem;align-items:center;font-size:.75rem;padding-right:.3rem;white-space:nowrap}
+.wmc-chat .wmc-thread-confirm button{padding:.1rem .4rem;font-size:.75rem}
 `;
 
 let injected = false;

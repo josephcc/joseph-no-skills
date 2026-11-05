@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { connectAgent, type AgentHandle, type AgentOptions } from '../agent.ts';
+import { openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type ThreadInfo } from '../agent.ts';
 import type { PendingPermission, SessionSnapshot, ToolCallItem, TurnItem } from '../session-model.ts';
 import type { ConnectorStatus, PageConnection } from '../types.ts';
 import { ensureStyles } from './styles.ts';
 
-export type { AgentHandle, AgentOptions } from '../agent.ts';
+export type { AgentConnection, AgentHandle, AgentOptions, ThreadInfo } from '../agent.ts';
 export type { SessionSnapshot, Turn, TurnItem, ToolCallItem, PendingPermission } from '../session-model.ts';
 
 export interface AgentChatProps {
@@ -14,10 +14,13 @@ export interface AgentChatProps {
   agentOptions?: AgentOptions;
   title?: string;
   placeholder?: string;
-  /** Resume the last session of this origin from localStorage. Default true. */
+  /** Reopen the last active thread of this origin after a reload (localStorage). Default true. */
   rememberSession?: boolean;
   /** Show thoughts (agent_thought_chunk) as collapsible blocks. Default true. */
   showThoughts?: boolean;
+  /** Show the thread list when the agent can list and resume sessions. Default true. */
+  threads?: boolean;
+  /** Called with the active thread's handle on connect and on every switch, and with undefined on disconnect. */
   onHandle?: (handle: AgentHandle | undefined) => void;
   className?: string;
   /** Shown while no daemon is reachable: how to get one. Steps are inline markdown-ish text; `code` spans render as code. */
@@ -32,10 +35,15 @@ const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Come back here: this panel connects by itself.',
 ] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, onHandle, className, setup }: AgentChatProps) {
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, showThoughts = true, threads: threadsEnabled = true, onHandle, className, setup }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
+  const [conn, setConn] = useState<AgentConnection>();
   const [handle, setHandle] = useState<AgentHandle>();
+  const [threads, setThreads] = useState<ThreadInfo[]>([]);
+  const [showThreads, setShowThreads] = useState(false);
+  const [switching, setSwitching] = useState<string>();          // thread id being opened, or 'new'
+  const [confirmDelete, setConfirmDelete] = useState<string>();
   const [snap, setSnap] = useState<SessionSnapshot>(EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -43,7 +51,9 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const [agentId, setAgentId] = useState<string>();
   const [autoAllow, setAutoAllow] = useState(agentOptions?.autoAllowReadOnly ?? true);
   const logRef = useRef<HTMLDivElement>(null);
-  const handleRef = useRef<AgentHandle | undefined>(undefined);
+  const connRef = useRef<AgentConnection | undefined>(undefined);
+  const onHandleRef = useRef(onHandle);
+  onHandleRef.current = onHandle;
   const mountedRef = useRef(true);
   const agents = pageStatus.agents ?? [];
   const chosenAgent = agentId ?? agentOptions?.agent ?? agents.find((a) => a.default)?.id ?? 'claude';
@@ -52,34 +62,88 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     const q = input.slice(1).toLowerCase();
     return snap.commands.filter((c) => c.name.toLowerCase().startsWith(q)).slice(0, 8);
   }, [input, snap.commands]);
-  const storageKey = useMemo(() => `webmcp-connector:session:${location.origin}`, []);
+  /** Last active thread per origin (and per agent other than Claude, so ids never cross agents). */
+  const storageKeyFor = useCallback((agent: string) => `webmcp-connector:session:${location.origin}${agent === 'claude' ? '' : `:${agent}`}`, []);
 
   useEffect(() => page.onStatus(setPageStatus), [page]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
-  useEffect(() => { if (!handle) return; setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; handleRef.current?.close(); handleRef.current = undefined; }; }, []);   // unmount: close the ACP session so the agent process can stop
+  useEffect(() => { if (!handle) { setSnap(EMPTY); return; } setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle
+  useEffect(() => {
+    if (!conn) return;
+    const publish = (h: AgentHandle | undefined) => {
+      setHandle(h); onHandleRef.current?.(h);
+      if (h && rememberSession) localStorage.setItem(storageKeyFor(conn.agentId), h.sessionId);
+    };
+    setThreads(conn.threads); publish(conn.active);
+    const offThreads = conn.onThreadsChange(setThreads);
+    const offActive = conn.onActiveChange(publish);
+    const offClose = conn.onClose((reason) => { if (reason && mountedRef.current) setError(`Connection lost: ${reason}`); });
+    return () => { offThreads(); offActive(); offClose(); };
+  }, [conn, rememberSession, storageKeyFor]);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; connRef.current?.close(); connRef.current = undefined; }; }, []);   // unmount: close the ACP connection so the agent process can stop
+  useEffect(() => {
+    if (!showThreads) return;
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setShowThreads(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showThreads]);
 
   const connect = useCallback(async (resume = true) => {
     setBusy(true); setError(undefined);
+    let c: AgentConnection | undefined;
     try {
-      const resumeSessionId = resume && rememberSession ? localStorage.getItem(storageKey) ?? undefined : undefined;
-      const h = await connectAgent(page, { ...agentOptions, agent: chosenAgent, autoAllowReadOnly: autoAllow, resumeSessionId: chosenAgent === 'claude' ? resumeSessionId : undefined });
-      if (!mountedRef.current) { h.close(); return; }   // unmounted while connecting: do not publish or keep the session
-      if (rememberSession) localStorage.setItem(storageKey, h.sessionId);
-      handleRef.current?.close(); handleRef.current = h; setHandle(h); onHandle?.(h);
-    } catch (e) { if (mountedRef.current) setError(String((e as Error)?.message ?? e)); }
-    finally { if (mountedRef.current) setBusy(false); }
-  }, [page, agentOptions, rememberSession, storageKey, onHandle, chosenAgent, autoAllow]);
+      c = await openAgent(page, { ...agentOptions, agent: chosenAgent, autoAllowReadOnly: autoAllow });
+      if (!mountedRef.current) { c.close(); return; }   // unmounted while connecting: do not publish or keep the connection
+      connRef.current?.close(); connRef.current = c; setConn(c);
+      const key = storageKeyFor(chosenAgent);
+      const stored = resume && rememberSession ? localStorage.getItem(key) : null;
+      if (stored && c.supportsThreads) {
+        try { await c.openThread(stored); }
+        catch { localStorage.removeItem(key); await c.openThread(); }
+      } else await c.openThread();
+      if (c.supportsThreads) void c.listThreads().catch(() => {});
+    } catch (e) {
+      if (!mountedRef.current) { c?.close(); return; }
+      setError(String((e as Error)?.message ?? e));
+      if (c && !c.active) { c.close(); if (connRef.current === c) { connRef.current = undefined; setConn(undefined); } }
+    } finally { if (mountedRef.current) setBusy(false); }
+  }, [page, agentOptions, rememberSession, storageKeyFor, chosenAgent, autoAllow]);
 
-  const disconnect = useCallback(() => { handle?.close(); handleRef.current = undefined; setHandle(undefined); setSnap(EMPTY); onHandle?.(undefined); }, [handle, onHandle]);
-  const newSession = useCallback(async () => { handle?.close(); handleRef.current = undefined; localStorage.removeItem(storageKey); setHandle(undefined); setSnap(EMPTY); await connect(false); }, [handle, storageKey, connect]);
+  const disconnect = useCallback(() => {
+    connRef.current?.close(); connRef.current = undefined;
+    setConn(undefined); setHandle(undefined); setThreads([]); setShowThreads(false); setSnap(EMPTY);
+    onHandleRef.current?.(undefined);
+  }, []);
+
+  const openThread = useCallback(async (id?: string) => {
+    const c = connRef.current; if (!c) return;
+    setSwitching(id ?? 'new'); setError(undefined); setConfirmDelete(undefined);
+    try { await c.openThread(id); if (id) setShowThreads(false); }
+    catch (e) {
+      if (mountedRef.current) setError(String((e as Error)?.message ?? e));
+      if (!c.active && !c.closed) { try { await c.openThread(); } catch { /* reported above */ } }
+    } finally { if (mountedRef.current) setSwitching(undefined); }
+  }, []);
+
+  const deleteThread = useCallback(async (id: string) => {
+    const c = connRef.current; if (!c) return;
+    setConfirmDelete(undefined);
+    try { await c.deleteThread(id); if (!c.active && !c.closed) await c.openThread(); }
+    catch (e) { if (mountedRef.current) setError(String((e as Error)?.message ?? e)); }
+  }, []);
+
+  const toggleThreads = useCallback(() => {
+    const next = !showThreads;
+    setShowThreads(next); setConfirmDelete(undefined);
+    if (next) void connRef.current?.listThreads().catch(() => {});
+  }, [showThreads]);
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || !handle || snap.state === 'prompting') return;
+    if (!text || !handle || snap.state === 'prompting' || switching) return;
     setInput('');
     await handle.prompt(text).catch(() => { /* surfaced through the model */ });
-  }, [input, handle, snap.state]);
+  }, [input, handle, snap.state, switching]);
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab' && commandMatches.length > 0) { e.preventDefault(); setInput(`/${commandMatches[0]!.name} `); return; }
@@ -87,18 +151,20 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   };
 
   const connected = pageStatus.state === 'connected';
-  const state = handle ? snap.state : connected ? 'idle' : pageStatus.state;
+  const state = handle ? snap.state : conn ? 'connecting' : connected ? 'idle' : pageStatus.state;
+  const canType = !!handle && snap.state !== 'prompting' && !switching;
+  const threadsOn = !!conn && conn.supportsThreads && threadsEnabled;
 
   return (
     <section className={`wmc-chat${className ? ` ${className}` : ''}`} data-state={state}>
       <header className="wmc-head">
         <div className="wmc-head-row">
           <h3 title={snap.title ?? title}>{title}</h3>
-          <span className="wmc-badge" data-state={state}>{state}</span>
+          <span className="wmc-badge" data-state={state}>{switching ? 'loading' : state}</span>
         </div>
         <div className="wmc-head-row wmc-controls">
         {snap.modes && snap.modes.available.length > 0 && handle && (
-          <select value={snap.modes.current ?? ''} onChange={(e) => void handle.setMode(e.target.value)} title="Permission mode">
+          <select value={snap.modes.current ?? ''} onChange={(e) => void handle.setMode(e.target.value)} title="Permission mode" data-role="mode">
             {snap.modes.available.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
         )}
@@ -107,21 +173,27 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
             <input type="checkbox" checked={autoAllow} onChange={(e) => { setAutoAllow(e.target.checked); handle.setAutoAllowReadOnly(e.target.checked); }} /> auto-allow read-only tools
           </label>
         )}
-        {!handle && agents.length > 1 && (
+        {!conn && agents.length > 1 && (
           <select value={chosenAgent} onChange={(e) => setAgentId(e.target.value)} title="Agent" data-role="agent-picker">
             {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
         )}
         {handle && snap.state === 'prompting' && <button onClick={() => void handle.cancel()}>Stop</button>}
-        {handle && <button onClick={() => void newSession()} title="Start a fresh session">New</button>}
-        {handle ? <button onClick={disconnect}>Disconnect</button>
+        {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{threads.length ? ` (${threads.length})` : ''} ▾</button>}
+        {conn && <button onClick={() => void openThread()} disabled={!!switching} title="Start a new thread" data-role="new-thread">New</button>}
+        {conn ? <button onClick={disconnect}>Disconnect</button>
           : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect to local Claude'}</button>}
         </div>
       </header>
       {error && <div className="wmc-error">{error}</div>}
-      {!connected && !handle && <SetupView state={pageStatus.state} setup={setup} />}
+      {!connected && !conn && <SetupView state={pageStatus.state} setup={setup} />}
+      {threadsOn && showThreads && (
+        <ThreadList threads={threads} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}
+          onOpen={(id) => void openThread(id)} onNew={() => void openThread()} onRefresh={() => void conn.listThreads().catch(() => {})}
+          onAskDelete={setConfirmDelete} onDelete={(id) => void deleteThread(id)} />
+      )}
       <div className="wmc-log" ref={logRef}>
-        {snap.turns.length === 0 && <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : 'Connect to start a chat with your local Claude about this page.'}</div>}
+        {snap.turns.length === 0 && <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : conn ? 'Opening a thread…' : 'Connect to start a chat with your local Claude about this page.'}</div>}
         {snap.turns.map((t) => (
           <TurnView key={t.id} items={t.items} stopReason={t.stopReason} showThoughts={showThoughts} />
         ))}
@@ -140,11 +212,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         </ul>
       )}
       <div className="wmc-input">
-        <textarea value={input} placeholder={placeholder} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={!handle || snap.state === 'prompting'} rows={1} />
-        <button className="wmc-primary" disabled={!handle || snap.state === 'prompting' || !input.trim()} onClick={() => void send()}>Send</button>
+        <textarea value={input} placeholder={placeholder} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={!canType} rows={1} />
+        <button className="wmc-primary" disabled={!canType || !input.trim()} onClick={() => void send()}>Send</button>
       </div>
       <div className="wmc-foot">
-        {snap.sessionId && <span title={snap.title ? `Session: ${snap.title}` : undefined}>session {snap.sessionId.slice(0, 6)}</span>}
+        {snap.sessionId && <span title={`Thread ${snap.sessionId}`}>{snap.title ? `thread: ${snap.title}` : `session ${snap.sessionId.slice(0, 6)}`}</span>}
         {snap.agentName && <span title={snap.agentName}>{snap.agentName.replace(/^@[^/]+\//, '')}</span>}
         {handle && handle.agentId !== 'claude' && <span>agent: {handle.agentId}</span>}
         {snap.commands.length > 0 && <span title="Type / in the box to pick one">{snap.commands.length} commands</span>}
@@ -154,6 +226,48 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       </div>
     </section>
   );
+}
+
+function ThreadList({ threads, switching, confirmDelete, canDelete, onOpen, onNew, onRefresh, onAskDelete, onDelete }: {
+  threads: ThreadInfo[]; switching?: string; confirmDelete?: string; canDelete: boolean;
+  onOpen: (id: string) => void; onNew: () => void; onRefresh: () => void; onAskDelete: (id: string | undefined) => void; onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="wmc-threads" data-role="threads">
+      <div className="wmc-threads-head">
+        <button onClick={onNew} disabled={!!switching}>New thread</button>
+        <button onClick={onRefresh} title="Reload the list">Refresh</button>
+        <span>{threads.length === 0 ? 'no threads yet' : `${threads.length} thread${threads.length === 1 ? '' : 's'}`}</span>
+      </div>
+      <ul>
+        {threads.map((t) => (
+          <li key={t.id} className="wmc-thread" data-active={t.active} data-state={t.state} data-id={t.id}>
+            <button className="wmc-thread-open" onClick={() => onOpen(t.id)} disabled={!!switching || t.active} title={t.id}>
+              <span className="wmc-thread-title">{threadLabel(t)}</span>
+              <span className="wmc-thread-meta">{switching === t.id ? 'loading…' : stateLabel(t) ?? formatAgo(t.updatedAt)}</span>
+            </button>
+            {canDelete && (confirmDelete === t.id
+              ? <span className="wmc-thread-confirm">Delete? <button onClick={() => onDelete(t.id)} data-role="delete-yes">yes</button><button onClick={() => onAskDelete(undefined)}>no</button></span>
+              : <button className="wmc-thread-del" title="Delete thread" aria-label="Delete thread" disabled={t.state === 'prompting' || t.state === 'needs-permission'} onClick={() => onAskDelete(t.id)}>×</button>)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function threadLabel(t: ThreadInfo): string { return t.title ?? (t.state === 'stored' ? `thread ${t.id.slice(0, 6)}` : 'New thread'); }
+function stateLabel(t: ThreadInfo): string | undefined { return t.state === 'prompting' ? 'running…' : t.state === 'needs-permission' ? 'needs approval' : undefined; }
+function formatAgo(iso?: string): string {
+  if (!iso) return '';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 function SetupView({ state, setup }: { state: ConnectorStatus['state']; setup?: AgentChatProps['setup'] }) {
