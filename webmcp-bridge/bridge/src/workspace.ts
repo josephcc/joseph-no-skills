@@ -5,7 +5,8 @@ import { join } from 'node:path';
  * One directory per page origin under <stateDir>/workspaces/<slug>/. It is the session
  * cwd for embedded-chat agents (D-16, F2-6): a scratch area with the page's instructions
  * mirrored as CLAUDE.md/AGENTS.md (for agents that read them; Claude gets the prompt
- * directly, D-27) and a conservative .claude/settings.json (D-24).
+ * directly, D-27) and a .claude/settings.json that starts embedded chats in Claude Code's
+ * auto permission mode with bypass disabled (threads-and-auto-mode plan, D-37; written once).
  */
 export class Workspaces {
   readonly #stateDir: string;
@@ -17,7 +18,7 @@ export class Workspaces {
     const settings = join(dir, '.claude', 'settings.json');
     if (!existsSync(settings)) {
       writeFileSync(settings, JSON.stringify({
-        permissions: { defaultMode: 'default', disableBypassPermissionsMode: 'disable' },
+        permissions: { defaultMode: 'auto', disableBypassPermissionsMode: 'disable' },
       }, null, 2) + '\n');
     }
     this.writeInstructions(dir, page);

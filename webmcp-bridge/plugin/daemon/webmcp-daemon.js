@@ -10713,7 +10713,7 @@ class Workspaces {
     const settings = join5(dir, ".claude", "settings.json");
     if (!existsSync3(settings)) {
       writeFileSync3(settings, JSON.stringify({
-        permissions: { defaultMode: "default", disableBypassPermissionsMode: "disable" }
+        permissions: { defaultMode: "auto", disableBypassPermissionsMode: "disable" }
       }, null, 2) + `
 `);
     }
