@@ -55,6 +55,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const [snap, setSnap] = useState<SessionSnapshot>(EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  /** The daemon closed the connection (it releases idle chats after about ten minutes): the transcript stays, the next message reconnects. */
+  const [released, setReleased] = useState<string>();
   const [input, setInput] = useState('');
   const [agentId, setAgentId] = useState<string>();
   const [autoAllow, setAutoAllow] = useState(agentOptions?.autoAllowReadOnly ?? true);
@@ -75,7 +77,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
 
   useEffect(() => page.onStatus(setPageStatus), [page]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
-  useEffect(() => { if (!handle) { setSnap(EMPTY); return; } setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle
+  useEffect(() => { if (!handle) return; setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle; a lost handle keeps the last snapshot on screen
   useEffect(() => {
     if (!conn) return;
     const publish = (h: AgentHandle | undefined) => {
@@ -85,7 +87,12 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     setThreads(conn.threads); publish(conn.active);
     const offThreads = conn.onThreadsChange(setThreads);
     const offActive = conn.onActiveChange(publish);
-    const offClose = conn.onClose((reason) => { if (reason && mountedRef.current) setError(`Connection lost: ${reason}`); });
+    const offClose = conn.onClose((reason) => {
+      if (!mountedRef.current || !reason) return;   // no reason: our own disconnect()
+      if (connRef.current === conn) connRef.current = undefined;
+      setConn(undefined); setHandle(undefined); setThreads([]); setShowThreads(false); setSwitching(undefined);
+      setReleased(reason); onHandleRef.current?.(undefined);
+    });
     return () => { offThreads(); offActive(); offClose(); };
   }, [conn, rememberSession, storageKeyFor]);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; connRef.current?.close(); connRef.current = undefined; }; }, []);   // unmount: close the ACP connection so the agent process can stop
@@ -97,7 +104,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   }, [showThreads]);
 
   const connect = useCallback(async (resume = true) => {
-    setBusy(true); setError(undefined);
+    setBusy(true); setError(undefined); setReleased(undefined);
     let c: AgentConnection | undefined;
     try {
       c = await openAgent(page, { ...agentOptions, agent: chosenAgent, autoAllowReadOnly: autoAllow });
@@ -149,10 +156,17 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || !handle || snap.state === 'prompting' || switching) return;
+    if (!text || switching || busy) return;
+    let h = handle;
+    if (!h) {
+      if (!released) return;
+      await connect(true);   // the daemon released the idle chat: come back into the same thread, then send
+      h = connRef.current?.active;
+      if (!h) return;
+    } else if (snap.state === 'prompting') return;
     setInput('');
-    await handle.prompt(text).catch(() => { /* surfaced through the model */ });
-  }, [input, handle, snap.state, switching]);
+    await h.prompt(text).catch(() => { /* surfaced through the model */ });
+  }, [input, handle, snap.state, switching, busy, released, connect]);
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab' && commandMatches.length > 0) { e.preventDefault(); setInput(`/${commandMatches[0]!.name} `); return; }
@@ -167,8 +181,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   }, [handle]);
 
   const connected = pageStatus.state === 'connected';
-  const state = handle ? snap.state : conn ? 'connecting' : connected ? 'idle' : pageStatus.state;
-  const canType = !!handle && snap.state !== 'prompting' && !switching;
+  const state = handle ? snap.state : conn ? 'connecting' : released ? 'released' : connected ? 'idle' : pageStatus.state;
+  const canType = !switching && !busy && (handle ? snap.state !== 'prompting' : !!released && connected);
   const threadsOn = !!conn && conn.supportsThreads && threadsEnabled;
 
   return (
@@ -198,10 +212,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
         {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{threads.length ? ` (${threads.length})` : ''} ▾</button>}
         {conn && <button onClick={() => void openThread()} disabled={!!switching} title="Start a new thread" data-role="new-thread">New</button>}
         {conn ? <button onClick={disconnect}>Disconnect</button>
-          : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect to local Claude'}</button>}
+          : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : released ? 'Reconnect' : 'Connect to local Claude'}</button>}
         </div>
       </header>
       {error && <div className="wmc-error">{error}</div>}
+      {released && !conn && !busy && <div className="wmc-notice" data-role="released">The connection to local Claude closed (idle chats are released after about ten minutes). Send a message to continue this thread, or <button type="button" data-role="reconnect" onClick={() => void connect()}>reconnect</button> now.</div>}
       {!connected && !conn && <SetupView state={pageStatus.state} setup={setup} />}
       {threadsOn && showThreads && (
         <ThreadList threads={threads} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}

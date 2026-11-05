@@ -48,7 +48,8 @@ React chat: `import { AgentChat } from 'webmcp-connector/react'` and render `<Ag
 (title, age, state); click one to switch, **New** for a fresh one, × to delete. Switching away from an idle
 thread frees its Claude process (reopening replays the history in about a second); a thread that is still
 answering keeps running in the background and is released when its turn ends. The last active thread reopens
-after a reload. Without React: `openAgent(page)` returns an `AgentConnection` with `listThreads()`,
+after a reload. The daemon also releases a chat that has been idle for about ten minutes; the panel then keeps the
+transcript on screen, says so, and reconnects into the same thread when you send the next message. Without React: `openAgent(page)` returns an `AgentConnection` with `listThreads()`,
 `openThread(id?)`, `closeThread()`, `deleteThread()` and change listeners; `connectAgent(page)` is the
 one-thread shorthand. Agents that cannot list or resume sessions get the single-thread panel.
 

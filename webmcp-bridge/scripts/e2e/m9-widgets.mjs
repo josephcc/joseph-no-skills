@@ -17,7 +17,7 @@ const step = (name, data) => out.steps.push({ name, at_ms: Date.now() - t0, ...d
 const fail = (msg) => { throw new Error(msg); };
 
 rmSync(STATE, { recursive: true, force: true });
-const daemon = spawn('node', [`${ROOT}bridge/src/index.ts`, 'serve', '--port', String(PORT), '--state-dir', STATE, '--allow-origin', ORIGIN, '--no-browser', '--agent', `echo=node ${FAKE}`], { stdio: ['ignore', 'pipe', 'pipe'], cwd: ROOT });
+const daemon = spawn('node', [`${ROOT}bridge/src/index.ts`, 'serve', '--port', String(PORT), '--state-dir', STATE, '--allow-origin', ORIGIN, '--no-browser', '--idle-agent-ms', '20000', '--agent', `echo=node ${FAKE}`], { stdio: ['ignore', 'pipe', 'pipe'], cwd: ROOT });   // a short idle limit: the last step waits for the release
 const daemonLog = [];
 daemon.stdout.on('data', (d) => daemonLog.push(...d.toString().split('\n').filter(Boolean)));
 daemon.stderr.on('data', (d) => daemonLog.push(...d.toString().split('\n').filter(Boolean)));
@@ -162,6 +162,17 @@ try {
   if (!/Recent widget activity/.test(stateText) || !/Lavender late/.test(stateText) || stateText.length > 9_500) fail('the state text must end with the activity section and stay under the hook cap');
   await click('.wmc-float-head button');
   await waitFor(() => page.evaluate('!document.querySelector(".wmc-float")'), 'floating card dismissed');
+  // 9. the daemon releases an idle chat: the panel keeps the transcript, says so, and the next message reconnects into the same thread
+  const sidBefore = (await snap()).sessionId;
+  await waitFor(async () => (await (await fetch(`http://127.0.0.1:${PORT}/health`)).json()).agents.length === 0, 'idle adapter reaped', { tries: 160 });
+  await waitFor(() => page.evaluate('!!document.querySelector("[data-role=released]")'), 'released notice');
+  const releasedUi = await page.evaluate('JSON.stringify({ badge: document.querySelector(".wmc-badge").textContent, button: document.querySelector(".wmc-chat button.wmc-primary")?.textContent, transcriptKept: document.querySelectorAll(".wmc-msg").length > 0, inputEnabled: !document.querySelector(".wmc-input textarea").disabled })').then(JSON.parse);
+  step('released', releasedUi);
+  if (releasedUi.badge !== 'released' || releasedUi.button !== 'Reconnect' || !releasedUi.transcriptKept || !releasedUi.inputEnabled) fail(`released state not shown as expected: ${JSON.stringify(releasedUi)}`);
+  await typeAndSend('back again');
+  const s9 = await waitFor(async () => { const s = await snap().catch(() => null); return s && s.state === 'ready' && texts(s).at(-1) === 'echo: back again' ? s : null; }, 'reconnected turn', { tries: 90 });
+  step('reconnected', { sameThread: s9.sessionId === sidBefore, turns: s9.turns.length, noticeGone: !(await page.evaluate('!!document.querySelector("[data-role=released]")')) });
+  if (s9.sessionId !== sidBefore) fail('reconnecting must resume the same thread');
   await page.evaluate('[...document.querySelectorAll(".wmc-head button")].find(b => b.textContent === "Disconnect").click(); "disconnected"');
   await waitFor(async () => (await (await fetch(`http://127.0.0.1:${PORT}/health`)).json()).agents.length === 0, 'adapter stopped', { tries: 40 });
   step('done', { adapters: 0 });

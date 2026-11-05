@@ -46,6 +46,9 @@ export const AGENT_CHAT_CSS = `
 .wmc-foot{padding:.25rem .8rem;font-size:.72rem;color:var(--wmc-muted);border-top:1px solid var(--wmc-border);display:flex;flex-wrap:wrap;gap:.2rem .9rem}
 .wmc-foot span{white-space:nowrap}
 .wmc-error{color:var(--wmc-err);padding:.3rem .8rem;font-size:.85rem}
+.wmc-notice{margin:.5rem .8rem 0;padding:.4rem .7rem;border:1px solid var(--wmc-border);background:#f9fafb;border-radius:8px;font-size:.85rem;color:var(--wmc-muted)}
+.wmc-chat .wmc-notice button{font-size:.8rem;padding:.1rem .45rem;margin-left:.15rem}
+.wmc-badge[data-state=released]{color:#b45309;border-color:#f59e0b}
 .wmc-setup{margin:.8rem;padding:.8rem 1rem;border:1px solid #fdba74;background:var(--wmc-warn);border-radius:8px;font-size:.9rem}
 .wmc-setup ol{margin:.5rem 0 0;padding-left:1.3rem}.wmc-setup li{margin:.3rem 0}.wmc-setup code{background:#fff;padding:.05rem .3rem;border-radius:4px;font-size:.9em}
 .wmc-setup-note{margin-top:.6rem;color:var(--wmc-muted);font-size:.8rem}
