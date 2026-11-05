@@ -24,8 +24,12 @@ daemon_ts="$here/../../bridge/src/index.ts"     # repo checkout (dev) fallback
 if [ -f "$daemon_js" ]; then entry="$daemon_js"; elif [ -f "$daemon_ts" ]; then entry="$daemon_ts"; else echo "webmcp-daemon: no daemon bundle found next to the plugin" >&2; exit 0; fi
 if ! command -v node >/dev/null 2>&1; then echo "webmcp-daemon: node is required to run the daemon" >&2; exit 0; fi
 # Detach fully (new process group, no inherited stdio) so the daemon outlives this hook and the session.
-node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" --port "$WEBMCP_PORT" --tray >/dev/null 2>&1 || { echo "webmcp-daemon: failed to spawn the daemon" >&2; exit 0; }
+# No --port unless the user pinned one: the daemon takes the first free candidate and records it (D-2, D-7). A second
+# start for the same state directory exits 0 as "already running", so racing the login item is harmless (D-3).
+# shellcheck disable=SC2086
+node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" ${WEBMCP_DAEMON_PORT:+--port "$WEBMCP_DAEMON_PORT"} --tray ${WEBMCP_DAEMON_NO_TRAY:+--no-tray} >/dev/null 2>&1 || { echo "webmcp-daemon: failed to spawn the daemon" >&2; exit 0; }
 for _ in $(seq 1 40); do
+  WEBMCP_PORT="$(webmcp_resolve_port || true)"; WEBMCP_URL="http://127.0.0.1:${WEBMCP_PORT:-8717}"
   if webmcp_healthy; then exit 0; fi
   sleep 0.25
 done
