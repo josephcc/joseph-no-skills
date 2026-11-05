@@ -188,6 +188,11 @@ The README documents `bun add webmcp-connector` (and the `webmcp-connector/react
 <rationale>Joseph, after seeing the Mermaid renders: "tiny dense and hard to read … can we roll our own, especially the first plot." Mermaid's auto-layout packs the components figure into small boxes; hand-laid SVG keeps the type readable at README width and stays text in git.</rationale>
 </decision>
 
+<decision id="D-7" title="Figure 1: one Local Claude Code box, solid lines, /ws joined to /mcp, a numbered caption" status="locked" date="2026-11-05">
+The components figure shows one "Local Claude Code" box (your login, your skills, your plugins) holding the terminal session and the chat's agent; the agent's path to `/mcp` is a plain solid arrow; `/ws` and `/mcp` are joined inside the daemon ("the same tools, mirrored"), so the browser tab visibly reaches `/mcp`; arrows ①–⑤ are explained in a caption under the figure that walks through how the embedded chat works.
+<rationale>Joseph, on the first render: "the first figure does not explain how embedded chat works, there's also two blocks of claude code on the right, technically this isnt wrong, but maybe we can have a parent block that says 'Local Claude Code'", then "we dont need the mcp scoped to this page, and the dash line, jsut the same solid line is fine, also why is mcp not connected to the browser tab, that's confusing".</rationale>
+</decision>
+
 ## 6. Findings and risks
 
 <finding id="F-1" title="Screenshots go stale" severity="p3" status="open" effort="small">

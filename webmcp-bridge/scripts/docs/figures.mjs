@@ -59,9 +59,11 @@ ${body}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Figure 1: the pieces. The daemon's endpoints sit level with what they talk to, so the arrows stay short and
-// horizontal; each endpoint box names its transport instead of a label on the arrow.
+// Figure 1: the pieces. One "Local Claude Code" holds both ways in; the daemon's endpoints sit level with what they
+// talk to; /ws and /mcp are linked inside the daemon because /mcp serves exactly the tools the page registered over
+// /ws; numbered arrows are explained in the caption (how the embedded chat works).
 {
+  const badge = (x, y, n) => `<circle cx="${x}" cy="${y}" r="13" fill="${C.accent}"/><text x="${x}" y="${y + 5}" font-size="15" font-weight="700" text-anchor="middle" fill="${C.white}">${n}</text>`;
   const body = [
     // Browser
     box({ x: 40, y: 40, w: 360, h: 490, title: 'Browser tab', fill: C.page, edge: C.pageEdge }),
@@ -69,22 +71,31 @@ ${body}
     box({ x: 64, y: 300, w: 312, h: 205, title: 'webmcp-connector', fill: C.white, edge: C.pageEdge, lines: [{ text: 'connect()', mono: true }, 'mirrors the tools, answers', 'context requests, runs calls', { text: '<AgentChat>  the chat panel', mono: true }, { text: '<FloatingWidgetPanel>  cards', mono: true }] }),
     // Daemon
     box({ x: 470, y: 40, w: 300, h: 490, title: 'webmcp-daemon', fill: C.daemon, edge: C.daemonEdge, lines: [{ text: 'one process on 127.0.0.1,', dim: true }, { text: 'first free of 5 candidate ports', dim: true }] }),
-    box({ x: 494, y: 150, w: 252, h: 76, title: '/mcp', fill: C.white, edge: C.daemonEdge, lines: ['MCP server, streamable HTTP'], titleSize: 20, pad: 12 }),
+    box({ x: 494, y: 150, w: 252, h: 76, title: '/mcp', fill: C.white, edge: C.daemonEdge, lines: ['the page\'s tools, over MCP'], titleSize: 20, pad: 12 }),
     box({ x: 494, y: 300, w: 252, h: 76, title: '/ws', fill: C.white, edge: C.daemonEdge, lines: ['pages, WebSocket'], titleSize: 20, pad: 12 }),
     box({ x: 494, y: 400, w: 252, h: 76, title: '/acp', fill: C.white, edge: C.daemonEdge, lines: ['the chat, ACP over WebSocket'], titleSize: 20, pad: 12 }),
+    arrow({ points: [[620, 300], [620, 226]], both: true, label: 'the same tools, mirrored', labelDy: 6, labelSize: 14 }),
     note({ x: 494, y: 500, lines: ['origin approval · page registry', 'a workspace per page origin'], size: 14 }),
-    // Claude sides
-    box({ x: 840, y: 100, w: 320, h: 176, title: 'Terminal Claude Code', fill: C.claude, edge: C.claudeEdge, lines: ['the webmcp-daemon plugin:', 'hooks inject the page\'s', 'instructions and state;', { text: 'webmcp-mcp relays MCP (stdio)', mono: true }] }),
-    box({ x: 840, y: 330, w: 320, h: 200, title: 'The chat\'s agent', fill: C.claude, edge: C.claudeEdge, lines: ['one process per open thread', { text: 'claude-agent-acp', mono: true }, 'around your Claude Code', '(your login, your skills)', 'in the page\'s workspace'] }),
-    // Arrows: short and level.
-    arrow({ points: [[376, 338], [494, 338]] }),
-    arrow({ points: [[376, 438], [494, 438]] }),
-    arrow({ points: [[746, 188], [840, 188]], both: true }),
-    arrow({ points: [[746, 438], [840, 438]], both: true, label: 'stdio', labelDy: -14, labelSize: 14 }),
-    arrow({ points: [[1000, 330], [1000, 300], [800, 300], [800, 206], [746, 206]], label: 'MCP, scoped to this page', labelAt: 1, labelDy: -12, labelSize: 14, dashed: true }),
-    note({ x: 600, y: 560, lines: ['A page tool call from either Claude goes out over /ws, and the page runs it.'], anchor: 'middle' }),
+    // Local Claude Code, both ways in
+    box({ x: 820, y: 40, w: 340, h: 490, title: 'Local Claude Code', fill: C.claude, edge: C.claudeEdge, lines: [{ text: 'your login, your skills, your plugins', dim: true }] }),
+    box({ x: 844, y: 120, w: 292, h: 125, title: 'Terminal session', fill: C.white, edge: C.claudeEdge, lines: ['the webmcp-daemon plugin:', 'hooks inject instructions + state,', 'a stdio relay carries MCP'], titleSize: 20, bodySize: 16 }),
+    box({ x: 844, y: 320, w: 292, h: 190, title: 'The chat\'s agent', fill: C.white, edge: C.claudeEdge, lines: [{ text: 'claude-agent-acp', mono: true }, 'around Claude Code, one per open', 'thread, started by the daemon in', 'the page\'s workspace, with the', 'page\'s instructions as its prompt'], titleSize: 20, bodySize: 16 }),
+    // Arrows, numbered for the caption.
+    arrow({ points: [[376, 338], [494, 338]], both: true }), badge(435, 318, 1),
+    arrow({ points: [[376, 438], [494, 438]], both: true }), badge(435, 418, 2),
+    arrow({ points: [[746, 438], [844, 438]], both: true }), badge(795, 418, 3),
+    arrow({ points: [[990, 320], [990, 290], [800, 290], [800, 206], [746, 206]] }), badge(1010, 273, 4),
+    arrow({ points: [[746, 170], [844, 170]], both: true }), badge(795, 150, 5),
+    // Caption: how the embedded chat works.
+    note({ x: 40, y: 575, size: 16, lines: [
+      'How the embedded chat works: ① the page\'s tools, state and tool results travel over /ws. ② The chat panel in the page speaks ACP to /acp.',
+      '③ For each thread the daemon starts a Claude Code agent in the page\'s workspace and relays the conversation; the page\'s instructions',
+      'are its system prompt and every prompt carries the page\'s state. ④ The agent reaches the page\'s tools through /mcp, which forwards each',
+      'call to the page over /ws; a card renders in the panel from the call\'s result. ⑤ A terminal session reaches the same tools through the',
+      'plugin\'s relay, and its hooks inject the same instructions and state.',
+    ] }),
   ].join('\n');
-  writeFileSync(join(OUT, 'fig-pieces.svg'), svg(1200, 590, body));
+  writeFileSync(join(OUT, 'fig-pieces.svg'), svg(1200, 690, body));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

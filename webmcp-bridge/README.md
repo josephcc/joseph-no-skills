@@ -265,7 +265,7 @@ API chat uses, one CSS file mapping `--wmc-*` onto its design tokens, and nothin
 
 ### The pieces
 
-![The pieces: the page and webmcp-connector in the browser tab; the daemon with its /mcp, /ws and /acp endpoints; terminal Claude Code through the plugin's relay; the chat's agent process per thread](docs/img/fig-pieces.svg)
+![The pieces: the page and webmcp-connector in the browser tab; the daemon with /mcp, /ws and /acp, where /mcp serves the tools the page registered over /ws; one Local Claude Code box holding the terminal session and the chat's agent; numbered arrows explained in the caption, which walks through how the embedded chat works](docs/img/fig-pieces.svg)
 
 - **The page** registers tools on `document.modelContext` (the browser's native API behind a flag, or the
   connector's shim) and calls `connect()`. The connector opens `/ws`, sends a `hello` (origin, title,
