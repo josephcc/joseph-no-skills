@@ -824,3 +824,24 @@ Where things are: `packages/connector` (npm package, `./react` subpath), `demo-s
 - **Chrome extension for third-party WebMCP sites**: content script = the package's mirror module in the isolated world, service worker as the `/ws` client, popup for approval; design and hacks recorded in the [Stage 1 plan](../stage1-webmcp-bridge/main.md) (its §5.4, F-3, F-6, F-9). Also the only way to put a Claude chat *beside* a site you do not control (extension side panel).
 - **MCP-over-ACP** once the Claude adapter advertises it (removes the per-page HTTP MCP endpoints).
 - **science-kg integration** as its own plan once the three deliverables exist ([D-22](#D-22)); cross-origin iframe tools; editor-grade ACP features in the page; publishing beyond a marketplace entry.
+
+## Codex audit — 2026-11-05
+
+**Codex verdict (initial, on `e4904af`):** The core architecture is present, but the daemon currently has browser-reachable security bypasses around the intended origin approval boundary. There are also concrete robustness and lifecycle issues in launchd setup, ACP process handling, MCP name dispatch, and the React/demo UI that should be fixed before considering the patch correct.
+**Issue counts (Codex's):** P0:0 P1:2 P2:5 P3:0 (Codex omitted the `ISSUES:` line; counted from its findings)
+**Follow-up verdict (on the fix diff):** The source-level fixes do not reach the plugin runtime because the checked-in daemon bundle that the plugin installs/runs was not regenerated. The React cleanup also still leaks an ACP handle when unmount races with connection startup. (P1:1 P2:1, both fixed below.)
+
+**Changes made in response** (commit `b9f96e0` and the follow-up commit):
+- `bridge/src/http.ts` — `/call` and `/approve` require `content-type: application/json` and, when a browser `Origin` is present, the daemon's own origin (`/approve`) or an approved page origin (`/call`); closes the `no-cors` POST bypass (finding 1).
+- `bridge/src/security.ts` — `isSiteOrigin()`: only normalised `http(s)` origins can be approved; `"null"`, `file:`, `data:`, `blob:` and extension origins are rejected before any approval page opens (finding 2).
+- `plugin/commands/setup.md` — `install-launchd --state-dir "${CLAUDE_PLUGIN_DATA}/state"`, the same directory the hooks use, so the SessionStart hook can refresh the login item (finding 3).
+- `bridge/src/mcp.ts` — meta-tools dispatched by an exact-name set, so a page tool named `webmcp_*` is mirrored and callable; and on per-page endpoints `webmcp_get_context` resolves that page rather than the globally selected one (finding 4, plus an adjacent bug found while fixing it).
+- `bridge/src/acp.ts` — `child.once('error')` fails the ACP connection and keeps the daemon alive when an agent command cannot be spawned (finding 5).
+- `packages/connector/src/react/index.tsx` — one model subscription per handle, the live handle closed on unmount, and a mounted flag so a connection that completes after unmount is closed instead of published (finding 6 and follow-up finding 2).
+- `demo-site/src/main.ts` — tool list and call log render page-controlled strings as text (finding 7).
+- `plugin/daemon/*.js` — bundles rebuilt from the fixed sources (follow-up finding 1); `bun run check:bundles` now fails when the committed bundle is stale.
+
+**Deferred / not actioned:**
+- None: all seven initial findings and both follow-up findings were verified against the code and fixed. A local process that forges `Origin` or sends header-less POSTs remains out of scope by design (D-8, §5.5).
+
+Codex's full final messages saved at `/tmp/codex-audit-20261104-190456-report.md` (initial) and `/tmp/codex-audit-20261104-191431-report.md` (follow-up).

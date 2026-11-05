@@ -69,7 +69,8 @@ Everything stays on your machine: see [PRIVACY.md](PRIVACY.md).
 
 ```bash
 bun run typecheck && bun test        # types + unit tests
-bun run build:plugin                 # bundles daemon + Claude adapter into plugin/daemon/
+bun run build:plugin                 # bundles daemon + Claude adapter into plugin/daemon/ (commit them: the plugin runs the bundles)
+bun run check:bundles                # fails if the committed bundles are stale relative to bridge/
 node scripts/e2e/m1.mjs              # page ⇄ daemon (needs daemon + demo running)
 node scripts/e2e/m2.mjs              # MCP client against the daemon
 node scripts/e2e/m4-relay.mjs        # ACP relay (spawns a Claude agent: costs tokens)

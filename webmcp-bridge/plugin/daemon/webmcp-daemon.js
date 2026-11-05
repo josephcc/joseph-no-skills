@@ -2159,11 +2159,11 @@ var require_websocket = __commonJS((exports, module) => {
       });
     }
     if (protocols.length) {
-      for (const protocol of protocols) {
-        if (typeof protocol !== "string" || !subprotocolRegex.test(protocol) || protocolSet.has(protocol)) {
+      for (const protocol2 of protocols) {
+        if (typeof protocol2 !== "string" || !subprotocolRegex.test(protocol2) || protocolSet.has(protocol2)) {
           throw new SyntaxError("An invalid or duplicated subprotocol was specified");
         }
-        protocolSet.add(protocol);
+        protocolSet.add(protocol2);
       }
       opts.headers["Sec-WebSocket-Protocol"] = protocols.join(",");
     }
@@ -2610,11 +2610,11 @@ var require_subprotocol = __commonJS((exports, module) => {
         }
         if (end === -1)
           end = i;
-        const protocol2 = header.slice(start, end);
-        if (protocols.has(protocol2)) {
-          throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
+        const protocol3 = header.slice(start, end);
+        if (protocols.has(protocol3)) {
+          throw new SyntaxError(`The "${protocol3}" subprotocol is duplicated`);
         }
-        protocols.add(protocol2);
+        protocols.add(protocol3);
         start = end = -1;
       } else {
         throw new SyntaxError(`Unexpected character at index ${i}`);
@@ -2623,11 +2623,11 @@ var require_subprotocol = __commonJS((exports, module) => {
     if (start === -1 || end !== -1) {
       throw new SyntaxError("Unexpected end of input");
     }
-    const protocol = header.slice(start, i);
-    if (protocols.has(protocol)) {
-      throw new SyntaxError(`The "${protocol}" subprotocol is duplicated`);
+    const protocol2 = header.slice(start, i);
+    if (protocols.has(protocol2)) {
+      throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
     }
-    protocols.add(protocol);
+    protocols.add(protocol2);
     return protocols;
   }
   module.exports = { parse };
@@ -2862,10 +2862,10 @@ var require_websocket_server = __commonJS((exports, module) => {
       ];
       const ws = new this.options.WebSocket(null, undefined, this.options);
       if (protocols.size) {
-        const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
-        if (protocol) {
-          headers.push(`Sec-WebSocket-Protocol: ${protocol}`);
-          ws._protocol = protocol;
+        const protocol2 = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
+        if (protocol2) {
+          headers.push(`Sec-WebSocket-Protocol: ${protocol2}`);
+          ws._protocol = protocol2;
         }
       }
       if (extensions[PerMessageDeflate.extensionName]) {
@@ -9998,14 +9998,13 @@ import { join as join6 } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// packages/protocol/src/index.ts
+// packages/connector/src/protocol.ts
 var DEFAULT_PORT = 8717;
 var PING_INTERVAL_MS = 20000;
 var MAX_INJECTED_CHARS = 9500;
 function isPageFrame(value) {
   return typeof value === "object" && value !== null && typeof value.type === "string";
 }
-
 // bridge/src/config.ts
 function parseArgs(argv, version) {
   const config = {
@@ -10014,6 +10013,8 @@ function parseArgs(argv, version) {
     stateDir: process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), ".webmcp-daemon"),
     allowOrigins: [],
     noBrowser: process.env.WEBMCP_DAEMON_NO_BROWSER === "1",
+    approval: process.env.WEBMCP_DAEMON_NO_BROWSER === "1" ? "reject" : process.env.WEBMCP_DAEMON_APPROVAL ?? "open",
+    agents: [],
     callTimeoutMs: 60000,
     idleAgentMs: 10 * 60000,
     claudePath: process.env.CLAUDE_CODE_EXECUTABLE,
@@ -10048,7 +10049,28 @@ function parseArgs(argv, version) {
         break;
       case "--no-browser":
         config.noBrowser = true;
+        config.approval = "reject";
         break;
+      case "--approval": {
+        const v = next();
+        if (v !== "open" && v !== "log" && v !== "reject")
+          throw new Error("--approval must be open|log|reject");
+        config.approval = v;
+        config.noBrowser = v === "reject";
+        break;
+      }
+      case "--agent": {
+        const v = next();
+        const eq = v.indexOf("=");
+        if (eq < 1)
+          throw new Error("--agent expects id=<command line>");
+        const id = v.slice(0, eq).trim();
+        const cmd = v.slice(eq + 1).trim().split(/\s+/).filter(Boolean);
+        if (!cmd.length)
+          throw new Error("--agent: empty command");
+        config.agents.push({ id, name: id, command: cmd });
+        break;
+      }
       case "--call-timeout-ms":
         config.callTimeoutMs = Number(next());
         break;
@@ -10075,6 +10097,8 @@ var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] 
   --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected
+  --approval open|log|reject  what to do for an unknown origin (default open; log = hold and print the URL)
+  --agent <id>=<command>     add a selectable ACP agent for the embedded chat (e.g. gemini="gemini --acp")
   --call-timeout-ms <n>      per page-tool call (default 60000)
   --idle-agent-ms <n>        reap idle embedded-chat agents (default 600000)
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
@@ -10163,6 +10187,10 @@ class OriginPolicy {
     return this.#store.denied.includes(origin);
   }
   async decide(origin, title) {
+    if (!isSiteOrigin(origin)) {
+      log.warn(`origin ${JSON.stringify(origin)} is not an http(s) site origin: rejecting`);
+      return false;
+    }
     if (this.isAllowed(origin))
       return true;
     if (this.isDenied(origin))
@@ -10209,6 +10237,14 @@ class OriginPolicy {
   }
   #save() {
     writeFileSync(this.#file, JSON.stringify(this.#store, null, 2));
+  }
+}
+function isSiteOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.origin === origin;
+  } catch {
+    return false;
   }
 }
 function openInBrowser(url) {
@@ -10267,6 +10303,20 @@ async function route(deps, req, res) {
   const url = new URL(req.url ?? "/", "http://x");
   const { registry, policy, config } = deps;
   const path = url.pathname;
+  const selfOrigin = `http://${config.host}:${config.port}`;
+  if (req.method === "POST" && (path === "/call" || path === "/approve")) {
+    const ct = String(req.headers["content-type"] ?? "");
+    if (!/^application\/json\b/i.test(ct))
+      return json(res, 415, { error: "content-type must be application/json" });
+    const origin = req.headers.origin;
+    if (origin !== undefined) {
+      const ok = path === "/approve" ? origin === selfOrigin : origin === selfOrigin || policy.isAllowed(origin);
+      if (!ok) {
+        log.warn(`refused POST ${path} from origin ${origin}`);
+        return json(res, 403, { error: "origin not authorised" });
+      }
+    }
+  }
   if (path === "/health") {
     const sel = registry.selected();
     return json(res, 200, { ok: true, version: config.version, pid: process.pid, pages: registry.all().length, selectedPage: sel ? { id: sel.id, title: sel.title, origin: sel.origin } : null, agents: deps.acpStatus?.() ?? [] });
@@ -10277,6 +10327,8 @@ async function route(deps, req, res) {
   }
   if (path === "/origins")
     return json(res, 200, policy.snapshot());
+  if (path === "/agents")
+    return json(res, 200, deps.agents?.() ?? []);
   if (path === "/state") {
     const page = registry.resolve(url.searchParams.get("page") ?? undefined);
     if (!page) {
@@ -10691,7 +10743,8 @@ class PageServer {
       workspaceDir,
       mcpUrl: `${httpBase}/mcp/by-page/${page.id}`,
       stateUrl: `${httpBase}/state?page=${page.id}`,
-      acpUrl: `${wsBase}/acp?page=${page.id}`
+      acpUrl: `${wsBase}/acp?page=${page.id}`,
+      agents: this.deps.agents?.() ?? [{ id: "claude", name: "Claude", default: true }]
     };
     send(welcome);
     log.info(`page ${page.id} connected: "${page.title}" ${origin} (context: ${page.hasContext}, instructions: ${hello.instructions?.length ?? 0} chars)`);
@@ -12634,9 +12687,9 @@ function urlHostnameOk(url, hostname) {
   hostname.lastIndex = 0;
   return hostname.test(url.hostname);
 }
-function urlProtocolOk(url, protocol) {
-  protocol.lastIndex = 0;
-  return protocol.test(url.protocol.endsWith(":") ? url.protocol.slice(0, -1) : url.protocol);
+function urlProtocolOk(url, protocol2) {
+  protocol2.lastIndex = 0;
+  return protocol2.test(url.protocol.endsWith(":") ? url.protocol.slice(0, -1) : url.protocol);
 }
 var $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
   $ZodStringFormat.init(inst, def);
@@ -21510,7 +21563,7 @@ class StreamableHTTPServerTransport {
 }
 
 // bridge/src/mcp.ts
-var META_PREFIX = "webmcp_";
+var META_TOOL_NAMES = new Set(["webmcp_list_pages", "webmcp_use_page", "webmcp_list_tools", "webmcp_call_tool", "webmcp_get_context"]);
 var INSTRUCTIONS_PROMPT = "page-instructions";
 function createMcpHandler(deps) {
   const sessions = new Map;
@@ -21582,9 +21635,9 @@ function makeServer(deps, scope) {
       const taken = new Set(tools.map((t) => t.name));
       for (const t of page.tools) {
         let name = sanitiseToolName(t.name) || "tool";
-        if (taken.has(name) || name.startsWith(META_PREFIX)) {
+        if (taken.has(name) || META_TOOL_NAMES.has(name)) {
           let i = 2;
-          while (taken.has(`${name}_${i}`))
+          while (taken.has(`${name}_${i}`) || META_TOOL_NAMES.has(`${name}_${i}`))
             i++;
           name = `${name}_${i}`;
         }
@@ -21601,8 +21654,8 @@ function makeServer(deps, scope) {
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const name = req.params.name;
     const args = req.params.arguments ?? {};
-    if (name.startsWith(META_PREFIX))
-      return runMeta(name, args, registry2, config2, extra.signal);
+    if (META_TOOL_NAMES.has(name))
+      return runMeta(name, args, registry2, config2, extra.signal, scope.pageId);
     if (!mirrored.has(name))
       view();
     const target = mirrored.get(name);
@@ -21659,8 +21712,8 @@ function metaTools() {
 function contextTool(pageScoped) {
   return { name: "webmcp_get_context", description: "Fresh deterministic description of what the user currently sees on the page (same text the plugin injects with each prompt).", inputSchema: { type: "object", properties: pageScoped ? {} : PAGE_ID_ARG }, annotations: { readOnlyHint: true, openWorldHint: false } };
 }
-async function runMeta(name, args, registry2, config2, signal) {
-  const pageId = typeof args.page_id === "string" ? args.page_id : undefined;
+async function runMeta(name, args, registry2, config2, signal, scopePageId) {
+  const pageId = scopePageId ?? (typeof args.page_id === "string" ? args.page_id : undefined);
   const text = (v) => ({ content: [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 2) }] });
   switch (name) {
     case "webmcp_list_pages": {
@@ -27098,7 +27151,12 @@ class AcpRelay {
     }
     const url2 = new URL(req.url ?? "/", "http://x");
     const pageId = url2.searchParams.get("page") ?? undefined;
-    this.#pendingContext = { origin, pageId };
+    const agentId = url2.searchParams.get("agent") ?? "claude";
+    if (agentId !== "claude" && !this.#deps.config.agents.some((a) => a.id === agentId)) {
+      rejectUpgrade(socket, 404, "unknown agent");
+      return;
+    }
+    this.#pendingContext = { origin, pageId, agentId };
     this.#upgrade(req, socket, head);
   }
   #pendingContext;
@@ -27109,15 +27167,15 @@ class AcpRelay {
       connect: (clientStream) => {
         const page = ctx.pageId ? this.#deps.registry.get(ctx.pageId) : undefined;
         const cwd = page ? this.#deps.workspaces.ensure(page) : this.#deps.workspaces.ensure({ slug: "unknown", origin: ctx.origin, title: ctx.origin });
-        const { cmd, args } = this.#adapter();
+        const { cmd, args } = this.#adapterFor(ctx.agentId ?? "claude");
         const env = { ...process.env, CLAUDE_AGENT_ACP_PROTOCOL: "v1" };
-        const claude = this.#claude();
+        const claude = (ctx.agentId ?? "claude") === "claude" ? this.#claude() : undefined;
         if (claude)
           env.CLAUDE_CODE_EXECUTABLE = claude;
         const child = spawn2(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env });
         const meta2 = { pageId: page?.id, origin: ctx.origin, startedAt: Date.now(), lastActivity: Date.now() };
         this.#children.set(child, meta2);
-        log.info(`acp: spawned agent pid ${child.pid} for ${ctx.origin}${page ? ` (page ${page.id})` : ""} in ${cwd}`);
+        log.info(`acp: spawned agent "${ctx.agentId ?? "claude"}" pid ${child.pid} for ${ctx.origin}${page ? ` (page ${page.id})` : ""} in ${cwd}`);
         child.stderr?.on("data", (d) => {
           for (const line of d.toString().split(`
 `)) {
@@ -27151,10 +27209,27 @@ class AcpRelay {
             log.info(`acp: agent pid ${child.pid} exited (${code ?? signal})`);
             resolve();
           });
+          child.once("error", (err) => {
+            this.#children.delete(child);
+            log.error(`acp: could not start agent "${ctx.agentId ?? "claude"}" (${cmd}): ${err.message}`);
+            clientStream.writable.close().catch(() => {});
+            resolve();
+          });
         });
         return { closed };
       }
     };
+  }
+  agents() {
+    return [{ id: "claude", name: "Claude", default: true }, ...this.#deps.config.agents.map((a) => ({ id: a.id, name: a.name, default: false }))];
+  }
+  #adapterFor(agentId) {
+    if (agentId === "claude")
+      return this.#adapter();
+    const a = this.#deps.config.agents.find((x) => x.id === agentId);
+    if (!a)
+      throw new Error(`unknown agent ${agentId}`);
+    return { cmd: a.command[0], args: a.command.slice(1) };
   }
   #adapter() {
     if (this.#adapterCmd)
@@ -27295,12 +27370,12 @@ async function serve(config2) {
   const httpBase = `http://${config2.host}:${config2.port}`;
   const wsBase = `ws://${config2.host}:${config2.port}`;
   const registry2 = new Registry;
-  const policy = new OriginPolicy(config2.stateDir, config2.allowOrigins, config2.noBrowser, httpBase);
+  const policy = new OriginPolicy(config2.stateDir, config2.allowOrigins, config2.noBrowser, httpBase, config2.approval === "log" ? (url2) => log.info(`approval needed (open this URL): ${url2}`) : undefined);
   const workspaces = new Workspaces(config2.stateDir);
-  const pages = new PageServer({ registry: registry2, policy, workspaces, version: VERSION, callTimeoutMs: config2.callTimeoutMs, httpBase, wsBase });
   const mcp = createMcpHandler({ registry: registry2, config: config2, version: VERSION });
   const acpRelay = new AcpRelay({ registry: registry2, policy, workspaces, config: config2 });
-  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status() });
+  const pages = new PageServer({ registry: registry2, policy, workspaces, version: VERSION, callTimeoutMs: config2.callTimeoutMs, httpBase, wsBase, agents: () => acpRelay.agents() });
+  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents() });
   await new Promise((resolve, reject2) => {
     server.once("error", reject2);
     server.listen(config2.port, config2.host, () => {

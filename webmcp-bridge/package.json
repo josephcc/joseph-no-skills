@@ -15,7 +15,8 @@
     "daemon": "node bridge/src/index.ts",
     "demo": "vite --config demo-site/vite.config.ts demo-site",
     "build:connector": "cd packages/connector && bun run build",
-    "build:plugin": "bun build bridge/src/index.ts --target=node --format=esm --outfile=plugin/daemon/webmcp-daemon.js && bun build node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --target=node --format=esm --outfile=plugin/daemon/claude-agent-acp.js"
+    "build:plugin": "bun build bridge/src/index.ts --target=node --format=esm --outfile=plugin/daemon/webmcp-daemon.js && bun build node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --target=node --format=esm --outfile=plugin/daemon/claude-agent-acp.js",
+    "check:bundles": "bun run build:plugin >/dev/null && git diff --quiet -- plugin/daemon || (echo 'plugin/daemon bundles are stale: run bun run build:plugin and commit' && exit 1)"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

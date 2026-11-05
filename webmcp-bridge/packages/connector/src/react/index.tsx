@@ -36,6 +36,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const [autoAllow, setAutoAllow] = useState(agentOptions?.autoAllowReadOnly ?? true);
   const logRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<AgentHandle | undefined>(undefined);
+  const mountedRef = useRef(true);
   const agents = pageStatus.agents ?? [];
   const chosenAgent = agentId ?? agentOptions?.agent ?? agents.find((a) => a.default)?.id ?? 'claude';
   const commandMatches = useMemo(() => {
@@ -48,17 +49,18 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   useEffect(() => page.onStatus(setPageStatus), [page]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
   useEffect(() => { if (!handle) return; setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle
-  useEffect(() => () => { handleRef.current?.close(); }, []);   // unmount: close the ACP session so the agent process can stop
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; handleRef.current?.close(); handleRef.current = undefined; }; }, []);   // unmount: close the ACP session so the agent process can stop
 
   const connect = useCallback(async (resume = true) => {
     setBusy(true); setError(undefined);
     try {
       const resumeSessionId = resume && rememberSession ? localStorage.getItem(storageKey) ?? undefined : undefined;
       const h = await connectAgent(page, { ...agentOptions, agent: chosenAgent, autoAllowReadOnly: autoAllow, resumeSessionId: chosenAgent === 'claude' ? resumeSessionId : undefined });
+      if (!mountedRef.current) { h.close(); return; }   // unmounted while connecting: do not publish or keep the session
       if (rememberSession) localStorage.setItem(storageKey, h.sessionId);
       handleRef.current?.close(); handleRef.current = h; setHandle(h); onHandle?.(h);
-    } catch (e) { setError(String((e as Error)?.message ?? e)); }
-    finally { setBusy(false); }
+    } catch (e) { if (mountedRef.current) setError(String((e as Error)?.message ?? e)); }
+    finally { if (mountedRef.current) setBusy(false); }
   }, [page, agentOptions, rememberSession, storageKey, onHandle, chosenAgent, autoAllow]);
 
   const disconnect = useCallback(() => { handle?.close(); handleRef.current = undefined; setHandle(undefined); setSnap(EMPTY); onHandle?.(undefined); }, [handle, onHandle]);
