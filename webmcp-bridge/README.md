@@ -28,7 +28,7 @@ The design record is under [`plans/`](plans/main.md): one plan per thread of wor
 Inside Claude Code:
 
 ```
-/plugin marketplace add josephcc/webmcp-bridge       # private repo: your gh/git credentials must reach it
+/plugin marketplace add josephcc/joseph-no-skills       # private repo: your gh/git credentials must reach it
 /plugin install webmcp-daemon@webmcp-bridge
 ```
 
