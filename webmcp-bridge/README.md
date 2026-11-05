@@ -9,7 +9,7 @@ Three things ship from this repo:
 
 | Deliverable | Path | What it is |
 |---|---|---|
-| `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` (`webmcp-connector/react`). |
+| `webmcp-connector` (npm) | `packages/connector` | Tiny browser library: mirrors the page's `document.modelContext` tools to the daemon (with a shim when the browser lacks the API), carries the page's instructions and a UI-state snapshot, and offers an embedded chat with threads and page-provided widgets: `openAgent()` / `connectAgent()` plus a React `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`). |
 | Demo page | `demo-site` | Vite page with four WebMCP tools (colour + sentence), a call log, a bonus tool for dynamic registration, and the embedded chat. |
 | `webmcp-daemon` Claude Code plugin | `plugin` | Ships and runs the local daemon (`bridge/`), points Claude Code at it over MCP, and injects each page's instructions (session start) and live UI state (every prompt) through hooks. |
 
@@ -60,6 +60,30 @@ escalates. Change it per thread in the mode dropdown, or pin the default with
 writes `defaultMode: "auto"` into new page workspaces so other ACP clients start the same way; the page's origin
 approval and the per-call prompts auto mode still raises are the safety boundary.
 
+**Widgets.** A page tool's result can render as the page's own card inside the chat instead of the generic row:
+pass `<AgentChat page={page} widgets={{ propose_palette: PaletteCard, suggest_replies: RepliesRow }} />`, keyed by
+tool name; an entry may also be `{ component, placement: 'end', latestOnly: true }` to render after the turn's last
+message instead of where the call sits, and only in the most recent turn (what suggested replies want). The component
+receives the call (`input`, the parsed `output` and the raw `text`, `status`, a stable
+`id`, `restored` for history replayed after a reload or a thread switch), persisted `state` / `setState`
+(localStorage, per origin, agent, thread and call; swept when a thread is gone), `prompt(text)` to send a message (refused while the thread is busy),
+and `note(text)` to record what the user did: notes since the thread's last prompt ride along with the next one as
+a `page://widget-activity` resource, and the state text terminal Claude receives ends with the same list. Three
+rules make a card work: the tool's description says what the card shows and that the assistant's message should
+not repeat it (`preamble()` tells Claude the same in general); the tool returns what the card needs as its
+result, because that is what replays after a reload; and the card does nothing in render, only in click handlers,
+because history replays every call. The raw input and output stay one click away under every card; unmapped tools
+keep the generic row. Agent-asked questions (Claude's `AskUserQuestion`, MCP elicitations) render as a form in the
+panel; `renderElicitation` replaces it, `agentOptions={{ elicitation: false }}` turns the capability off. The
+demo's `demo-site/src/widgets.tsx` has a palette proposal card and suggestion chips.
+
+**Terminal Claude and cards.** `<FloatingWidgetPanel page={page} widgets={WIDGETS} />` shows the same components,
+bottom-right of the page, for page tool calls that did not come through the chat panel (calls from a terminal
+session). There is no thread to send to, so `prompt` is absent; `note()` still reaches the terminal through the
+state hook. The panel waits 400 ms for the chat to claim a call; a call the chat makes can show twice for a moment
+if its transcript item arrives late, and goes away as soon as the claim lands. Without React: `page.calls`,
+`page.onCall()`, `page.claimOf()`, `page.onClaim()` and `page.activity` carry the same information.
+
 ## The menu bar item
 
 While the daemon runs on macOS it shows **webmcp-bridge** in the menu bar: daemon status, page and chat counts, *Start at login* (registers the opt-in launchd item), open log, show state folder, copy the MCP URL, stop. It is not a separate app: the daemon spawns a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal binary, built with `bun run build:tray`) and drives it over stdin/stdout; the helper exits with the daemon. The icon is the icon as a template image (`plugin/daemon/tray/webmcp-bridge-icon.png`, regenerated from the company logo with `scripts/make-tray-icon.py`), so the menu bar colours it like its neighbours: white in dark mode, black in light mode; `--tray-text` shows the name instead. The plugin hook and the login item start the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
@@ -101,4 +125,5 @@ node scripts/e2e/m2.mjs              # MCP client against the daemon
 node scripts/e2e/m4-relay.mjs        # ACP relay (spawns a Claude agent: costs tokens)
 node scripts/e2e/m5-chat.mjs         # embedded chat through the real browser, incl. auto mode and a thread switch (costs tokens)
 node scripts/e2e/m8-threads.mjs      # threads in the chat panel with the echo agent on a private daemon (needs vite; no tokens)
+node scripts/e2e/m9-widgets.mjs      # widget cards, chips, the question form, restore after reload, the floating panel (needs vite; no tokens)
 ```

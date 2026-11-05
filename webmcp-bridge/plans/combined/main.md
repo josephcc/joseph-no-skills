@@ -846,6 +846,7 @@ Where things are: `packages/connector` (npm package, `./react` subpath), `demo-s
 - **Chrome extension for third-party WebMCP sites**: content script = the package's mirror module in the isolated world, service worker as the `/ws` client, popup for approval; design and hacks recorded in the [Stage 1 plan](../stage1-webmcp-bridge/main.md) (its §5.4, F-3, F-6, F-9). Also the only way to put a Claude chat *beside* a site you do not control (extension side panel).
 - **MCP-over-ACP** once the Claude adapter advertises it (removes the per-page HTTP MCP endpoints).
 - **science-kg integration** as its own plan once the three deliverables exist ([D-22](#D-22)); cross-origin iframe tools; editor-grade ACP features in the page; publishing beyond a marketplace entry.
+- **In-chat widgets** (page-provided cards for tool calls in the embedded chat, a form for agent-asked questions, a floating panel for terminal Claude's calls): built under its own plan, [in-chat-widgets](../in-chat-widgets/main.md) (2026-11-05).
 
 ## Codex audit — 2026-11-05
 
