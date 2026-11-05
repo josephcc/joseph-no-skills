@@ -85,7 +85,7 @@ widgets, and lets a page replace the surfaces it draws: `renderHeader={(ctx) => 
 `ctx.actions` carries every built-in action), `renderMessage={(item, info) => …}` (the page's own markdown and chips),
 `renderToolCall={(item, info) => …}` (the generic row for unmapped tools), `renderEmpty={(info) => …}` (starter prompts) and
 `renderComposer={(ctx) => …}` (the page's own input; `ctx.send(text)` sends, `ctx.cancel()` stops, `ctx.usage` is the context
-meter); `footer={false}` drops the footer. `threadFilter={(t) => …}` lists only some of the origin's threads (a page with several
+meter); `footer={false}` drops the footer; `autoConnect` opens the chat as soon as the daemon is there. `threadFilter={(t) => …}` lists only some of the origin's threads (a page with several
 workspaces scopes them), and `sessionStorageKey` keys the last-thread memory the same way. The agent's settings arrive on the
 snapshot as `configOptions` (Claude Code's adapter offers the permission mode, the model, the effort level, fast mode);
 `handle.setConfigOption(id, value)` changes one and the snapshot follows (`config_option_update`). The CSS variables `--wmc-*`

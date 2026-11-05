@@ -86,6 +86,8 @@ export interface AgentChatProps {
   threadFilter?: (thread: ThreadInfo) => boolean;
   /** Show the footer (thread, agent, commands, usage, the daemon link). Default true. */
   footer?: boolean;
+  /** Open the chat as soon as the page is connected to the daemon, once, instead of waiting for the Connect button. Default false. */
+  autoConnect?: boolean;
   /** Called with the active thread's handle on connect and on every switch, and with undefined on disconnect. */
   onHandle?: (handle: AgentHandle | undefined) => void;
   className?: string;
@@ -115,7 +117,7 @@ const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Come back here: this panel connects by itself.',
 ] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, sessionStorageKey, showThoughts = true, threads: threadsEnabled = true, threadFilter, footer = true, onHandle, className, setup, widgets, renderElicitation, renderHeader, renderMessage, renderToolCall, renderEmpty, renderComposer }: AgentChatProps) {
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, sessionStorageKey, showThoughts = true, threads: threadsEnabled = true, threadFilter, footer = true, autoConnect = false, onHandle, className, setup, widgets, renderElicitation, renderHeader, renderMessage, renderToolCall, renderEmpty, renderComposer }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
   const [conn, setConn] = useState<AgentConnection>();
@@ -261,6 +263,13 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   }, [handle]);
 
   const connected = pageStatus.state === 'connected';
+  // autoConnect: the first time the daemon is there, open the chat without a click (a later release still waits for the user).
+  const autoConnectedRef = useRef(false);
+  useEffect(() => {
+    if (!autoConnect || !connected || conn || busy || released || autoConnectedRef.current) return;
+    autoConnectedRef.current = true;
+    void connect();
+  }, [autoConnect, connected, conn, busy, released, connect]);
   const state = handle ? snap.state : conn ? 'connecting' : released ? 'released' : connected ? 'idle' : pageStatus.state;
   const canType = !switching && !busy && (handle ? snap.state !== 'prompting' : !!released && connected);
   const threadsOn = !!conn && conn.supportsThreads && threadsEnabled;
