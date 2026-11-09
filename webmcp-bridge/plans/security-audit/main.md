@@ -1,10 +1,12 @@
-# Security audit: webmcp-bridge behind a hosted website
-
 **Status:** draft for review — findings, accepted risks, suggested fixes; no code changed by this plan
 **Date:** 2026-11-06
 **Scope:** webmcp-bridge as deployed by a hosted website (science-kg on an example domain) whose users run the daemon and Claude Code on their own machines. What is trusted, what a reviewer will find, what to fix before a company-wide rollout, and what the rollout looks like in the browser.
 **Inputs:** `bridge/src/security.ts`, `bridge/src/ws-server.ts`, `bridge/src/http.ts`, `bridge/src/acp.ts`, `bridge/src/mcp.ts`, `bridge/src/workspace.ts`, `packages/connector/src/agent.ts`, `packages/connector/src/agent-connection.ts`, science-kg's `causal-graph-viewer/src/agent/webmcpPage.ts`, [PRIVACY.md](../../PRIVACY.md), the MCP SDK 1.32.2 transport, Chrome's Local Network Access guidance (links in [§7](#7-rollout-what-a-user-sees)).
 **Audience:** coworkers reviewing adoption; whoever implements the fixes. Tick the rows of [the findings table](#T-findings) as you review them; answer the questions in [§5](#5-open-questions); comment anywhere.
+
+# Security audit: webmcp-bridge behind a hosted website
+
+> **Reading this on GitHub?** This plan is written in the interactive-plan format, a markdown dialect with tags for questions, decisions, findings and checklists. GitHub drops the tags, so the titles, statuses, severities, dates and chosen answers are missing here, and what remains reads as loose prose. Open the raw file to see them, or ask Joseph for a PDF export of the full plan.
 
 ## 0. Brief (verbatim)
 

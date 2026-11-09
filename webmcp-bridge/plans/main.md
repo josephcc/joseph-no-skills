@@ -1,6 +1,8 @@
 
 # Goal
 
+> The plans linked below are written in the interactive-plan format. GitHub drops their tags, so statuses, severities and chosen answers are missing in the rendered view; each plan carries a note on how to read it.
+
 This is an exploration project, the goal is to connect web applications with a local Claude code using a combination of - The WebMCP protocol, a custom chrome extension, and local Claude.
 
 The idea is that the website will implement tools and context management using the WebMCP protocol. This protocol is originally designed so that in-browser LLM agents can interact with the webpage, via tools that are executed within the browser. For example, pushing a button on the webpage for the user.

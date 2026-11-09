@@ -10,6 +10,8 @@
 
 # Chat threads in the npm package: list, switch, and auto mode by default
 
+> **Reading this on GitHub?** This plan is written in the interactive-plan format, a markdown dialect with tags for questions, decisions, findings and checklists. GitHub drops the tags, so the titles, statuses, severities, dates and chosen answers are missing here, and what remains reads as loose prose. Open the raw file to see them, or ask Joseph for a PDF export of the full plan.
+
 ## 0. Brief (verbatim)
 
 Chat message, 2026-11-04:
