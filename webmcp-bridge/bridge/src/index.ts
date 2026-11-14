@@ -3,8 +3,9 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CANDIDATE_PORTS } from 'webmcp-protocol';
-import { HELP, parseArgs, type DaemonConfig } from './config.ts';
-import { AlreadyRunningError, claimDaemonFile, findRunningDaemon, pickPort, readDaemonRecord, removeDaemonFile, updateDaemonFile, type DaemonRecord } from './instance.ts';
+import { HELP, parseArgs, type DaemonConfig, type HandoffArgs } from './config.ts';
+import { AlreadyRunningError, claimDaemonFile, findRunningDaemon, locateDaemon, pickPort, readDaemonRecord, removeDaemonFile, updateDaemonFile, type DaemonRecord } from './instance.ts';
+import { claudeAgentsLister, HandoffRegistry } from './handoffs.ts';
 import { createHttpServer } from './http.ts';
 import { log } from './log.ts';
 import { Registry } from './registry.ts';
@@ -74,9 +75,10 @@ function build(config: DaemonConfig, instance: string) {
   const policy = new OriginPolicy(config.stateDir, config.allowOrigins, config.noBrowser, httpBase, config.approval === 'log' ? (url) => log.info(`approval needed (open this URL): ${url}`) : undefined);
   const workspaces = new Workspaces(config.stateDir);
   const mcp = createMcpHandler({ registry, config, version: VERSION });
-  const acpRelay = new AcpRelay({ registry, policy, workspaces, config });
+  const handoffs = new HandoffRegistry(config.stateDir, claudeAgentsLister(() => acpRelay.claudeExecutable()));
+  const acpRelay = new AcpRelay({ registry, policy, workspaces, config, handoffs });
   const pages = new PageServer({ registry, policy, workspaces, version: VERSION, callTimeoutMs: config.callTimeoutMs, httpBase, wsBase, agents: () => acpRelay.agents() });
-  const server = createHttpServer({ config, registry, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents(), instance });
+  const server = createHttpServer({ config, registry, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents(), instance, handoffs, adapterPids: () => acpRelay.adapterPids() });
   const dispose = async () => { await acpRelay.close(); await mcp.close(); };
   const start = (): Daemon => {
     registry.on('selection', ({ pageId }: { pageId?: string }) => log.info(`selected page: ${pageId ?? 'none'}`));
@@ -99,8 +101,9 @@ function build(config: DaemonConfig, instance: string) {
 async function main() {
   let parsed;
   try { parsed = parseArgs(process.argv.slice(2), VERSION); } catch (err) { process.stderr.write(`${String(err)}\n${HELP}`); process.exit(2); }
-  const { command, config } = parsed;
+  const { command, config, handoff } = parsed;
   if (command === 'help') { process.stdout.write(HELP); return; }
+  if (command === 'handoff') { await runHandoff(config, handoff); return; }
   if (command === 'status') {
     // The daemon may be on a fallback port: the record in the state directory says which.
     const port = config.portPinned ? config.port : (readDaemonRecord(config.stateDir)?.port ?? config.port);
@@ -133,6 +136,35 @@ async function main() {
   const shutdown = (sig: string) => { log.info(`${sig}: shutting down`); void daemon.close().then(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+/** `handoff`: offer (or forget) a terminal session through the running daemon's `/handoff` route (plans/terminal-handoff §2.5). */
+async function runHandoff(config: DaemonConfig, args: HandoffArgs): Promise<void> {
+  const session = (args.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? '').trim();
+  if (!session) { process.stderr.write('handoff: no session id. Pass --session <uuid>, or run this inside a Claude Code session (its shell commands carry CLAUDE_CODE_SESSION_ID).\n'); process.exit(2); }
+  const candidates = config.portCandidates ?? CANDIDATE_PORTS;
+  const port = config.portPinned ? config.port : await locateDaemon(config.stateDir, config.host, candidates);
+  if (!port) { process.stderr.write(`handoff: no webmcp-daemon on ${config.host} (tried ${candidates.join(', ')}); start one with \`claude\` (the plugin's session hook) or \`webmcp-daemon serve\`.\n`); process.exit(1); }
+  const base = `http://${config.host}:${port}`;
+  const post = async (path: string, body: unknown) => {
+    const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const text = await r.text();
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { parsed = { error: text || `HTTP ${r.status}` }; }
+    return { ok: r.ok, status: r.status, body: parsed };
+  };
+  if (args.forget) {
+    const r = await post('/handoffs/forget', { sessionId: session });
+    if (!r.ok) { process.stderr.write(`handoff: ${String(r.body.error ?? `HTTP ${r.status}`)}\n`); process.exit(1); }
+    process.stdout.write(`handoff withdrawn: session ${session}\n`);
+    return;
+  }
+  const cwd = args.cwd ?? process.cwd();
+  const pid = process.env.CLAUDE_PID ? Number(process.env.CLAUDE_PID) : undefined;
+  const r = await post('/handoff', { sessionId: session, cwd, ...(args.origin ? { origin: args.origin } : {}), ...(args.title ? { title: args.title } : {}), ...(args.note ? { note: args.note } : {}), ...(Object.keys(args.tags).length ? { tags: args.tags } : {}), ...(pid && Number.isInteger(pid) ? { pid } : {}) });
+  if (!r.ok) { process.stderr.write(`handoff: ${String(r.body.error ?? `HTTP ${r.status}`)}${r.status === 404 ? ' (the daemon on this port predates handoffs; restart it from the current plugin)' : ''}\n`); process.exit(1); }
+  process.stdout.write(`handoff registered: session ${session} in ${cwd}${args.origin ? ` for ${args.origin}` : ' for any approved page'} (daemon ${base}).\n`
+    + `The page's chat lists it under "From your terminal". Press Ctrl+D in this terminal to release the session before continuing in the browser; \`claude --resume ${session}\` brings it back here.\n`);
 }
 
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;

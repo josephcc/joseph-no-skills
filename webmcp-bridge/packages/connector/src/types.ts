@@ -19,6 +19,8 @@ export interface ConnectorStatus {
   daemonVersion?: string;
   /** Agents the daemon offers for the embedded chat. */
   agents?: Array<{ id: string; name: string; default: boolean }>;
+  /** Where the terminal sessions offered to this page are listed; absent when the daemon predates handoffs. */
+  handoffsUrl?: string;
   lastError?: string;
   toolCount: number;
   /** The daemon's port once found (the pinned URL's, or the sweep's). */

@@ -71,6 +71,8 @@ export interface WelcomeFrame {
   acpUrl: string;
   /** Agents the chat may select (`?agent=<id>` on acpUrl). */
   agents?: Array<{ id: string; name: string; default: boolean }>;
+  /** GET endpoint listing the terminal sessions offered to this page (plans/terminal-handoff); absent on older daemons. */
+  handoffsUrl?: string;
 }
 
 export type DaemonFrame =

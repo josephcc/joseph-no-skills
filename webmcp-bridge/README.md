@@ -7,7 +7,6 @@ to Claude through the [Agent Client Protocol](https://agentclientprotocol.com), 
 session sees and operates the same page through MCP. Nothing leaves your machine except what Claude Code
 itself sends to Anthropic; the page never holds a key.
 
-![The demo page with its embedded chat: asked for the author's latest paper, the local Claude Code loaded its paper-search skill, ran it, and set the page's sentence to the title it found](docs/img/demo-chat-skill.png)
 
 Three things ship from this repo:
 
@@ -25,10 +24,11 @@ The design record is under [`plans/`](plans/main.md): one plan per thread of wor
 
 ### Install
 
-Inside Claude Code:
+This directory is the bridge the skills in this repo build on; it is also a Claude Code plugin marketplace. Inside
+Claude Code, point the marketplace at the directory:
 
 ```
-/plugin marketplace add josephcc/joseph-no-skills       # private repo: your gh/git credentials must reach it
+/plugin marketplace add /path/to/joseph-no-skills/webmcp-bridge
 /plugin install webmcp-daemon@webmcp-bridge
 ```
 
@@ -36,7 +36,6 @@ Then run `claude` once, in any directory. The plugin's session hook starts the d
 appears in the menu bar (macOS), and, until setup is finished, Claude offers to make the daemon start at login
 (`/webmcp-daemon:setup` does the same at any time). After that the browser chat works with no terminal open.
 
-<img src="docs/img/menu-bar.png" alt="The webmcp-bridge menu bar item: the daemon's port, page and chat counts, the status page, Start at login, the log, the state folder, the MCP URL, Stop daemon" width="412">
 
 From a checkout instead: `bun install`, then `claude --plugin-dir ./plugin`, or `bun run daemon` to run the daemon
 by hand (`-- --allow-origin http://127.0.0.1:5173` skips the approval tab for the demo).
@@ -67,7 +66,7 @@ Click **Connect** in the panel. The chat is your Claude Code (your login, your p
 daemon for this page, with the page's instructions as its system prompt and a snapshot of what you see attached
 to every message, so you can say "make it feel like evening" without explaining what "it" is.
 
-The picture at the top is one such turn: *Use your s2-paper-search skill to find the most recent paper by Joseph Chee Chang,
+One turn from a real run: *Use your s2-paper-search skill to find the most recent paper by Joseph Chee Chang,
 then set this page's sentence to that paper's title.* Claude loaded the `s2-paper-search` skill from the user's
 own `~/.claude/skills`, ran its script (one attempt failed, two succeeded), found the paper, and called the page's
 `set_sentence`; the title is on the page and in the call log. Nothing about papers is in the demo: that is Claude
@@ -98,6 +97,28 @@ puts the card on the page itself, floating bottom-right, because a terminal has 
 The tray is a scroll box no taller than the window; close a card with its ×. Clicking **Use** there records the
 same note the chat's cards record, and the next terminal prompt's state ends with it, so "use the blue one" works
 as the next message.
+
+### Hand a terminal thread to the page
+
+A terminal Claude Code session can offer *itself* to a page, and the page's chat then continues that very thread:
+same session id, same transcript, everything the terminal read and did still in context. From inside the session
+(its shell commands carry `CLAUDE_CODE_SESSION_ID`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/daemon/webmcp-daemon.js" handoff --origin http://localhost:47821 --title "Study X"
+```
+
+The chat's **Threads ▾** lists it under **From your terminal**; opening it replays the history and the next message
+continues the thread, with the agent running in the terminal session's own directory (its CLAUDE.md, skills and
+settings), not the page's workspace; the page's instructions are appended to Claude Code's own prompt rather than
+replacing it. Press Ctrl+D in the terminal first: the daemon refuses to open a thread that
+another process still holds (Claude Code only refuses that for background sessions), and says so in the panel.
+`claude --resume <id>` takes the thread back to the terminal whenever you like; the panel's idle release after ten
+minutes, or closing the panel, lets go of it. `handoff --forget` withdraws the offer; the list's × does the same.
+A page never registers a handoff and never picks the agent's directory: the daemon rewrites `cwd` and `mcpServers`
+on every session request, and a registered handoff is the one exception. The design record is
+[plans/terminal-handoff/main.md](plans/terminal-handoff/main.md); the first page built on it is the
+thematic-analysis workbench.
 
 ### Stopping it, and what it keeps
 
@@ -338,8 +359,9 @@ node scripts/docs/screenshots.mjs    # the README's images and terminal transcri
 
 The menu bar item is a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal
 binary, `bun run build:tray`) the daemon drives over stdin/stdout; it shows the daemon's status, page and chat
-counts, *Start at login*, the log, the state folder, the MCP URL, and stop. The icon is the icon as a template
-image (`scripts/make-tray-icon.py`); `--tray-text` shows the name instead. The plugin hook and the login item start
+counts, *Start at login*, the log, the state folder, the MCP URL, and stop. The glyph is an SF Symbol (a PNG named
+`webmcp-bridge-icon.png` next to the helper, or `WEBMCP_TRAY_ICON`, replaces it as a template image); `--tray-text`
+shows the name instead. The plugin hook and the login item start
 the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
 
 ## Privacy

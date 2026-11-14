@@ -238,7 +238,7 @@ Sources: [WebMCP spec](https://webmachinelearning.github.io/webmcp/) · [impleme
 ## 4. Components and repository layout
 
 ```
-webmcp-claude-hooligan/
+webmcp-bridge/
   package.json                  # bun workspaces
   packages/
     protocol/                   # shared types: /ws frames, tool shapes, hello payload; webmcp.d.ts

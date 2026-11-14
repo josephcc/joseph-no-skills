@@ -9991,9 +9991,9 @@ var require_content_type = __commonJS((exports) => {
 });
 
 // bridge/src/index.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync5 } from "node:fs";
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // packages/connector/src/protocol.ts
 var PROTOCOL_VERSION = 1;
@@ -10026,6 +10026,7 @@ function parseArgs(argv, version) {
     version
   };
   let command = "serve";
+  const handoff = { tags: {}, forget: false };
   const args = [...argv];
   while (args.length) {
     const a = args.shift();
@@ -10041,7 +10042,34 @@ function parseArgs(argv, version) {
       case "status":
       case "install-launchd":
       case "uninstall-launchd":
+      case "handoff":
         command = a;
+        break;
+      case "--session":
+        handoff.session = next();
+        break;
+      case "--cwd":
+        handoff.cwd = next();
+        break;
+      case "--origin":
+        handoff.origin = next();
+        break;
+      case "--title":
+        handoff.title = next();
+        break;
+      case "--note":
+        handoff.note = next();
+        break;
+      case "--tag": {
+        const v = next();
+        const eq = v.indexOf("=");
+        if (eq < 1)
+          throw new Error("--tag expects key=value");
+        handoff.tags[v.slice(0, eq)] = v.slice(eq + 1);
+        break;
+      }
+      case "--forget":
+        handoff.forget = true;
         break;
       case "--port":
         config.port = Number(next());
@@ -10119,7 +10147,7 @@ function parseArgs(argv, version) {
         throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { command, config };
+  return { command, config, handoff };
 }
 var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
   --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(", ")}; env WEBMCP_DAEMON_PORT)
@@ -10134,6 +10162,9 @@ var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] 
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
   --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
+  handoff [--session <uuid>] [--cwd <dir>] [--origin <origin>] [--title <t>] [--note <n>] [--tag k=v …] [--forget]
+                             offer this terminal's Claude Code session to a page's embedded chat (the session id defaults to
+                             $CLAUDE_CODE_SESSION_ID, the directory to the current one); --forget withdraws it
 `;
 
 // bridge/src/instance.ts
@@ -10262,77 +10293,20 @@ function portFree(port, host) {
     probe.listen(port, host, () => probe.close(() => resolve(true)));
   });
 }
+async function locateDaemon(stateDir, host, candidates, timeoutMs = 300) {
+  const rec = readDaemonRecord(stateDir);
+  if (rec && rec.port !== null && pidAlive(rec.pid) && await identify(host, rec.port, timeoutMs))
+    return rec.port;
+  for (const port of candidates)
+    if (await identify(host, port, timeoutMs))
+      return port;
+  return null;
+}
 
-// bridge/src/http.ts
-import { createServer as createServer2 } from "node:http";
-import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
-
-// bridge/src/launchd.ts
-import { copyFileSync, existsSync as existsSync2, mkdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename, dirname, join as join3 } from "node:path";
-import { execFileSync } from "node:child_process";
-var LAUNCHD_LABEL = "com.webmcp.daemon";
-function launchdPlan(config, entry) {
-  const binDir = join3(config.stateDir, "bin");
-  const daemonCopy = join3(binDir, basename(entry));
-  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray", "tray/webmcp-bridge-icon.png"].map((f) => join3(dirname(entry), f)).filter(existsSync2);
-  const plistPath = join3(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, ...config.portPinned ? ["--port", String(config.port)] : [], "--tray"];
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${LAUNCHD_LABEL}</string>
-  <key>ProgramArguments</key><array>${args.map((a) => `<string>${escapeXml(a)}</string>`).join("")}</array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${escapeXml(join3(config.stateDir, "launchd.log"))}</string>
-  <key>StandardErrorPath</key><string>${escapeXml(join3(config.stateDir, "launchd.log"))}</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string></dict>
-</dict></plist>
-`;
-  return { plistPath, binDir, plist, files: [entry, ...siblings] };
-}
-function installLaunchd(config, entry, { dryRun = false } = {}) {
-  if (process.platform !== "darwin")
-    throw new Error("install-launchd is macOS only (use a systemd user unit or Task Scheduler elsewhere)");
-  const plan = launchdPlan(config, entry);
-  if (dryRun)
-    return `# would write ${plan.plistPath}
-# would copy ${plan.files.join(", ")} → ${plan.binDir}
-${plan.plist}`;
-  mkdirSync(plan.binDir, { recursive: true });
-  for (const f of plan.files) {
-    const rel = basename(dirname(f)) === "tray" ? join3("tray", basename(f)) : basename(f);
-    mkdirSync(dirname(join3(plan.binDir, rel)), { recursive: true });
-    copyFileSync(f, join3(plan.binDir, rel));
-  }
-  mkdirSync(dirname(plan.plistPath), { recursive: true });
-  try {
-    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
-  } catch {}
-  writeFileSync2(plan.plistPath, plan.plist);
-  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
-  writeFileSync2(join3(config.stateDir, "setup-done"), new Date().toISOString() + `
-`);
-  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
-}
-function uninstallLaunchd() {
-  const plistPath = join3(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-  try {
-    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
-  } catch {}
-  if (existsSync2(plistPath)) {
-    unlinkSync2(plistPath);
-    return `removed ${plistPath}`;
-  }
-  return "no login item installed";
-}
-function escapeXml(s) {
-  return s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]);
-}
+// bridge/src/handoffs.ts
+import { execFile } from "node:child_process";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { isAbsolute, join as join4 } from "node:path";
 
 // bridge/src/log.ts
 var started = Date.now();
@@ -10355,36 +10329,9 @@ function safe(v) {
   }
 }
 
-// bridge/src/normalise.ts
-function normaliseResult(raw) {
-  if (raw === null)
-    return { content: [{ type: "text", text: "tool triggered a navigation; no result" }] };
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { content: [{ type: "text", text: raw }] };
-  }
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-    const obj = parsed;
-    if (Array.isArray(obj.content))
-      return obj;
-    return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }], structuredContent: obj };
-  }
-  if (Array.isArray(parsed))
-    return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }] };
-  return { content: [{ type: "text", text: String(parsed) }] };
-}
-function errorResult(toolName, error) {
-  return { isError: true, content: [{ type: "text", text: `${toolName}: ${error.name ?? "Error"}: ${error.message ?? "unknown error"}` }] };
-}
-function sanitiseToolName(name) {
-  return name.replace(/[^A-Za-z0-9_-]/g, "_");
-}
-
 // bridge/src/security.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 class OriginPolicy {
@@ -10400,8 +10347,8 @@ class OriginPolicy {
     this.#noBrowser = noBrowser;
     this.#baseUrl = baseUrl;
     this.#open = opener;
-    mkdirSync2(stateDir, { recursive: true });
-    this.#file = join4(stateDir, "origins.json");
+    mkdirSync(stateDir, { recursive: true });
+    this.#file = join3(stateDir, "origins.json");
     try {
       this.#store = JSON.parse(readFileSync2(this.#file, "utf8"));
     } catch {}
@@ -10462,7 +10409,7 @@ class OriginPolicy {
     return { ...this.#store, preapproved: this.#preapproved };
   }
   #save() {
-    writeFileSync3(this.#file, JSON.stringify(this.#store, null, 2));
+    writeFileSync2(this.#file, JSON.stringify(this.#store, null, 2));
   }
 }
 function isSiteOrigin(origin) {
@@ -10496,6 +10443,292 @@ async function go(allow){const remember=document.getElementById('remember').chec
 const r=await fetch('/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:${JSON.stringify(id)},allow,remember})});
 document.getElementById('out').textContent=r.ok?(allow?'Allowed. You can close this tab.':'Denied. You can close this tab.'):'This request has expired; reload the page that asked.';}
 </script>`;
+}
+
+// bridge/src/handoffs.ts
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var HANDOFF_CAP = 50;
+var LIVE_CACHE_MS = 3000;
+var LIVE_TIMEOUT_MS = 3000;
+var TEXT_MAX = 200;
+
+class HandoffRegistry {
+  #file;
+  #records = [];
+  #lister;
+  #live;
+  #pending;
+  #parentPidOf;
+  constructor(stateDir, lister, parentPidOf = psParentPid) {
+    mkdirSync2(stateDir, { recursive: true });
+    this.#file = join4(stateDir, "handoffs.json");
+    this.#lister = lister;
+    this.#parentPidOf = parentPidOf;
+    try {
+      const raw = JSON.parse(readFileSync3(this.#file, "utf8"));
+      if (Array.isArray(raw))
+        this.#records = raw.filter((r) => validateHandoff(r) === null).map((r) => normalise(r));
+    } catch {}
+  }
+  offer(input) {
+    const problem = validateHandoff(input);
+    if (problem)
+      throw new Error(problem);
+    const rec = normalise(input);
+    this.#records = [rec, ...this.#records.filter((r) => r.sessionId !== rec.sessionId)].slice(0, HANDOFF_CAP);
+    this.#save();
+    return rec;
+  }
+  forget(sessionId) {
+    const before = this.#records.length;
+    this.#records = this.#records.filter((r) => r.sessionId !== sessionId);
+    if (this.#records.length === before)
+      return false;
+    this.#save();
+    return true;
+  }
+  get(sessionId) {
+    return this.#records.find((r) => r.sessionId === sessionId);
+  }
+  forOrigin(sessionId, origin) {
+    const h = this.get(sessionId);
+    return h && (!h.origin || h.origin === origin) ? h : undefined;
+  }
+  visibleTo(origin) {
+    return origin === undefined ? [...this.#records] : this.#records.filter((r) => !r.origin || r.origin === origin);
+  }
+  all() {
+    return [...this.#records];
+  }
+  async withLiveness(records, ownAdapterPids = []) {
+    const rows = await this.#liveRows();
+    return Promise.all(records.map(async (r) => {
+      if (rows === null)
+        return { ...r, live: null, liveUnknown: true };
+      const live = rows.find((s) => s.sessionId === r.sessionId);
+      return { ...r, live: live ? { ...live, heldByPage: await this.#isOurs(live, ownAdapterPids) } : null };
+    }));
+  }
+  async liveHolder(sessionId, opts = {}) {
+    if (opts.fresh && !this.#pending)
+      this.#live = undefined;
+    const rows = await this.#liveRows();
+    const live = rows?.find((s) => s.sessionId === sessionId.toLowerCase());
+    return live ? { ...live, heldByPage: await this.#isOurs(live, opts.ownAdapterPids ?? []) } : null;
+  }
+  async#isOurs(live, ownAdapterPids) {
+    if (!live.pid || !ownAdapterPids.length)
+      return false;
+    try {
+      const parent = await this.#parentPidOf(live.pid);
+      return parent !== undefined && ownAdapterPids.includes(parent);
+    } catch {
+      return false;
+    }
+  }
+  async#liveRows() {
+    if (this.#live && Date.now() - this.#live.at < LIVE_CACHE_MS)
+      return this.#live.rows;
+    if (!this.#pending) {
+      this.#pending = this.#lister().then((rows) => {
+        this.#live = { at: Date.now(), rows };
+        return rows;
+      }, (err) => {
+        log.warn(`handoffs: liveness check failed: ${String(err?.message ?? err)}`);
+        this.#live = { at: Date.now(), rows: null };
+        return null;
+      }).finally(() => {
+        this.#pending = undefined;
+      });
+    }
+    return this.#pending;
+  }
+  #save() {
+    try {
+      writeFileSync3(this.#file, JSON.stringify(this.#records, null, 2) + `
+`);
+    } catch (err) {
+      log.warn(`handoffs: could not write ${this.#file}: ${String(err)}`);
+    }
+  }
+}
+function validateHandoff(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    return "expected a JSON object";
+  const h = input;
+  if (typeof h.sessionId !== "string" || !UUID_RE.test(h.sessionId))
+    return "sessionId must be a UUID";
+  if (typeof h.cwd !== "string" || !isAbsolute(h.cwd))
+    return "cwd must be an absolute path";
+  try {
+    if (!statSync(h.cwd).isDirectory())
+      return "cwd is not a directory";
+  } catch {
+    return "cwd does not exist";
+  }
+  if (h.origin !== undefined && (typeof h.origin !== "string" || !isSiteOrigin(h.origin)))
+    return "origin must be an http(s) site origin";
+  for (const k of ["title", "note"])
+    if (h[k] !== undefined && typeof h[k] !== "string")
+      return `${k} must be a string`;
+  if (h.pid !== undefined && (typeof h.pid !== "number" || !Number.isInteger(h.pid) || h.pid <= 0))
+    return "pid must be a positive integer";
+  if (h.tags !== undefined) {
+    if (!h.tags || typeof h.tags !== "object" || Array.isArray(h.tags))
+      return "tags must be an object of strings";
+    for (const [k, v] of Object.entries(h.tags))
+      if (typeof v !== "string" || k.length > 64)
+        return "tags must be an object of strings";
+  }
+  return null;
+}
+function normalise(h) {
+  const clip = (s) => typeof s === "string" ? s.slice(0, TEXT_MAX) : undefined;
+  const tags = h.tags ? Object.fromEntries(Object.entries(h.tags).slice(0, 16).map(([k, v]) => [k, String(v).slice(0, 512)])) : undefined;
+  return {
+    sessionId: h.sessionId.toLowerCase(),
+    cwd: h.cwd,
+    ...h.origin ? { origin: h.origin } : {},
+    ...clip(h.title) ? { title: clip(h.title) } : {},
+    ...clip(h.note) ? { note: clip(h.note) } : {},
+    ...tags && Object.keys(tags).length ? { tags } : {},
+    offeredAt: typeof h.offeredAt === "string" && !Number.isNaN(Date.parse(h.offeredAt)) ? h.offeredAt : new Date().toISOString(),
+    ...h.pid ? { pid: h.pid } : {}
+  };
+}
+function psParentPid(pid) {
+  return new Promise((resolve) => {
+    execFile("ps", ["-o", "ppid=", "-p", String(pid)], { timeout: 2000 }, (err, stdout) => {
+      if (err) {
+        resolve(undefined);
+        return;
+      }
+      const n = Number.parseInt(String(stdout).trim(), 10);
+      resolve(Number.isInteger(n) && n > 0 ? n : undefined);
+    });
+  });
+}
+function claudeAgentsLister(claude) {
+  return () => new Promise((resolve, reject) => {
+    const bin = claude() ?? "claude";
+    execFile(bin, ["agents", "--json"], { timeout: LIVE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env: process.env }, (err, stdout) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      try {
+        const raw = JSON.parse(stdout);
+        if (!Array.isArray(raw)) {
+          reject(new Error("claude agents --json did not return an array"));
+          return;
+        }
+        resolve(raw.filter((r) => r && typeof r === "object" && typeof r.sessionId === "string").map((r) => {
+          const s = r;
+          return { sessionId: String(s.sessionId).toLowerCase(), ...typeof s.pid === "number" ? { pid: s.pid } : {}, ...typeof s.kind === "string" ? { kind: s.kind } : {}, ...typeof s.status === "string" ? { status: s.status } : {}, ...typeof s.state === "string" ? { state: s.state } : {}, ...typeof s.name === "string" ? { name: s.name } : {}, ...typeof s.cwd === "string" ? { cwd: s.cwd } : {} };
+        }));
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+// bridge/src/http.ts
+import { createServer as createServer2 } from "node:http";
+import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join6 } from "node:path";
+
+// bridge/src/launchd.ts
+import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename, dirname, join as join5 } from "node:path";
+import { execFileSync } from "node:child_process";
+var LAUNCHD_LABEL = "com.webmcp.daemon";
+function launchdPlan(config, entry) {
+  const binDir = join5(config.stateDir, "bin");
+  const daemonCopy = join5(binDir, basename(entry));
+  const siblings = ["claude-agent-acp.js", "tray/webmcp-bridge-tray", "tray/webmcp-bridge-icon.png"].map((f) => join5(dirname(entry), f)).filter(existsSync2);
+  const plistPath = join5(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  const args = [process.execPath, daemonCopy, "serve", "--state-dir", config.stateDir, ...config.portPinned ? ["--port", String(config.port)] : [], "--tray"];
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key><array>${args.map((a) => `<string>${escapeXml(a)}</string>`).join("")}</array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${escapeXml(join5(config.stateDir, "launchd.log"))}</string>
+  <key>StandardErrorPath</key><string>${escapeXml(join5(config.stateDir, "launchd.log"))}</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin")}</string></dict>
+</dict></plist>
+`;
+  return { plistPath, binDir, plist, files: [entry, ...siblings] };
+}
+function installLaunchd(config, entry, { dryRun = false } = {}) {
+  if (process.platform !== "darwin")
+    throw new Error("install-launchd is macOS only (use a systemd user unit or Task Scheduler elsewhere)");
+  const plan = launchdPlan(config, entry);
+  if (dryRun)
+    return `# would write ${plan.plistPath}
+# would copy ${plan.files.join(", ")} → ${plan.binDir}
+${plan.plist}`;
+  mkdirSync3(plan.binDir, { recursive: true });
+  for (const f of plan.files) {
+    const rel = basename(dirname(f)) === "tray" ? join5("tray", basename(f)) : basename(f);
+    mkdirSync3(dirname(join5(plan.binDir, rel)), { recursive: true });
+    copyFileSync(f, join5(plan.binDir, rel));
+  }
+  mkdirSync3(dirname(plan.plistPath), { recursive: true });
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
+  } catch {}
+  writeFileSync4(plan.plistPath, plan.plist);
+  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
+  writeFileSync4(join5(config.stateDir, "setup-done"), new Date().toISOString() + `
+`);
+  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
+}
+function uninstallLaunchd() {
+  const plistPath = join5(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], { stdio: "ignore" });
+  } catch {}
+  if (existsSync2(plistPath)) {
+    unlinkSync2(plistPath);
+    return `removed ${plistPath}`;
+  }
+  return "no login item installed";
+}
+function escapeXml(s) {
+  return s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]);
+}
+
+// bridge/src/normalise.ts
+function normaliseResult(raw) {
+  if (raw === null)
+    return { content: [{ type: "text", text: "tool triggered a navigation; no result" }] };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { content: [{ type: "text", text: raw }] };
+  }
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const obj = parsed;
+    if (Array.isArray(obj.content))
+      return obj;
+    return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }], structuredContent: obj };
+  }
+  if (Array.isArray(parsed))
+    return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }] };
+  return { content: [{ type: "text", text: String(parsed) }] };
+}
+function errorResult(toolName, error) {
+  return { isError: true, content: [{ type: "text", text: `${toolName}: ${error.name ?? "Error"}: ${error.message ?? "unknown error"}` }] };
+}
+function sanitiseToolName(name) {
+  return name.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
 // bridge/src/http.ts
@@ -10550,10 +10783,10 @@ async function route(deps, req, res) {
   }
   if (path === "/status.json") {
     const sel = registry.selected()?.id;
-    const loginInstalled = existsSync3(join5(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
+    const loginInstalled = existsSync3(join6(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
     let logTail = "";
     try {
-      logTail = readFileSync3(join5(config.stateDir, "daemon.log"), "utf8").split(`
+      logTail = readFileSync4(join6(config.stateDir, "daemon.log"), "utf8").split(`
 `).slice(-40).join(`
 `);
     } catch {}
@@ -10566,6 +10799,7 @@ async function route(deps, req, res) {
       pages: registry.all().map((p) => ({ id: p.id, title: p.title, origin: p.origin, tools: p.tools.length, selected: p.id === sel })),
       agents: deps.acpStatus?.() ?? [],
       origins: policy.snapshot(),
+      handoffs: (deps.handoffs?.all() ?? []).map(({ tags: _tags, ...h }) => h),
       logTail
     });
   }
@@ -10587,6 +10821,77 @@ async function route(deps, req, res) {
     if (body.origin)
       policy.forget(body.origin);
     return json(res, 200, { ok: true });
+  }
+  if (path === "/handoff" && req.method === "POST") {
+    if (!deps.handoffs)
+      return json(res, 404, { error: "handoffs are not enabled" });
+    if (req.headers.origin !== undefined) {
+      log.warn(`refused POST /handoff from origin ${req.headers.origin}`);
+      return json(res, 403, { error: "a handoff is offered by a local process, never by a page" });
+    }
+    if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? "")))
+      return json(res, 415, { error: "content-type must be application/json" });
+    let body;
+    try {
+      body = JSON.parse(await readBody(req) || "{}");
+    } catch {
+      return json(res, 400, { error: "invalid JSON" });
+    }
+    try {
+      const rec = deps.handoffs.offer(body);
+      log.info(`handoff offered: session ${rec.sessionId} in ${rec.cwd}${rec.origin ? ` for ${rec.origin}` : " for any approved origin"}${rec.title ? ` ("${rec.title}")` : ""}`);
+      return json(res, 200, rec);
+    } catch (err) {
+      return json(res, 400, { error: String(err?.message ?? err) });
+    }
+  }
+  if (path === "/handoffs" || path === "/handoffs/forget") {
+    if (!deps.handoffs)
+      return json(res, 404, { error: "handoffs are not enabled" });
+    const origin = req.headers.origin;
+    const fromPage = origin !== undefined && origin !== selfOrigin;
+    if (origin !== undefined) {
+      if (!(origin === selfOrigin || policy.isAllowed(origin))) {
+        log.warn(`refused ${req.method} ${path} from origin ${origin}`);
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+    if (path === "/handoffs" && req.method === "GET") {
+      const rows = await deps.handoffs.withLiveness(deps.handoffs.visibleTo(fromPage ? origin : undefined), deps.adapterPids?.() ?? []);
+      return json(res, 200, { handoffs: rows });
+    }
+    if (path === "/handoffs/forget" && req.method === "OPTIONS") {
+      if (origin === undefined) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      res.writeHead(204, { "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "content-type", "Access-Control-Max-Age": "600" });
+      res.end();
+      return;
+    }
+    if (path === "/handoffs/forget" && req.method === "POST") {
+      if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? "")))
+        return json(res, 415, { error: "content-type must be application/json" });
+      let body;
+      try {
+        body = JSON.parse(await readBody(req) || "{}");
+      } catch {
+        return json(res, 400, { error: "invalid JSON" });
+      }
+      const id = String(body.sessionId ?? "").toLowerCase();
+      const rec = deps.handoffs.get(id);
+      if (!rec || fromPage && rec.origin && rec.origin !== origin)
+        return json(res, 404, { ok: false, error: "no such handoff" });
+      deps.handoffs.forget(id);
+      log.info(`handoff forgotten: session ${id}${fromPage ? ` (by ${origin})` : ""}`);
+      return json(res, 200, { ok: true });
+    }
+    return json(res, 405, { error: "method not allowed" });
   }
   if (path === "/id" && req.method === "GET") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10849,8 +11154,8 @@ function slugify(origin) {
 }
 
 // bridge/src/workspace.ts
-import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync4, existsSync as existsSync4 } from "node:fs";
-import { join as join6 } from "node:path";
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync5, existsSync as existsSync4 } from "node:fs";
+import { join as join7 } from "node:path";
 
 class Workspaces {
   #stateDir;
@@ -10858,11 +11163,11 @@ class Workspaces {
     this.#stateDir = stateDir;
   }
   ensure(page) {
-    const dir = join6(this.#stateDir, "workspaces", page.slug);
-    mkdirSync3(join6(dir, ".claude"), { recursive: true });
-    const settings = join6(dir, ".claude", "settings.json");
+    const dir = join7(this.#stateDir, "workspaces", page.slug);
+    mkdirSync4(join7(dir, ".claude"), { recursive: true });
+    const settings = join7(dir, ".claude", "settings.json");
     if (!existsSync4(settings)) {
-      writeFileSync4(settings, JSON.stringify({
+      writeFileSync5(settings, JSON.stringify({
         permissions: { defaultMode: "auto", disableBypassPermissionsMode: "disable" }
       }, null, 2) + `
 `);
@@ -10879,8 +11184,8 @@ This workspace belongs to the web page at ${page.origin}. The page's tools are a
 
 ${text}
 `;
-    writeFileSync4(join6(dir, "CLAUDE.md"), body);
-    writeFileSync4(join6(dir, "AGENTS.md"), body);
+    writeFileSync5(join7(dir, "CLAUDE.md"), body);
+    writeFileSync5(join7(dir, "AGENTS.md"), body);
   }
 }
 
@@ -11047,7 +11352,8 @@ class PageServer {
       mcpUrl: `${httpBase}/mcp/by-page/${page.id}`,
       stateUrl: `${httpBase}/state?page=${page.id}`,
       acpUrl: `${wsBase}/acp?page=${page.id}`,
-      agents: this.deps.agents?.() ?? [{ id: "claude", name: "Claude", default: true }]
+      agents: this.deps.agents?.() ?? [{ id: "claude", name: "Claude", default: true }],
+      handoffsUrl: `${httpBase}/handoffs?page=${page.id}`
     };
     send(welcome);
     log.info(`page ${page.id} connected: "${page.title}" ${origin} (context: ${page.hasContext}, instructions: ${hello.instructions?.length ?? 0} chars)`);
@@ -22105,7 +22411,7 @@ function readJson(req) {
 import { spawn as spawn2, execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync5 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { dirname as dirname2, join as join8 } from "node:path";
 import { Readable as Readable2, Writable } from "node:stream";
 
 // node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
@@ -27416,6 +27722,107 @@ function destroyUpgradeSocket(socket, error2) {
   socket.destroy(error2 instanceof Error ? error2 : undefined);
 }
 
+// bridge/src/session-guard.ts
+var GUARDED_METHODS = new Set(["session/new", "session/load", "session/list"]);
+var ALLOWED_OPTION_KEYS = new Set(["allowedTools", "disallowedTools", "model"]);
+function isRequest(msg) {
+  return !!msg && typeof msg === "object" && typeof msg.method === "string" && msg.id !== undefined && msg.id !== null;
+}
+function handoffLoadOf(msg, ctx) {
+  if (!isRequest(msg) || msg.method !== "session/load")
+    return;
+  const id = msg.params && typeof msg.params === "object" ? msg.params.sessionId : undefined;
+  return typeof id === "string" && ctx.handoffFor(id) ? id : undefined;
+}
+function heldElsewhereError(msg, live) {
+  const where = live.kind === "background" ? "a background session" : "your terminal (or another tab)";
+  const pid = live.pid ? `, pid ${live.pid}` : "";
+  return { jsonrpc: "2.0", id: msg.id, error: { code: -32001, message: `That session is still open in ${where}${pid}${live.status ? `, ${live.status}` : ""}. Press Ctrl+D there (or run \`claude stop\` for a background session) and try again; the thread is kept.` } };
+}
+function rewriteOutbound(msg, ctx) {
+  if (!isRequest(msg) || !GUARDED_METHODS.has(msg.method))
+    return msg;
+  const p = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? { ...msg.params } : {};
+  const changes = [];
+  let cwd = ctx.workspaceDir;
+  let handoff2 = false;
+  if (msg.method === "session/load" && typeof p.sessionId === "string") {
+    const h = ctx.handoffFor(p.sessionId);
+    if (h) {
+      cwd = h.cwd;
+      handoff2 = true;
+    }
+  }
+  if (p.cwd !== cwd)
+    changes.push(`cwd ${JSON.stringify(p.cwd)} → ${cwd}`);
+  p.cwd = cwd;
+  if (msg.method !== "session/list") {
+    const want = ctx.pageMcpUrl ? [{ type: "http", name: "page", url: ctx.pageMcpUrl, headers: [] }] : [];
+    if (!sameServers(p.mcpServers, want))
+      changes.push(`mcpServers ${JSON.stringify(p.mcpServers)} → ${want.length ? "the page server" : "none"}`);
+    p.mcpServers = want;
+    const meta2 = filterMeta(p._meta, handoff2, changes);
+    if (meta2 === undefined)
+      delete p._meta;
+    else
+      p._meta = meta2;
+  }
+  if (changes.length)
+    ctx.log?.(`${msg.method}${handoff2 ? " (registered handoff)" : ""}: ${changes.join("; ")}`);
+  return { ...msg, params: p };
+}
+function sameServers(sent, want) {
+  if (!Array.isArray(sent) || sent.length !== want.length)
+    return false;
+  return sent.every((s, i) => s && typeof s === "object" && s.type === want[i].type && s.url === want[i].url && s.command === undefined);
+}
+function asAppend(v, changes) {
+  if (typeof v === "string") {
+    changes.push("_meta.systemPrompt: replace → append");
+    return { append: v, excludeDynamicSections: true };
+  }
+  if (v && typeof v === "object" && !Array.isArray(v) && typeof v.append === "string")
+    return v;
+  changes.push("_meta.systemPrompt dropped (neither a string nor an append)");
+  return;
+}
+function filterMeta(meta2, handoff2, changes) {
+  if (!meta2 || typeof meta2 !== "object" || Array.isArray(meta2))
+    return;
+  const m = meta2;
+  const out = {};
+  for (const [k, v] of Object.entries(m)) {
+    if (k === "systemPrompt") {
+      if (!handoff2) {
+        out.systemPrompt = v;
+        continue;
+      }
+      const appended = asAppend(v, changes);
+      if (appended !== undefined)
+        out.systemPrompt = appended;
+      continue;
+    }
+    if (k === "claudeCode") {
+      const cc = v && typeof v === "object" && !Array.isArray(v) ? v : {};
+      const options = cc.options && typeof cc.options === "object" && !Array.isArray(cc.options) ? cc.options : {};
+      const kept = {};
+      for (const [ok, ov] of Object.entries(options)) {
+        if (ALLOWED_OPTION_KEYS.has(ok) || ok === "allowDangerouslySkipPermissions" && ov === false)
+          kept[ok] = ov;
+        else
+          changes.push(`_meta.claudeCode.options.${ok} dropped`);
+      }
+      for (const extra of Object.keys(cc))
+        if (extra !== "options")
+          changes.push(`_meta.claudeCode.${extra} dropped`);
+      out.claudeCode = { options: kept };
+      continue;
+    }
+    out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // bridge/src/acp.ts
 var ADAPTER_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 var ADAPTER_VERSION = "0.100.0";
@@ -27489,13 +27896,32 @@ class AcpRelay {
           }
         });
         const agentStream = ndJsonStream2(Writable.toWeb(child.stdin), Readable2.toWeb(child.stdout));
-        const touch = new TransformStream({ transform: (m, c) => {
+        const guard = {
+          origin: ctx.origin,
+          workspaceDir: cwd,
+          pageMcpUrl: page ? `http://${this.#deps.config.host}:${this.#deps.config.port}/mcp/by-page/${page.id}` : undefined,
+          handoffFor: (id) => this.#deps.handoffs?.forOrigin(id, ctx.origin),
+          log: (line) => log.info(`acp guard (${ctx.origin}, pid ${child.pid}): ${line}`)
+        };
+        let toClient;
+        const touch2 = new TransformStream({ start: (c) => {
+          toClient = c;
+        }, transform: (m, c) => {
           meta2.lastActivity = Date.now();
           c.enqueue(m);
         } });
-        const touch2 = new TransformStream({ transform: (m, c) => {
+        const touch = new TransformStream({ transform: async (m, c) => {
           meta2.lastActivity = Date.now();
-          c.enqueue(m);
+          const handoffId = handoffLoadOf(m, guard);
+          if (handoffId && this.#deps.handoffs) {
+            const live = await this.#deps.handoffs.liveHolder(handoffId, { fresh: true, ownAdapterPids: this.adapterPids() }).catch(() => null);
+            if (live && !live.heldByPage) {
+              log.warn(`acp guard (${ctx.origin}, pid ${child.pid}): refused session/load of handoff ${handoffId}: held by pid ${live.pid ?? "?"} (${live.kind ?? "?"}, ${live.status ?? "?"})`);
+              toClient?.enqueue(heldElsewhereError(m, live));
+              return;
+            }
+          }
+          c.enqueue(rewriteOutbound(m, guard));
         } });
         const stopSoon = () => {
           if (child.exitCode === null && !child.killed)
@@ -27543,7 +27969,7 @@ class AcpRelay {
       this.#adapterCmd = { cmd, args };
       return this.#adapterCmd;
     }
-    const sibling = join7(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
+    const sibling = join8(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
     if (existsSync5(sibling)) {
       this.#adapterCmd = { cmd: process.execPath, args: [sibling] };
       return this.#adapterCmd;
@@ -27551,7 +27977,7 @@ class AcpRelay {
     try {
       const require2 = createRequire2(import.meta.url);
       const pkg = require2.resolve(`${ADAPTER_PACKAGE}/package.json`);
-      const entry = join7(dirname2(pkg), "dist", "index.js");
+      const entry = join8(dirname2(pkg), "dist", "index.js");
       if (existsSync5(entry)) {
         this.#adapterCmd = { cmd: process.execPath, args: [entry] };
         return this.#adapterCmd;
@@ -27560,6 +27986,9 @@ class AcpRelay {
     this.#adapterCmd = { cmd: "npx", args: ["-y", `${ADAPTER_PACKAGE}@${ADAPTER_VERSION}`] };
     log.warn(`acp: ${ADAPTER_PACKAGE} not found locally; will spawn via npx (first start downloads it)`);
     return this.#adapterCmd;
+  }
+  claudeExecutable() {
+    return this.#claude();
   }
   #claude() {
     if (this.#claudePath !== undefined)
@@ -27590,6 +28019,9 @@ class AcpRelay {
   status() {
     return [...this.#children.values()].map((m) => ({ ...m }));
   }
+  adapterPids() {
+    return [...this.#children.keys()].map((c) => c.pid).filter((p) => typeof p === "number");
+  }
   async close() {
     clearInterval(this.#reaper);
     for (const child of this.#children.keys())
@@ -27609,7 +28041,7 @@ Content-Length: 0\r
 // bridge/src/tray.ts
 import { spawn as spawn3 } from "node:child_process";
 import { existsSync as existsSync6 } from "node:fs";
-import { dirname as dirname3, join as join8 } from "node:path";
+import { dirname as dirname3, join as join9 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 class Tray {
   #deps;
@@ -27622,13 +28054,13 @@ class Tray {
   static helperPath() {
     const candidates = [
       process.env.WEBMCP_TRAY_HELPER,
-      join8(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
-      join8(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
+      join9(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
+      join9(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
     ].filter((p) => !!p);
     return candidates.find((p) => existsSync6(p));
   }
   static iconPath(helper) {
-    const p = process.env.WEBMCP_TRAY_ICON ?? join8(dirname3(helper), "webmcp-bridge-icon.png");
+    const p = process.env.WEBMCP_TRAY_ICON ?? join9(dirname3(helper), "webmcp-bridge-icon.png");
     return existsSync6(p) ? p : undefined;
   }
   start() {
@@ -27640,8 +28072,6 @@ class Tray {
       return false;
     }
     this.#icon = Tray.iconPath(helper);
-    if (!this.#icon)
-      log.warn("tray: icon not found next to the helper; using the fallback symbol");
     const child = spawn3(helper, [], { stdio: ["pipe", "pipe", "inherit"] });
     this.#child = child;
     let buf = "";
@@ -27680,7 +28110,7 @@ class Tray {
       return;
     const pages = this.#deps.registry.all().length;
     const agents = this.#deps.agentCount();
-    const login = existsSync6(join8(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+    const login = existsSync6(join9(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
     const items = [
       { id: "name", title: `webmcp-bridge ${this.#deps.config.version}`, enabled: false },
       { id: "status", title: `Daemon: running on 127.0.0.1:${this.#deps.config.port} · ${pages} page${pages === 1 ? "" : "s"} · ${agents} chat${agents === 1 ? "" : "s"}`, enabled: false },
@@ -27715,7 +28145,7 @@ class Tray {
     try {
       switch (msg.id) {
         case "login": {
-          const installed = existsSync6(join8(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+          const installed = existsSync6(join9(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
           log.info(installed ? uninstallLaunchd() : installLaunchd(config2, process.argv[1]));
           break;
         }
@@ -27723,7 +28153,7 @@ class Tray {
           spawn3("open", [`http://${config2.host}:${config2.port}/`], { stdio: "ignore", detached: true }).unref();
           break;
         case "log":
-          openPath(join8(config2.stateDir, existsSync6(join8(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
+          openPath(join9(config2.stateDir, existsSync6(join9(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
           break;
         case "folder":
           openPath(config2.stateDir);
@@ -27762,7 +28192,7 @@ function openPath(p) {
 // bridge/src/index.ts
 var VERSION = "0.0.1";
 async function serve(config2) {
-  mkdirSync4(config2.stateDir, { recursive: true });
+  mkdirSync5(config2.stateDir, { recursive: true });
   const running = await findRunningDaemon(config2.stateDir, config2.host);
   if (running)
     throw new AlreadyRunningError(running.pid, running.port, config2.host, running.legacy);
@@ -27773,7 +28203,7 @@ async function serve(config2) {
     if (other)
       throw new AlreadyRunningError(other.pid, other.port, config2.host);
     if (!claimDaemonFile(config2.stateDir, record3))
-      throw new Error(`could not claim ${join9(config2.stateDir, "daemon.json")}`);
+      throw new Error(`could not claim ${join10(config2.stateDir, "daemon.json")}`);
   }
   try {
     const candidates = config2.portPinned ? [config2.port] : config2.portCandidates ?? CANDIDATE_PORTS;
@@ -27812,9 +28242,10 @@ function build(config2, instance) {
   const policy = new OriginPolicy(config2.stateDir, config2.allowOrigins, config2.noBrowser, httpBase, config2.approval === "log" ? (url2) => log.info(`approval needed (open this URL): ${url2}`) : undefined);
   const workspaces = new Workspaces(config2.stateDir);
   const mcp = createMcpHandler({ registry: registry2, config: config2, version: VERSION });
-  const acpRelay = new AcpRelay({ registry: registry2, policy, workspaces, config: config2 });
+  const handoffs = new HandoffRegistry(config2.stateDir, claudeAgentsLister(() => acpRelay.claudeExecutable()));
+  const acpRelay = new AcpRelay({ registry: registry2, policy, workspaces, config: config2, handoffs });
   const pages = new PageServer({ registry: registry2, policy, workspaces, version: VERSION, callTimeoutMs: config2.callTimeoutMs, httpBase, wsBase, agents: () => acpRelay.agents() });
-  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents(), instance });
+  const server = createHttpServer({ config: config2, registry: registry2, policy, pages, mcp: mcp.handle, acpUpgrade: (req, socket, head) => void acpRelay.handleUpgrade(req, socket, head), acpStatus: () => acpRelay.status(), agents: () => acpRelay.agents(), instance, handoffs, adapterPids: () => acpRelay.adapterPids() });
   const dispose = async () => {
     await acpRelay.close();
     await mcp.close();
@@ -27847,9 +28278,13 @@ async function main() {
 ${HELP}`);
     process.exit(2);
   }
-  const { command, config: config2 } = parsed;
+  const { command, config: config2, handoff: handoff2 } = parsed;
   if (command === "help") {
     process.stdout.write(HELP);
+    return;
+  }
+  if (command === "handoff") {
+    await runHandoff(config2, handoff2);
     return;
   }
   if (command === "status") {
@@ -27867,7 +28302,7 @@ ${HELP}`);
   }
   if (command === "stop") {
     try {
-      const { pid } = JSON.parse(readFileSync4(join9(config2.stateDir, "daemon.json"), "utf8"));
+      const { pid } = JSON.parse(readFileSync5(join10(config2.stateDir, "daemon.json"), "utf8"));
       process.kill(pid, "SIGTERM");
       process.stdout.write(`sent SIGTERM to ${pid}
 `);
@@ -27913,6 +28348,55 @@ ${HELP}`);
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+}
+async function runHandoff(config2, args) {
+  const session = (args.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? "").trim();
+  if (!session) {
+    process.stderr.write(`handoff: no session id. Pass --session <uuid>, or run this inside a Claude Code session (its shell commands carry CLAUDE_CODE_SESSION_ID).
+`);
+    process.exit(2);
+  }
+  const candidates = config2.portCandidates ?? CANDIDATE_PORTS;
+  const port = config2.portPinned ? config2.port : await locateDaemon(config2.stateDir, config2.host, candidates);
+  if (!port) {
+    process.stderr.write(`handoff: no webmcp-daemon on ${config2.host} (tried ${candidates.join(", ")}); start one with \`claude\` (the plugin's session hook) or \`webmcp-daemon serve\`.
+`);
+    process.exit(1);
+  }
+  const base = `http://${config2.host}:${port}`;
+  const post = async (path, body) => {
+    const r2 = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const text = await r2.text();
+    let parsed = {};
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { error: text || `HTTP ${r2.status}` };
+    }
+    return { ok: r2.ok, status: r2.status, body: parsed };
+  };
+  if (args.forget) {
+    const r2 = await post("/handoffs/forget", { sessionId: session });
+    if (!r2.ok) {
+      process.stderr.write(`handoff: ${String(r2.body.error ?? `HTTP ${r2.status}`)}
+`);
+      process.exit(1);
+    }
+    process.stdout.write(`handoff withdrawn: session ${session}
+`);
+    return;
+  }
+  const cwd = args.cwd ?? process.cwd();
+  const pid = process.env.CLAUDE_PID ? Number(process.env.CLAUDE_PID) : undefined;
+  const r = await post("/handoff", { sessionId: session, cwd, ...args.origin ? { origin: args.origin } : {}, ...args.title ? { title: args.title } : {}, ...args.note ? { note: args.note } : {}, ...Object.keys(args.tags).length ? { tags: args.tags } : {}, ...pid && Number.isInteger(pid) ? { pid } : {} });
+  if (!r.ok) {
+    process.stderr.write(`handoff: ${String(r.body.error ?? `HTTP ${r.status}`)}${r.status === 404 ? " (the daemon on this port predates handoffs; restart it from the current plugin)" : ""}
+`);
+    process.exit(1);
+  }
+  process.stdout.write(`handoff registered: session ${session} in ${cwd}${args.origin ? ` for ${args.origin}` : " for any approved page"} (daemon ${base}).
+` + `The page's chat lists it under "From your terminal". Press Ctrl+D in this terminal to release the session before continuing in the browser; \`claude --resume ${session}\` brings it back here.
+`);
 }
 var isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
 if (isMain)

@@ -29,7 +29,20 @@ export interface DaemonConfig {
   version: string;
 }
 
-export function parseArgs(argv: string[], version: string): { command: string; config: DaemonConfig } {
+/** `webmcp-daemon handoff …`: offer (or forget) the calling terminal session to a page (plans/terminal-handoff §2.5). */
+export interface HandoffArgs {
+  /** Default: $CLAUDE_CODE_SESSION_ID, which every Claude Code session sets for its shell commands. */
+  session?: string;
+  /** Default: the current directory. */
+  cwd?: string;
+  origin?: string;
+  title?: string;
+  note?: string;
+  tags: Record<string, string>;
+  forget: boolean;
+}
+
+export function parseArgs(argv: string[], version: string): { command: string; config: DaemonConfig; handoff: HandoffArgs } {
   const config: DaemonConfig = {
     host: '127.0.0.1',
     port: Number(process.env.WEBMCP_DAEMON_PORT ?? DEFAULT_PORT),
@@ -47,12 +60,20 @@ export function parseArgs(argv: string[], version: string): { command: string; c
     version,
   };
   let command = 'serve';
+  const handoff: HandoffArgs = { tags: {}, forget: false };
   const args = [...argv];
   while (args.length) {
     const a = args.shift()!;
     const next = () => { const v = args.shift(); if (v === undefined) throw new Error(`missing value for ${a}`); return v; };
     switch (a) {
-      case 'serve': case 'stop': case 'status': case 'install-launchd': case 'uninstall-launchd': command = a; break;
+      case 'serve': case 'stop': case 'status': case 'install-launchd': case 'uninstall-launchd': case 'handoff': command = a; break;
+      case '--session': handoff.session = next(); break;
+      case '--cwd': handoff.cwd = next(); break;
+      case '--origin': handoff.origin = next(); break;
+      case '--title': handoff.title = next(); break;
+      case '--note': handoff.note = next(); break;
+      case '--tag': { const v = next(); const eq = v.indexOf('='); if (eq < 1) throw new Error('--tag expects key=value'); handoff.tags[v.slice(0, eq)] = v.slice(eq + 1); break; }
+      case '--forget': handoff.forget = true; break;
       case '--port': config.port = Number(next()); config.portPinned = true; break;
       case '--ports': {
         // A list to walk: it also unpins WEBMCP_DAEMON_PORT or an earlier --port (the last of --port/--ports wins).
@@ -77,7 +98,7 @@ export function parseArgs(argv: string[], version: string): { command: string; c
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
-  return { command, config };
+  return { command, config, handoff };
 }
 
 export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
@@ -93,4 +114,7 @@ export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
   --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
+  handoff [--session <uuid>] [--cwd <dir>] [--origin <origin>] [--title <t>] [--note <n>] [--tag k=v …] [--forget]
+                             offer this terminal's Claude Code session to a page's embedded chat (the session id defaults to
+                             $CLAUDE_CODE_SESSION_ID, the directory to the current one); --forget withdraws it
 `;

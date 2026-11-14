@@ -10,12 +10,14 @@ import * as acp from '@agentclientprotocol/sdk';
 import { AcpServer } from '@agentclientprotocol/sdk/experimental/server';
 import { createNodeWebSocketUpgradeHandler } from '@agentclientprotocol/sdk/experimental/node';
 import type { DaemonConfig } from './config.ts';
+import type { HandoffRegistry } from './handoffs.ts';
 import { log } from './log.ts';
 import type { Registry } from './registry.ts';
 import type { OriginPolicy } from './security.ts';
+import { handoffLoadOf, heldElsewhereError, rewriteOutbound, type GuardContext } from './session-guard.ts';
 import type { Workspaces } from './workspace.ts';
 
-export interface AcpDeps { registry: Registry; policy: OriginPolicy; workspaces: Workspaces; config: DaemonConfig }
+export interface AcpDeps { registry: Registry; policy: OriginPolicy; workspaces: Workspaces; config: DaemonConfig; handoffs?: HandoffRegistry }
 
 const ADAPTER_PACKAGE = '@agentclientprotocol/claude-agent-acp';
 const ADAPTER_VERSION = '0.100.0';
@@ -23,8 +25,11 @@ const DISCONNECT_GRACE_MS = 5_000;
 
 /**
  * `/acp`: the embedded chat. Each browser connection gets its own claude-agent-acp process
- * (the ACP *agent*); the page is the ACP *client*. The daemon relays frames untouched (D-3, D-4):
- * the page itself passes cwd, mcpServers, _meta.systemPrompt and _meta.claudeCode.options.
+ * (the ACP *agent*); the page is the ACP *client*. The daemon relays frames as they are except
+ * for the session requests (plans/terminal-handoff/main.md §2.3, the security audit's F-1):
+ * `cwd` is forced to the page's workspace and `mcpServers` to the daemon's page server, with a
+ * registered terminal handoff as the one exception (the page's prompt is then appended to Claude
+ * Code's own instead of replacing it), and `_meta.claudeCode.options` is filtered.
  */
 export class AcpRelay {
   readonly #deps: AcpDeps;
@@ -85,9 +90,32 @@ export class AcpRelay {
           }
         });
         const agentStream = acp.ndJsonStream(Writable.toWeb(child.stdin!) as unknown as WritableStream<Uint8Array>, Readable.toWeb(child.stdout!) as unknown as ReadableStream<Uint8Array>);
-        // Touch activity on traffic in either direction so the idle reaper spares busy sessions.
-        const touch = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ transform: (m, c) => { meta.lastActivity = Date.now(); c.enqueue(m); } });
-        const touch2 = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ transform: (m, c) => { meta.lastActivity = Date.now(); c.enqueue(m); } });
+        // Page → agent: the session guard decides cwd and mcpServers (a registered handoff is the exception); then
+        // touch activity on traffic in either direction so the idle reaper spares busy sessions.
+        const guard: GuardContext = {
+          origin: ctx.origin, workspaceDir: cwd,
+          pageMcpUrl: page ? `http://${this.#deps.config.host}:${this.#deps.config.port}/mcp/by-page/${page.id}` : undefined,
+          handoffFor: (id) => this.#deps.handoffs?.forOrigin(id, ctx.origin),
+          log: (line) => log.info(`acp guard (${ctx.origin}, pid ${child.pid}): ${line}`),
+        };
+        // Agent → page, with a handle to answer in the agent's place: a handoff load is refused here, before the adapter
+        // sees it, while any other process still holds that session (Claude Code itself only refuses for background
+        // sessions; two interactive resumes of one transcript would both append to it).
+        let toClient: TransformStreamDefaultController<acp.AnyMessage> | undefined;
+        const touch2 = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ start: (c) => { toClient = c; }, transform: (m, c) => { meta.lastActivity = Date.now(); c.enqueue(m); } });
+        const touch = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ transform: async (m, c) => {
+          meta.lastActivity = Date.now();
+          const handoffId = handoffLoadOf(m, guard);
+          if (handoffId && this.#deps.handoffs) {
+            const live = await this.#deps.handoffs.liveHolder(handoffId, { fresh: true, ownAdapterPids: this.adapterPids() }).catch(() => null);
+            if (live && !live.heldByPage) {   // our own agent (this page's earlier connection, still in its grace period) does not count
+              log.warn(`acp guard (${ctx.origin}, pid ${child.pid}): refused session/load of handoff ${handoffId}: held by pid ${live.pid ?? '?'} (${live.kind ?? '?'}, ${live.status ?? '?'})`);
+              toClient?.enqueue(heldElsewhereError(m, live) as acp.AnyMessage);
+              return;
+            }
+          }
+          c.enqueue(rewriteOutbound(m, guard) as acp.AnyMessage);
+        } });
         // When the browser side goes away, give the adapter a few seconds (it persists the session) and then stop it;
         // a reload reconnects with a fresh adapter and `session/load`.
         const stopSoon = () => { if (child.exitCode === null && !child.killed) setTimeout(() => { if (child.exitCode === null) child.kill('SIGTERM'); }, DISCONNECT_GRACE_MS).unref(); };
@@ -136,6 +164,9 @@ export class AcpRelay {
     return this.#adapterCmd;
   }
 
+  /** The `claude` the embedded chat runs (also what the handoff registry asks for live sessions). */
+  claudeExecutable(): string | undefined { return this.#claude(); }
+
   #claude(): string | undefined {
     if (this.#claudePath !== undefined) return this.#claudePath || undefined;
     const fromConfig = this.#deps.config.claudePath;
@@ -153,6 +184,8 @@ export class AcpRelay {
   }
 
   status() { return [...this.#children.values()].map((m) => ({ ...m })); }
+  /** The agent processes this daemon runs right now; their `claude` children show up in `claude agents --json`. */
+  adapterPids(): number[] { return [...this.#children.keys()].map((c) => c.pid).filter((p): p is number => typeof p === 'number'); }
 
   async close(): Promise<void> {
     clearInterval(this.#reaper);

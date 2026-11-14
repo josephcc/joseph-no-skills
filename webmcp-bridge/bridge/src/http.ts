@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { DAEMON_NAME, MAX_INJECTED_CHARS, PROTOCOL_VERSION } from 'webmcp-protocol';
 import { installLaunchd, uninstallLaunchd } from './launchd.ts';
 import type { DaemonConfig } from './config.ts';
+import type { HandoffRegistry } from './handoffs.ts';
 import { log } from './log.ts';
 import { errorResult, normaliseResult } from './normalise.ts';
 import type { Registry } from './registry.ts';
@@ -25,6 +26,10 @@ export interface HttpDeps {
   agents?: () => Array<{ id: string; name: string; default: boolean }>;
   /** Random per start; `GET /id` reports it so a client can tell a restart (D-6). */
   instance?: string;
+  /** Terminal sessions offered to pages (plans/terminal-handoff): /handoff, /handoffs, /handoffs/forget. */
+  handoffs?: HandoffRegistry;
+  /** The daemon's own agent processes, so a handoff a page holds is listed as such rather than as "open in your terminal". */
+  adapterPids?: () => number[];
 }
 
 export function createHttpServer(deps: HttpDeps): Server {
@@ -64,7 +69,8 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
     try { logTail = readFileSync(join(config.stateDir, 'daemon.log'), 'utf8').split('\n').slice(-40).join('\n'); } catch { /* no log yet */ }
     return json(res, 200, { version: config.version, port: config.port, stateDir: config.stateDir, loginInstalled, pid: process.pid,
       pages: registry.all().map((p) => ({ id: p.id, title: p.title, origin: p.origin, tools: p.tools.length, selected: p.id === sel })),
-      agents: deps.acpStatus?.() ?? [], origins: policy.snapshot(), logTail });
+      agents: deps.acpStatus?.() ?? [], origins: policy.snapshot(),
+      handoffs: (deps.handoffs?.all() ?? []).map(({ tags: _tags, ...h }) => h), logTail });
   }
   if (path === '/launchd' && req.method === 'POST') {
     if (req.headers.origin !== undefined && req.headers.origin !== selfOrigin) return json(res, 403, { error: 'origin not authorised' });
@@ -79,6 +85,51 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
     const body = JSON.parse(await readBody(req) || '{}') as { origin?: string };
     if (body.origin) policy.forget(body.origin);
     return json(res, 200, { ok: true });
+  }
+
+  // Terminal handoffs (plans/terminal-handoff/main.md §2.2). A handoff is *offered* by a local process only: a
+  // request with an Origin header comes from a page, and a page may only read (and forget) what was offered to
+  // its origin. Pages read across origins, so the answers carry CORS headers for approved origins only.
+  if (path === '/handoff' && req.method === 'POST') {
+    if (!deps.handoffs) return json(res, 404, { error: 'handoffs are not enabled' });
+    if (req.headers.origin !== undefined) { log.warn(`refused POST /handoff from origin ${req.headers.origin}`); return json(res, 403, { error: 'a handoff is offered by a local process, never by a page' }); }
+    if (!/^application\/json\b/i.test(String(req.headers['content-type'] ?? ''))) return json(res, 415, { error: 'content-type must be application/json' });
+    let body: unknown;
+    try { body = JSON.parse(await readBody(req) || '{}'); } catch { return json(res, 400, { error: 'invalid JSON' }); }
+    try {
+      const rec = deps.handoffs.offer(body);
+      log.info(`handoff offered: session ${rec.sessionId} in ${rec.cwd}${rec.origin ? ` for ${rec.origin}` : ' for any approved origin'}${rec.title ? ` ("${rec.title}")` : ''}`);
+      return json(res, 200, rec);
+    } catch (err) { return json(res, 400, { error: String((err as Error)?.message ?? err) }); }
+  }
+  if (path === '/handoffs' || path === '/handoffs/forget') {
+    if (!deps.handoffs) return json(res, 404, { error: 'handoffs are not enabled' });
+    const origin = req.headers.origin;
+    const fromPage = origin !== undefined && origin !== selfOrigin;
+    if (origin !== undefined) {
+      if (!(origin === selfOrigin || policy.isAllowed(origin))) { log.warn(`refused ${req.method} ${path} from origin ${origin}`); res.writeHead(403); res.end(); return; }
+      res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin');
+    }
+    if (path === '/handoffs' && req.method === 'GET') {
+      const rows = await deps.handoffs.withLiveness(deps.handoffs.visibleTo(fromPage ? origin : undefined), deps.adapterPids?.() ?? []);
+      return json(res, 200, { handoffs: rows });
+    }
+    if (path === '/handoffs/forget' && req.method === 'OPTIONS') {   // the browser's preflight for a JSON POST from another origin
+      if (origin === undefined) { res.writeHead(204); res.end(); return; }
+      res.writeHead(204, { 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Max-Age': '600' }); res.end(); return;
+    }
+    if (path === '/handoffs/forget' && req.method === 'POST') {
+      if (!/^application\/json\b/i.test(String(req.headers['content-type'] ?? ''))) return json(res, 415, { error: 'content-type must be application/json' });
+      let body: { sessionId?: unknown };
+      try { body = JSON.parse(await readBody(req) || '{}') as { sessionId?: unknown }; } catch { return json(res, 400, { error: 'invalid JSON' }); }
+      const id = String(body.sessionId ?? '').toLowerCase();
+      const rec = deps.handoffs.get(id);
+      if (!rec || (fromPage && rec.origin && rec.origin !== origin)) return json(res, 404, { ok: false, error: 'no such handoff' });
+      deps.handoffs.forget(id);
+      log.info(`handoff forgotten: session ${id}${fromPage ? ` (by ${origin})` : ''}`);
+      return json(res, 200, { ok: true });
+    }
+    return json(res, 405, { error: 'method not allowed' });
   }
 
   // Who is on this port: the one answer any origin may read, so a page can walk the candidate ports

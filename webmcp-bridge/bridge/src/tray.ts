@@ -13,9 +13,9 @@ export interface TrayDeps { registry: Registry; config: DaemonConfig; agentCount
 
 /**
  * macOS menu bar presence ("webmcp-bridge"), owned by the daemon: spawns the tiny status-item helper that ships next
- * to the daemon bundle (plugin/daemon/tray/webmcp-bridge-tray) and drives it over JSON lines. The menu bar icon is the
- * icon as a template image (plugin/daemon/tray/webmcp-bridge-icon.png, next to the helper); without it the helper
- * falls back to an SF Symbol. If the helper is missing or we are not on macOS, the daemon simply runs without a tray. Plan D-30.
+ * to the daemon bundle (plugin/daemon/tray/webmcp-bridge-tray) and drives it over JSON lines. The menu bar glyph is an
+ * SF Symbol; a PNG next to the helper (webmcp-bridge-icon.png, or WEBMCP_TRAY_ICON) replaces it as a template image
+ * when one is shipped. If the helper is missing or we are not on macOS, the daemon simply runs without a tray. Plan D-30.
  */
 export class Tray {
   readonly #deps: TrayDeps;
@@ -34,7 +34,7 @@ export class Tray {
     return candidates.find((p) => existsSync(p));
   }
 
-  /** The icon shipped next to the helper (launchd and the plugin hook copy it alongside). */
+  /** An optional PNG next to the helper (launchd and the plugin hook copy it alongside when it exists). */
   static iconPath(helper: string): string | undefined {
     const p = process.env.WEBMCP_TRAY_ICON ?? join(dirname(helper), 'webmcp-bridge-icon.png');
     return existsSync(p) ? p : undefined;
@@ -45,7 +45,6 @@ export class Tray {
     const helper = Tray.helperPath();
     if (!helper) { log.warn('tray: helper not found; running without a menu bar item'); return false; }
     this.#icon = Tray.iconPath(helper);
-    if (!this.#icon) log.warn('tray: icon not found next to the helper; using the fallback symbol');
     const child = spawn(helper, [], { stdio: ['pipe', 'pipe', 'inherit'] });
     this.#child = child;
     let buf = '';

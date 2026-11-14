@@ -64,6 +64,10 @@ export const AGENT_CHAT_CSS = `
 .wmc-thread-meta{color:var(--wmc-muted);font-size:.72rem;white-space:nowrap;flex:none}
 .wmc-thread[data-state=prompting] .wmc-thread-meta{color:var(--wmc-accent)}.wmc-thread[data-state=needs-permission] .wmc-thread-meta{color:#ea580c;font-weight:600}
 .wmc-chat .wmc-thread-del{border:0;background:none;color:var(--wmc-muted);padding:.2rem .5rem;font-size:1rem;line-height:1}.wmc-chat .wmc-thread-del:hover{color:var(--wmc-err)}
+.wmc-handoffs{border-bottom:1px solid var(--wmc-border)}
+.wmc-handoffs-head{padding:.35rem .6rem .1rem;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--wmc-muted)}
+.wmc-handoff[data-live=true] .wmc-thread-meta{color:#b45309}
+.wmc-handoff .wmc-thread-title small{display:block;font-weight:400;color:var(--wmc-muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis}
 .wmc-thread-confirm{display:flex;gap:.3rem;align-items:center;font-size:.75rem;padding-right:.3rem;white-space:nowrap}
 .wmc-chat .wmc-thread-confirm button{padding:.1rem .4rem;font-size:.75rem}
 .wmc-widget{align-self:stretch;min-width:0;max-width:100%;border:1px solid var(--wmc-border);border-left:3px solid var(--wmc-accent);border-radius:8px;background:#fff;padding:.5rem .6rem;display:flex;flex-direction:column;gap:.4rem;font-size:.9rem}

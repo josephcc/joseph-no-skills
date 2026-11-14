@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "webmcp-claude-hooligan",
+      "name": "webmcp-bridge",
       "devDependencies": {
         "@types/node": "26.6.6",
         "bun-types": "^1.4.4",
@@ -39,7 +39,7 @@
     },
     "packages/connector": {
       "name": "webmcp-connector",
-      "version": "0.0.1",
+      "version": "0.0.6",
       "dependencies": {
         "@agentclientprotocol/sdk": "2.4.0",
         "react-markdown": "10.1.0",
@@ -50,8 +50,8 @@
         "@types/react-dom": "19.3.0",
       },
       "peerDependencies": {
-        "react": "19.3.1",
-        "react-dom": "19.3.1",
+        "react": ">=18.0.0",
+        "react-dom": ">=18.0.0",
       },
       "optionalPeers": [
         "react",

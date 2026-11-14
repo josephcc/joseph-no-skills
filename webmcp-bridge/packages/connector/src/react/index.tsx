@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type ThreadInfo } from '../agent.ts';
+import { explainLoadError, forgetHandoff, handoffLabel, listHandoffs, type HandoffInfo } from '../handoffs.ts';
 import type { PendingElicitation, PendingPermission, SessionSnapshot, TextItem, ToolCallItem, Turn, TurnItem } from '../session-model.ts';
 import type { ConnectorStatus, PageConnection } from '../types.ts';
 import { pageToolOf, widgetInstanceOf } from '../widgets.ts';
@@ -9,6 +10,7 @@ import { ensureStyles } from './styles.ts';
 import { clearWidgetState, ElicitationView, resolveWidget, sweepWidgetState, threadScope, WidgetHost, type WidgetMap } from './widgets.tsx';
 
 export type { AgentConnection, AgentHandle, AgentOptions, ThreadInfo } from '../agent.ts';
+export { listHandoffs, forgetHandoff, handoffLabel, explainLoadError, type HandoffInfo } from '../handoffs.ts';
 export type { SessionSnapshot, Turn, TurnItem, TextItem, ThoughtItem, ToolCallItem, PendingPermission, PendingElicitation, ElicitationResult, ConfigOption } from '../session-model.ts';
 export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, type WidgetInstance, type WidgetStatus } from '../widgets.ts';
 export { ElicitationView, FloatingWidgetPanel, WidgetHost, useWidgetState, widgetStateKey, threadScope, clearWidgetState, removeWidgetState, sweepWidgetState, resolveWidget, elicitationInitialValues, elicitationContent, elicitationMissing, PAGE_SCOPE, type WidgetProps, type WidgetComponent, type WidgetMap, type WidgetSpec, type WidgetPlacement, type ResolvedWidget, type FloatingWidgetPanelProps } from './widgets.tsx';
@@ -39,6 +41,8 @@ export interface AgentChatHeaderContext {
   autoAllow: boolean;
   agents: Array<{ id: string; name: string; default: boolean }>;
   chosenAgent: string;
+  /** Terminal sessions offered to this page (plans/terminal-handoff), newest first. */
+  handoffs: HandoffInfo[];
   actions: {
     connect(): void;
     disconnect(): void;
@@ -51,6 +55,10 @@ export interface AgentChatHeaderContext {
     setMode(modeId: string): void;
     setAutoAllow(on: boolean): void;
     setAgent(id: string): void;
+    /** Continue a terminal session in the panel, connecting first when needed. */
+    openHandoff(sessionId: string): void;
+    forgetHandoff(sessionId: string): void;
+    refreshHandoffs(): void;
   };
 }
 
@@ -84,6 +92,12 @@ export interface AgentChatProps {
   threads?: boolean;
   /** Which threads to list (and count); the others stay stored but out of sight. Default: all. */
   threadFilter?: (thread: ThreadInfo) => boolean;
+  /** List the terminal sessions offered to this page under "From your terminal" when the daemon reports them. Default true. */
+  handoffs?: boolean;
+  /** The handoffs waiting for this page, each time the list is read; a page shows its own banner from it. */
+  onHandoffs?: (handoffs: HandoffInfo[]) => void;
+  /** Open this thread, connecting first when needed, whenever the value changes: a page's one-click "Continue the terminal thread". */
+  openThreadRequest?: { id: string; at: number };
   /** Show the footer (thread, agent, commands, usage, the daemon link). Default true. */
   footer?: boolean;
   /** Open the chat as soon as the page is connected to the daemon, once, instead of waiting for the Connect button. Default false. */
@@ -117,12 +131,13 @@ const DEFAULT_SETUP = { title: 'Local Claude is not running yet', steps: [
   'Come back here: this panel connects by itself.',
 ] };
 
-export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, sessionStorageKey, showThoughts = true, threads: threadsEnabled = true, threadFilter, footer = true, autoConnect = false, onHandle, className, setup, widgets, renderElicitation, renderHeader, renderMessage, renderToolCall, renderEmpty, renderComposer }: AgentChatProps) {
+export function AgentChat({ page, agentOptions, title = 'Local Claude', placeholder = 'Ask about this page, or tell Claude what to change…', rememberSession = true, sessionStorageKey, showThoughts = true, threads: threadsEnabled = true, threadFilter, handoffs: handoffsEnabled = true, onHandoffs, openThreadRequest, footer = true, autoConnect = false, onHandle, className, setup, widgets, renderElicitation, renderHeader, renderMessage, renderToolCall, renderEmpty, renderComposer }: AgentChatProps) {
   ensureStyles();
   const [pageStatus, setPageStatus] = useState<ConnectorStatus>(page.status);
   const [conn, setConn] = useState<AgentConnection>();
   const [handle, setHandle] = useState<AgentHandle>();
   const [threads, setThreads] = useState<ThreadInfo[]>([]);
+  const [handoffList, setHandoffList] = useState<HandoffInfo[]>([]);
   const [showThreads, setShowThreads] = useState(false);
   const [switching, setSwitching] = useState<string>();          // thread id being opened, or 'new'
   const [confirmDelete, setConfirmDelete] = useState<string>();
@@ -138,7 +153,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const connRef = useRef<AgentConnection | undefined>(undefined);
   const onHandleRef = useRef(onHandle);
   onHandleRef.current = onHandle;
+  const onHandoffsRef = useRef(onHandoffs);
+  onHandoffsRef.current = onHandoffs;
   const mountedRef = useRef(true);
+  /** A connect() in flight, visible synchronously: two effects in one commit must not both open a connection. */
+  const connectingRef = useRef(false);
   const agents = pageStatus.agents ?? [];
   const chosenAgent = agentId ?? agentOptions?.agent ?? agents.find((a) => a.default)?.id ?? 'claude';
   const commandMatches = useMemo(() => {
@@ -148,9 +167,21 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   }, [input, snap.commands]);
   /** Last active thread per origin (and per agent other than Claude, so ids never cross agents); a page may key it itself. */
   const storageKeyFor = useCallback((agent: string) => `${sessionStorageKey ?? `webmcp-connector:session:${location.origin}`}${agent === 'claude' ? '' : `:${agent}`}`, [sessionStorageKey]);
-  const visibleThreads = useMemo(() => (threadFilter ? threads.filter(threadFilter) : threads), [threads, threadFilter]);
+  // A handoff thread shows once, under "From your terminal", with the live thread's state when it is open.
+  const handoffIds = useMemo(() => new Set(handoffList.map((h) => h.sessionId)), [handoffList]);
+  const visibleThreads = useMemo(() => (threadFilter ? threads.filter(threadFilter) : threads).filter((t) => !handoffIds.has(t.id)), [threads, threadFilter, handoffIds]);
+  const handoffsOn = handoffsEnabled && !!pageStatus.handoffsUrl;
 
   useEffect(() => page.onStatus(setPageStatus), [page]);
+  const refreshHandoffs = useCallback(async () => {
+    if (!handoffsOn) return;
+    try {
+      const list = await listHandoffs(page);
+      if (!mountedRef.current) return;
+      setHandoffList(list); onHandoffsRef.current?.(list);
+    } catch { /* the daemon went away, or predates handoffs: keep what we had */ }
+  }, [page, handoffsOn]);
+  useEffect(() => { if (handoffsOn) void refreshHandoffs(); else setHandoffList([]); }, [handoffsOn, refreshHandoffs]);
   useEffect(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; }, [snap]);
   useEffect(() => { if (!handle) return; setSnap(handle.model.snapshot()); return handle.model.onChange(setSnap); }, [handle]);   // one subscription per handle; a lost handle keeps the last snapshot on screen
   useEffect(() => {
@@ -178,7 +209,10 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     return () => document.removeEventListener('keydown', onKey);
   }, [showThreads]);
 
-  const connect = useCallback(async (resume = true) => {
+  /** Open the connection and a first thread: `initial` (a handoff, a page's request), else the remembered one, else a new one. */
+  const connect = useCallback(async (resume = true, initial?: string) => {
+    if (connectingRef.current) return;
+    connectingRef.current = true;
     setBusy(true); setError(undefined); setReleased(undefined);
     let c: AgentConnection | undefined;
     try {
@@ -186,19 +220,25 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       if (!mountedRef.current) { c.close(); return; }   // unmounted while connecting: do not publish or keep the connection
       connRef.current?.close(); connRef.current = c; setConn(c);
       const key = storageKeyFor(chosenAgent);
-      const stored = resume && rememberSession ? localStorage.getItem(key) : null;
+      const stored = initial ?? (resume && rememberSession ? localStorage.getItem(key) : null);
       if (stored && c.supportsThreads) {
         try { await c.openThread(stored); }
-        catch { localStorage.removeItem(key); await c.openThread(); }
+        catch (e) {
+          // A requested thread that will not open (a terminal still holds it) is reported, and the panel still gets a thread.
+          if (initial) { if (mountedRef.current) setError(explainLoadError(String((e as Error)?.message ?? e))); void refreshHandoffs(); }
+          else localStorage.removeItem(key);
+          await c.openThread();
+        }
       } else await c.openThread();
       const agentId = c.agentId;
       if (c.supportsThreads) void c.listThreads().then((list) => sweepWidgetState(location.origin, agentId, list.map((t) => t.id))).catch(() => {});
+      void refreshHandoffs();
     } catch (e) {
       if (!mountedRef.current) { c?.close(); return; }
       setError(String((e as Error)?.message ?? e));
       if (c && !c.active) { c.close(); if (connRef.current === c) { connRef.current = undefined; setConn(undefined); } }
-    } finally { if (mountedRef.current) setBusy(false); }
-  }, [page, agentOptions, rememberSession, storageKeyFor, chosenAgent, autoAllow]);
+    } finally { connectingRef.current = false; if (mountedRef.current) setBusy(false); }
+  }, [page, agentOptions, rememberSession, storageKeyFor, chosenAgent, autoAllow, refreshHandoffs]);
 
   const disconnect = useCallback(() => {
     connRef.current?.close(); connRef.current = undefined;
@@ -211,10 +251,29 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
     setSwitching(id ?? 'new'); setError(undefined); setConfirmDelete(undefined);
     try { await c.openThread(id); if (id) setShowThreads(false); }
     catch (e) {
-      if (mountedRef.current) setError(String((e as Error)?.message ?? e));
+      if (mountedRef.current) setError(explainLoadError(String((e as Error)?.message ?? e)));
+      if (id && handoffIds.has(id)) void refreshHandoffs();   // the live state is what changed
       if (!c.active && !c.closed) { try { await c.openThread(); } catch { /* reported above */ } }
     } finally { if (mountedRef.current) setSwitching(undefined); }
-  }, []);
+  }, [handoffIds, refreshHandoffs]);
+
+  /** A handoff: open it on the connection, or open the connection with it. */
+  const openHandoff = useCallback(async (id: string) => {
+    if (connRef.current) await openThread(id);
+    else if (!connectingRef.current) await connect(true, id);
+  }, [openThread, connect]);
+  const forgetOne = useCallback(async (id: string) => {
+    try { await forgetHandoff(page, id); } catch (e) { if (mountedRef.current) setError(String((e as Error)?.message ?? e)); }
+    void refreshHandoffs();
+  }, [page, refreshHandoffs]);
+  // A page's request to open a thread (its own "Continue the terminal thread" button): once per value, once the page is connected.
+  const lastRequestRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!openThreadRequest || openThreadRequest.at === lastRequestRef.current || pageStatus.state !== 'connected') return;
+    if (busy || connectingRef.current) return;   // a connect is in flight: this effect runs again when it settles
+    lastRequestRef.current = openThreadRequest.at;
+    void openHandoff(openThreadRequest.id);
+  }, [openThreadRequest, pageStatus.state, busy, openHandoff]);
 
   const deleteThread = useCallback(async (id: string) => {
     const c = connRef.current; if (!c) return;
@@ -226,8 +285,8 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   const toggleThreads = useCallback(() => {
     const next = !showThreads;
     setShowThreads(next); setConfirmDelete(undefined);
-    if (next) void connRef.current?.listThreads().catch(() => {});
-  }, [showThreads]);
+    if (next) { void connRef.current?.listThreads().catch(() => {}); void refreshHandoffs(); }
+  }, [showThreads, refreshHandoffs]);
 
   /** Send a message to the active thread: after an idle release, reconnect into the same thread first. */
   const sendText = useCallback(async (raw: string) => {
@@ -266,10 +325,11 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   // autoConnect: the first time the daemon is there, open the chat without a click (a later release still waits for the user).
   const autoConnectedRef = useRef(false);
   useEffect(() => {
-    if (!autoConnect || !connected || conn || busy || released || autoConnectedRef.current) return;
+    if (!autoConnect || !connected || conn || busy || released || autoConnectedRef.current || connectingRef.current) return;
+    if (openThreadRequest && openThreadRequest.at !== lastRequestRef.current) return;   // the page's request opens the connection, with its thread
     autoConnectedRef.current = true;
     void connect();
-  }, [autoConnect, connected, conn, busy, released, connect]);
+  }, [autoConnect, connected, conn, busy, released, connect, openThreadRequest]);
   const state = handle ? snap.state : conn ? 'connecting' : released ? 'released' : connected ? 'idle' : pageStatus.state;
   const canType = !switching && !busy && (handle ? snap.state !== 'prompting' : !!released && connected);
   const threadsOn = !!conn && conn.supportsThreads && threadsEnabled;
@@ -277,7 +337,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
 
   const headerContext: AgentChatHeaderContext = {
     state, label: switching ? 'loading' : state, connected, busy, released, error, conn, handle, snapshot: snap,
-    threads: visibleThreads, threadsOn, showThreads, switching, confirmDelete, autoAllow, agents, chosenAgent,
+    threads: visibleThreads, threadsOn, showThreads, switching, confirmDelete, autoAllow, agents, chosenAgent, handoffs: handoffList,
     actions: {
       connect: () => void connect(),
       disconnect,
@@ -290,6 +350,9 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       setMode: (modeId) => void handle?.setMode(modeId),
       setAutoAllow: (on) => { setAutoAllow(on); handle?.setAutoAllowReadOnly(on); },
       setAgent: setAgentId,
+      openHandoff: (id) => void openHandoff(id),
+      forgetHandoff: (id) => void forgetOne(id),
+      refreshHandoffs: () => void refreshHandoffs(),
     },
   };
 
@@ -318,7 +381,7 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
           </select>
         )}
         {handle && snap.state === 'prompting' && <button onClick={() => void handle.cancel()}>Stop</button>}
-        {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{visibleThreads.length ? ` (${visibleThreads.length})` : ''} ▾</button>}
+        {threadsOn && <button onClick={toggleThreads} aria-expanded={showThreads} title="Threads of this page" data-role="threads-toggle">Threads{visibleThreads.length + handoffList.length ? ` (${visibleThreads.length + handoffList.length})` : ''} ▾</button>}
         {conn && <button onClick={() => void openThread()} disabled={!!switching} title="Start a new thread" data-role="new-thread">New</button>}
         {conn ? <button onClick={disconnect}>Disconnect</button>
           : <button className="wmc-primary" disabled={!connected || busy} onClick={() => void connect()}>{busy ? 'Connecting…' : released ? 'Reconnect' : 'Connect to local Claude'}</button>}
@@ -329,9 +392,9 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
       {released && !conn && !busy && <div className="wmc-notice" data-role="released">The connection to local Claude closed (idle chats are released after about ten minutes). Send a message to continue this thread, or <button type="button" data-role="reconnect" onClick={() => void connect()}>reconnect</button> now.</div>}
       {!connected && !conn && <SetupView state={pageStatus.state} setup={setup} />}
       {threadsOn && showThreads && (
-        <ThreadList threads={visibleThreads} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}
-          onOpen={(id) => void openThread(id)} onNew={() => void openThread()} onRefresh={() => void conn.listThreads().catch(() => {})}
-          onAskDelete={setConfirmDelete} onDelete={(id) => void deleteThread(id)} />
+        <ThreadList threads={visibleThreads} handoffs={handoffList} liveThreads={threads} activeId={handle?.sessionId} switching={switching} confirmDelete={confirmDelete} canDelete={conn.supportsDelete}
+          onOpen={(id) => void openThread(id)} onNew={() => void openThread()} onRefresh={() => { void conn.listThreads().catch(() => {}); void refreshHandoffs(); }}
+          onAskDelete={setConfirmDelete} onDelete={(id) => void deleteThread(id)} onForgetHandoff={(id) => void forgetOne(id)} />
       )}
       <div className="wmc-log" ref={logRef}>
         {snap.turns.length === 0 && (renderEmpty ? renderEmpty({ state, handle }) : <div className="wmc-empty">{handle ? 'Session ready. Claude can see this page\'s tools and current state.' : conn ? 'Opening a thread…' : 'Connect to start a chat with your local Claude about this page.'}</div>)}
@@ -374,17 +437,39 @@ export function AgentChat({ page, agentOptions, title = 'Local Claude', placehol
   );
 }
 
-function ThreadList({ threads, switching, confirmDelete, canDelete, onOpen, onNew, onRefresh, onAskDelete, onDelete }: {
-  threads: ThreadInfo[]; switching?: string; confirmDelete?: string; canDelete: boolean;
-  onOpen: (id: string) => void; onNew: () => void; onRefresh: () => void; onAskDelete: (id: string | undefined) => void; onDelete: (id: string) => void;
+function ThreadList({ threads, handoffs = [], liveThreads = [], activeId, switching, confirmDelete, canDelete, onOpen, onNew, onRefresh, onAskDelete, onDelete, onForgetHandoff }: {
+  threads: ThreadInfo[]; handoffs?: HandoffInfo[]; liveThreads?: ThreadInfo[]; activeId?: string; switching?: string; confirmDelete?: string; canDelete: boolean;
+  onOpen: (id: string) => void; onNew: () => void; onRefresh: () => void; onAskDelete: (id: string | undefined) => void; onDelete: (id: string) => void; onForgetHandoff?: (id: string) => void;
 }) {
+  const total = threads.length + handoffs.length;
   return (
     <div className="wmc-threads" data-role="threads">
       <div className="wmc-threads-head">
         <button onClick={onNew} disabled={!!switching}>New thread</button>
         <button onClick={onRefresh} title="Reload the list">Refresh</button>
-        <span>{threads.length === 0 ? 'no threads yet' : `${threads.length} thread${threads.length === 1 ? '' : 's'}`}</span>
+        <span>{total === 0 ? 'no threads yet' : `${total} thread${total === 1 ? '' : 's'}`}</span>
       </div>
+      {handoffs.length > 0 && (
+        <div className="wmc-handoffs" data-role="handoffs">
+          <div className="wmc-handoffs-head" title="Terminal Claude Code sessions offered to this page: opening one continues it here, under the same id">From your terminal</div>
+          <ul>
+            {handoffs.map((h) => {
+              const live = liveThreads.find((t) => t.id === h.sessionId);
+              const active = h.sessionId === activeId;
+              const meta = switching === h.sessionId ? 'loading…' : live && stateLabel(live) ? stateLabel(live) : active ? 'active' : h.live ? (h.live.heldByPage ? 'open in a page' : `${h.live.kind === 'background' ? 'open as a background session' : 'open in your terminal'}${h.live.pid ? ` · pid ${h.live.pid}` : ''}`) : formatAgo(h.offeredAt);
+              return (
+                <li key={h.sessionId} className="wmc-thread wmc-handoff" data-active={active} data-live={!!h.live && !h.live.heldByPage} data-state={live?.state ?? 'stored'} data-id={h.sessionId}>
+                  <button className="wmc-thread-open" onClick={() => onOpen(h.sessionId)} disabled={!!switching || active} title={`${h.sessionId}\n${h.cwd}${h.note ? `\n${h.note}` : ''}`}>
+                    <span className="wmc-thread-title">{handoffLabel(h)}<small>{h.cwd}</small></span>
+                    <span className="wmc-thread-meta">{meta}</span>
+                  </button>
+                  {onForgetHandoff && <button className="wmc-thread-del" title="Forget this handoff (the session itself is kept; claude --resume still finds it)" aria-label="Forget handoff" onClick={() => onForgetHandoff(h.sessionId)}>×</button>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       <ul>
         {threads.map((t) => (
           <li key={t.id} className="wmc-thread" data-active={t.active} data-state={t.state} data-id={t.id}>

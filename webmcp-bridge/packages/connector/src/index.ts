@@ -14,6 +14,7 @@ export { preamble } from './preamble.ts';
 export { discoverDaemon, identifyDaemon, PROBE_TIMEOUT_MS, type DiscoveredDaemon, type DiscoverOptions } from './discover.ts';
 export * from './protocol.ts';
 export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
+export { listHandoffs, forgetHandoff, handoffLabel, explainLoadError, type HandoffInfo } from './handoffs.ts';
 export { CONNECTOR_VERSION } from './version.ts';
 export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type TextItem, type ThoughtItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult, type ConfigOption } from './session-model.ts';
 export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, sanitiseToolName, createActivityLog, deepEqual, ACTIVITY_HEADING, type WidgetInstance, type WidgetStatus, type PendingCall, type ActivityEntry, type ActivityLog } from './widgets.ts';
@@ -143,7 +144,7 @@ export function connect(options: ConnectOptions = {}): PageConnection {
   }
 
   function onWelcome(frame: WelcomeFrame) {
-    emit({ state: 'connected', pageId: frame.pageId, workspaceDir: frame.workspaceDir, mcpUrl: frame.mcpUrl, acpUrl: frame.acpUrl, daemonVersion: frame.daemonVersion, agents: frame.agents, lastError: undefined });
+    emit({ state: 'connected', pageId: frame.pageId, workspaceDir: frame.workspaceDir, mcpUrl: frame.mcpUrl, acpUrl: frame.acpUrl, daemonVersion: frame.daemonVersion, agents: frame.agents, handoffsUrl: frame.handoffsUrl, lastError: undefined });
     void pushTools();
     link.send({ type: 'visibility', visible: document.visibilityState === 'visible' });
   }

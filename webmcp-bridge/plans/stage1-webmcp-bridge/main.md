@@ -128,7 +128,7 @@ Data flow for discovery: page registers tools → `toolchange` in the content sc
 ## 3. Components and repository layout
 
 ```
-webmcp-claude-hooligan/
+webmcp-bridge/
   package.json                 # bun workspaces: extension, bridge, demo-site, shared
   .mcp.json                    # Claude Code project-scope config → http://127.0.0.1:8717/mcp
   README.md                    # quickstart (§8)

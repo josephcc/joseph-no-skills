@@ -115,6 +115,7 @@ export class PageServer {
       stateUrl: `${httpBase}/state?page=${page.id}`,
       acpUrl: `${wsBase}/acp?page=${page.id}`,
       agents: this.deps.agents?.() ?? [{ id: 'claude', name: 'Claude', default: true }],
+      handoffsUrl: `${httpBase}/handoffs?page=${page.id}`,
     };
     send(welcome);
     log.info(`page ${page.id} connected: "${page.title}" ${origin} (context: ${page.hasContext}, instructions: ${hello.instructions?.length ?? 0} chars)`);
