@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/ensure-daemon.sh", "timeout": 30 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/inject-instructions.sh", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/inject-state.sh", "timeout": 15 }
+        ]
+      }
+    ]
+  }
+}

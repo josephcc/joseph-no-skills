@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="730" viewBox="0 0 1200 730" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs>
+  <marker id="head" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L11 6 L1 11 z" fill="#8a9a9e"/></marker>
+  <marker id="tail" markerWidth="12" markerHeight="12" refX="2" refY="6" orient="auto" markerUnits="userSpaceOnUse"><path d="M11 1 L1 6 L11 11 z" fill="#8a9a9e"/></marker>
+</defs>
+<rect width="1200" height="730" fill="#ffffff"/>
+<rect x="40" y="30" width="340" height="60" rx="12" fill="#eef6f4" stroke="#79a9a0" stroke-width="2"/><text x="56" y="63.6" font-size="22" font-weight="700" fill="#1f2a2e">Page (connector)</text>
+<rect x="430" y="30" width="340" height="60" rx="12" fill="#fff4e3" stroke="#d9a441" stroke-width="2"/><text x="446" y="63.6" font-size="22" font-weight="700" fill="#1f2a2e">Daemon</text>
+<rect x="820" y="30" width="340" height="60" rx="12" fill="#eceefb" stroke="#7c86d6" stroke-width="2"/><text x="836" y="63.6" font-size="22" font-weight="700" fill="#1f2a2e">Terminal Claude</text>
+<rect x="40" y="120" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="64" cy="147" r="15" fill="#105257"/><text x="64" y="153" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">1</text><text x="90" y="153" font-size="17" fill="#1f2a2e">GET /id on each candidate port</text>
+<rect x="40" y="190" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="64" cy="217" r="15" fill="#105257"/><text x="64" y="223" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">2</text><text x="90" y="223" font-size="17" fill="#1f2a2e">WebSocket /ws, then hello</text>
+<rect x="430" y="260" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="454" cy="287" r="15" fill="#105257"/><text x="454" y="293" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">3</text><text x="480" y="293" font-size="17" fill="#1f2a2e">approval tab the first time; welcome</text>
+<rect x="40" y="330" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="64" cy="357" r="15" fill="#105257"/><text x="64" y="363" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">4</text><text x="90" y="363" font-size="17" fill="#1f2a2e">tools: the modelContext list</text>
+<rect x="820" y="400" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="844" cy="427" r="15" fill="#105257"/><text x="844" y="433" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">5</text><text x="870" y="433" font-size="17" fill="#1f2a2e">tools/list → the page's tools</text>
+<rect x="820" y="470" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="844" cy="497" r="15" fill="#105257"/><text x="844" y="503" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">6</text><text x="870" y="503" font-size="17" fill="#1f2a2e">tools/call set_sentence</text>
+<rect x="430" y="540" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="454" cy="567" r="15" fill="#105257"/><text x="454" y="573" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">7</text><text x="480" y="573" font-size="17" fill="#1f2a2e">call → the page runs the tool</text>
+<rect x="430" y="610" width="340" height="54" rx="12" fill="#ffffff" stroke="#c9d3d6" stroke-width="2"/><circle cx="454" cy="637" r="15" fill="#105257"/><text x="454" y="643" font-size="16" font-weight="700" text-anchor="middle" fill="#ffffff">8</text><text x="480" y="643" font-size="17" fill="#1f2a2e">call/result → the result to Claude</text>
+<path d="M380 147 L430 147" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M380 217 L430 217" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M430 287 L380 287" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M380 357 L430 357" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M820 427 L770 427" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M820 497 L770 497" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M430 567 L380 567" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<path d="M770 637 L820 637" fill="none" stroke="#8a9a9e" stroke-width="2.5"  marker-end="url(#head)" />
+<text x="600" y="700" font-size="16" text-anchor="middle" fill="#5b6b70">The hooks then attach the page's new state to Claude's next prompt.</text>
+</svg>

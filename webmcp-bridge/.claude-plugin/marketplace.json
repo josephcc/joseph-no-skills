@@ -1,0 +1,13 @@
+{
+  "name": "webmcp-bridge",
+  "owner": { "name": "Joseph Chee Chang" },
+  "metadata": { "description": "Local daemon that connects WebMCP-enabled web pages to Claude Code (terminal via MCP, embedded chat via ACP)." },
+  "plugins": [
+    {
+      "name": "webmcp-daemon",
+      "source": "./plugin",
+      "description": "Runs the local webmcp-daemon, connects Claude Code to it over MCP, and injects each connected page's instructions and live UI state.",
+      "version": "0.0.1"
+    }
+  ]
+}

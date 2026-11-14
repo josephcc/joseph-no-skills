@@ -1,0 +1,240 @@
+import './webmcp-global.ts';
+import { PROTOCOL_VERSION, type DaemonFrame, type ToolInfo, type WelcomeFrame } from './protocol.ts';
+import { discoverDaemon } from './discover.ts';
+import { DaemonLink } from './link.ts';
+import { callTool, debounce, listTools } from './mirror.ts';
+import { hasNativeModelContext, installShim } from './shim.ts';
+import type { ConnectOptions, ConnectorStatus, PageConnection, ToolCallEvent } from './types.ts';
+import { CONNECTOR_VERSION } from './version.ts';
+import { ACTIVITY_HEADING, createActivityLog, type PendingCall } from './widgets.ts';
+
+export type { ConnectOptions, ConnectorState, ConnectorStatus, PageConnection, ToolCallEvent, ToolPolicy } from './types.ts';
+export { installShim, hasNativeModelContext } from './shim.ts';
+export { preamble } from './preamble.ts';
+export { discoverDaemon, identifyDaemon, PROBE_TIMEOUT_MS, type DiscoveredDaemon, type DiscoverOptions } from './discover.ts';
+export * from './protocol.ts';
+export { connectAgent, openAgent, type AgentConnection, type AgentHandle, type AgentOptions, type PermissionModeId, type SwitchPolicy, type ThreadInfo, type ThreadState } from './agent.ts';
+export { CONNECTOR_VERSION } from './version.ts';
+export { SessionModel, type SessionSnapshot, type Turn, type TurnItem, type TextItem, type ThoughtItem, type ToolCallItem, type PendingPermission, type PendingElicitation, type ElicitationResult, type ConfigOption } from './session-model.ts';
+export { pageToolOf, widgetInstanceOf, widgetInstanceOfCall, lookupWidget, sanitiseToolName, createActivityLog, deepEqual, ACTIVITY_HEADING, type WidgetInstance, type WidgetStatus, type PendingCall, type ActivityEntry, type ActivityLog } from './widgets.ts';
+
+const APPROVAL_GRACE_MS = 1_500;
+const MIN_RETRY_MS = 1_000;
+const MAX_RETRY_MS = 15_000;
+/** The terminal hook injects at most 10,000 characters; the daemon's frame header takes some; leave room. */
+const STATE_TEXT_BUDGET = 9_000;
+/** How long a call's claim is remembered after it ends (the floating panel checks claims 400 ms after a start). */
+const CLAIM_MEMORY_MS = 60_000;
+
+/**
+ * Connect this page to the local webmcp-daemon: mirrors the page's WebMCP tools,
+ * answers context requests, and executes tool calls on the daemon's behalf.
+ */
+export function connect(options: ConnectOptions = {}): PageConnection {
+  const mc: ModelContext = (document as Document).modelContext ?? (options.shim === false ? undefined : installShim())!;
+  if (!mc) throw new Error('webmcp-connector: document.modelContext is unavailable and the shim is disabled');
+  const usingShim = !hasNativeModelContext();
+  // A pinned daemonUrl is dialled as given; otherwise every attempt sweeps the candidate ports first (D-4).
+  const pinnedBase = options.daemonUrl ? options.daemonUrl.replace(/\/+$/, '') : undefined;
+  const wsUrl = (base: string) => `${base}/ws?title=${encodeURIComponent(options.title ?? document.title)}`;
+  const link = new DaemonLink(pinnedBase ? wsUrl(pinnedBase) : '');
+  const portOf = (base: string) => { const m = /:(\d+)(?:\/|$)/.exec(base); return m ? Number(m[1]) : undefined; };
+  const minRetry = options.retry?.minMs ?? MIN_RETRY_MS;
+  const maxRetry = options.retry?.maxMs ?? MAX_RETRY_MS;
+
+  const status: ConnectorStatus = { state: 'idle', attempts: 0, toolCount: 0 };
+  const listeners = new Set<(s: ConnectorStatus) => void>();
+  if (options.onStatus) listeners.add(options.onStatus);
+  let instructions = options.instructions;
+  let instructionsSummary = options.instructionsSummary;
+  let wantConnected = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let approvalTimer: ReturnType<typeof setTimeout> | undefined;
+  let backoff = minRetry;
+  const inflight = new Map<string, PendingCall & { controller: AbortController }>();
+  const claims = new Map<string, string>();
+  const claimListeners = new Set<(callId: string, by: string) => void>();
+  const callListeners = new Set<(event: ToolCallEvent) => void>();
+  if (options.onToolCall) callListeners.add(options.onToolCall);
+  const activity = createActivityLog();
+  const emitCall = (event: ToolCallEvent) => { for (const l of callListeners) { try { l(event); } catch (err) { console.error('webmcp-connector: onCall listener failed', err); } } };
+
+  const emit = (patch: Partial<ConnectorStatus>) => {
+    Object.assign(status, patch);
+    for (const l of listeners) l({ ...status });
+  };
+
+  const pushTools = async (): Promise<ToolInfo[]> => {
+    const tools = await listTools(mc);
+    emit({ toolCount: tools.length });
+    link.send({ type: 'tools', tools });
+    return tools;
+  };
+  const pushToolsDebounced = debounce(() => { void pushTools(); }, 100);
+  mc.addEventListener('toolchange', pushToolsDebounced);
+  document.addEventListener('visibilitychange', () => link.send({ type: 'visibility', visible: document.visibilityState === 'visible' }));
+
+  link.on('open', () => {
+    clearTimeout(approvalTimer);
+    backoff = minRetry;
+    link.send({
+      type: 'hello',
+      protocolVersion: PROTOCOL_VERSION,
+      origin: location.origin,
+      url: location.href,
+      title: options.title ?? document.title,
+      instructions,
+      instructionsSummary,
+      hasContext: typeof options.context === 'function',
+      client: `webmcp-connector/${CONNECTOR_VERSION}`,
+    });
+  });
+
+  link.on('frame', (frame: DaemonFrame) => {
+    switch (frame.type) {
+      case 'welcome': onWelcome(frame); break;
+      case 'call': void onCall(frame); break;
+      case 'cancel': inflight.get(frame.callId)?.controller.abort(); break;
+      case 'context/request': void onContextRequest(frame.requestId); break;
+      case 'error': emit({ lastError: frame.message }); break;
+    }
+  });
+
+  link.on('close', ({ code, reason, openedBefore }) => {
+    clearTimeout(approvalTimer);
+    for (const c of inflight.values()) c.controller.abort();
+    inflight.clear();
+    if (!wantConnected) { emit({ state: 'idle' }); return; }
+    if (code === 4403 || reason === 'origin-denied') {
+      wantConnected = false;
+      emit({ state: 'denied', lastError: 'the daemon denied this origin' });
+      return;
+    }
+    const next = openedBefore ? 'searching' : 'absent';
+    emit({ state: next, lastError: openedBefore ? `connection closed (${code})` : 'no daemon listening' });
+    scheduleRetry();
+  });
+
+  function scheduleRetry() {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { if (wantConnected) attempt(); }, backoff);
+    backoff = Math.min(backoff * 2, maxRetry);
+  }
+
+  function attempt() {
+    emit({ state: 'searching', attempts: status.attempts + 1 });
+    const generation = status.attempts;
+    if (pinnedBase) { dial(pinnedBase); return; }
+    void discoverDaemon({ candidates: options.candidatePorts, timeoutMs: options.probeTimeoutMs }).then((found) => {
+      // A disconnect() or a newer attempt while the sweep ran: this one is over.
+      if (!wantConnected || status.attempts !== generation) return;
+      if (!found) { emit({ state: 'absent', lastError: 'no daemon on the known ports' }); scheduleRetry(); return; }
+      dial(found.wsBase);
+    });
+  }
+
+  function dial(base: string) {
+    emit({ port: portOf(base), daemonUrl: base });
+    link.setUrl(wsUrl(base));
+    link.open();
+    // If the socket neither opens nor closes promptly, the daemon is holding the upgrade for approval.
+    clearTimeout(approvalTimer);
+    approvalTimer = setTimeout(() => { if (!link.isOpen && wantConnected) emit({ state: 'needs-approval' }); }, APPROVAL_GRACE_MS);
+  }
+
+  function onWelcome(frame: WelcomeFrame) {
+    emit({ state: 'connected', pageId: frame.pageId, workspaceDir: frame.workspaceDir, mcpUrl: frame.mcpUrl, acpUrl: frame.acpUrl, daemonVersion: frame.daemonVersion, agents: frame.agents, lastError: undefined });
+    void pushTools();
+    link.send({ type: 'visibility', visible: document.visibilityState === 'visible' });
+  }
+
+  async function onCall(frame: Extract<DaemonFrame, { type: 'call' }>) {
+    const controller = new AbortController();
+    const args = frame.args ?? {};
+    inflight.set(frame.callId, { callId: frame.callId, name: frame.name, args, startedAt: Date.now(), signal: controller.signal, controller });
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), frame.timeoutMs);
+    const started = performance.now();
+    emitCall({ callId: frame.callId, name: frame.name, args, phase: 'start' });
+    try {
+      const result = await callTool(mc, frame.name, args, controller.signal);
+      link.send({ type: 'call/result', callId: frame.callId, ok: true, result });
+      inflight.delete(frame.callId);
+      emitCall({ callId: frame.callId, name: frame.name, args, phase: 'end', ok: true, result, durationMs: performance.now() - started });
+    } catch (err) {
+      const e = err as { name?: string; message?: string };
+      const error = { name: e?.name ?? 'Error', message: e?.message ?? String(err) };
+      link.send({ type: 'call/result', callId: frame.callId, ok: false, error });
+      inflight.delete(frame.callId);
+      emitCall({ callId: frame.callId, name: frame.name, args, phase: 'end', ok: false, error: `${error.name}: ${error.message}`, durationMs: performance.now() - started });
+    } finally {
+      clearTimeout(timer);
+      inflight.delete(frame.callId);
+      if (claims.has(frame.callId)) setTimeout(() => claims.delete(frame.callId), CLAIM_MEMORY_MS);
+    }
+  }
+
+  /** The state text for terminal Claude: the page's context(), then the recent widget activity while it fits the hook's budget. */
+  async function stateText(): Promise<string> {
+    const text = String((await options.context!()) ?? '');
+    const entries = activity.entries.slice(-10);
+    if (entries.length === 0) return text;
+    const room = STATE_TEXT_BUDGET - text.length - ACTIVITY_HEADING.length - 4;
+    if (room < 40) return text;
+    const section = activity.format(entries, { maxChars: room });
+    return section ? `${text}\n\n${ACTIVITY_HEADING}\n${section}` : text;
+  }
+
+  async function onContextRequest(requestId: string) {
+    if (!options.context) { link.send({ type: 'context/result', requestId, error: 'page has no context()' }); return; }
+    try {
+      link.send({ type: 'context/result', requestId, text: await stateText() });
+    } catch (err) {
+      link.send({ type: 'context/result', requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  const connection: PageConnection = {
+    get status() { return { ...status }; },
+    get settings() { return { instructions, instructionsSummary, context: options.context, toolPolicy: options.toolPolicy, title: options.title }; },
+    modelContext: mc,
+    usingShim,
+    connect() {
+      if (wantConnected && (link.isOpen || status.state === 'searching')) return;
+      wantConnected = true;
+      backoff = minRetry;
+      attempt();
+    },
+    disconnect() {
+      wantConnected = false;
+      clearTimeout(retryTimer);
+      clearTimeout(approvalTimer);
+      link.close();
+      emit({ state: 'idle', pageId: undefined });
+    },
+    onStatus(listener) {
+      listeners.add(listener);
+      listener({ ...status });
+      return () => listeners.delete(listener);
+    },
+    refreshTools: pushTools,
+    setInstructions(next, summary) {
+      instructions = next;
+      instructionsSummary = summary;
+      link.send({ type: 'instructions', instructions, instructionsSummary });
+    },
+    get calls() { return [...inflight.values()].map(({ controller: _c, ...call }) => ({ ...call, ...(claims.has(call.callId) ? { claimedBy: claims.get(call.callId) } : {}) })); },
+    onCall(listener) { callListeners.add(listener); return () => callListeners.delete(listener); },
+    claimCall(callId, by) {
+      claims.set(callId, by);
+      if (!inflight.has(callId)) setTimeout(() => { if (claims.get(callId) === by) claims.delete(callId); }, CLAIM_MEMORY_MS);
+      for (const l of claimListeners) { try { l(callId, by); } catch (err) { console.error('webmcp-connector: onClaim listener failed', err); } }
+    },
+    claimOf(callId) { return claims.get(callId); },
+    onClaim(listener) { claimListeners.add(listener); return () => claimListeners.delete(listener); },
+    activity,
+  };
+
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  if (options.autoConnect ?? isLocal) connection.connect();
+  return connection;
+}

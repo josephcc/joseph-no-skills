@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WebMCP spike</title></head>
+<body style="background:#eeeeee;font-family:sans-serif;padding:2rem">
+<h1 id="sentence">Hello from the WebMCP spike page.</h1>
+<p>API: <code id="api">?</code></p>
+<script>
+const api = document.modelContext ? 'document.modelContext' : (navigator.modelContext ? 'navigator.modelContext' : 'none');
+document.getElementById('api').textContent = api;
+const mc = document.modelContext || navigator.modelContext;
+window.__registered = [];
+if (mc) {
+  (async () => {
+    await mc.registerTool({
+      name: 'get_state',
+      description: 'Returns the current background color and sentence.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => ({ backgroundColor: document.body.style.backgroundColor, sentence: document.getElementById('sentence').textContent }),
+    });
+    await mc.registerTool({
+      name: 'set_background_color',
+      description: 'Sets the page background color.',
+      inputSchema: { type: 'object', properties: { color: { type: 'string', description: 'CSS color' } }, required: ['color'] },
+      execute: async ({ color }) => { document.body.style.backgroundColor = color; return { ok: true, backgroundColor: document.body.style.backgroundColor }; },
+    });
+    await mc.registerTool({
+      name: 'set_sentence',
+      description: 'Replaces the headline sentence.',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      execute: async ({ text }) => { document.getElementById('sentence').textContent = text; return 'ok: ' + text; },
+    });
+    window.__registered = (await mc.getTools()).map(t => t.name);
+  })().catch(e => { window.__registerError = String(e); });
+}
+</script>
+</body></html>

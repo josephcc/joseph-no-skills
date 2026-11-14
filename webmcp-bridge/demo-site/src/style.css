@@ -1,0 +1,48 @@
+:root { color-scheme: light; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; transition: background-color .3s; min-height: 100vh; }
+.layout { display: grid; grid-template-columns: clamp(28rem, 34vw, 40rem) minmax(0, 1fr); min-height: 100vh; }
+main { max-width: 64rem; margin: 0 auto; padding: 2rem 1.5rem; min-width: 0; }
+.chat-sidebar { grid-column: 1; grid-row: 1; position: sticky; top: 0; height: 100vh; box-sizing: border-box; padding: 1rem; border-right: 1px solid #0002; background: rgba(255,255,255,.65); backdrop-filter: blur(6px); }
+main { grid-column: 2; grid-row: 1; }
+.chat-sidebar .wmc-chat { height: 100%; max-height: none; }
+@media (max-width: 64rem) { .layout { grid-template-columns: 1fr; } .chat-sidebar { grid-column: 1; grid-row: 2; position: static; height: auto; min-height: 28rem; border-right: 0; border-top: 1px solid #0002; } main { grid-column: 1; grid-row: 1; } }
+h1 { font-size: 2rem; margin: 0 0 .5rem; background: rgba(255,255,255,.75); display: inline-block; padding: .3rem .6rem; border-radius: 8px; }
+h2 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; }
+.swatch span { display: inline-block; width: 1.1em; height: 1.1em; vertical-align: middle; border: 1px solid #0003; border-radius: 4px; }
+.badge { display: inline-block; background: #fff; border: 1px solid #0003; border-radius: 999px; padding: .15rem .7rem; margin-right: .5rem; font-size: .85rem; }
+.badge[data-state="connected"] { border-color: #0a7; color: #0a7; }
+.badge[data-state="absent"], .badge[data-state="denied"] { border-color: #c33; color: #c33; }
+.badge[data-state="needs-approval"] { border-color: #e90; color: #e90; }
+.hint { background: #fff8e1; border: 1px solid #f0d080; padding: .5rem .8rem; border-radius: 6px; display: none; }
+.hint:not(:empty) { display: block; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+ul, ol { background: #fff; border-radius: 8px; padding: .6rem 1rem .6rem 2rem; max-height: 22rem; overflow: auto; }
+li { margin: .25rem 0; }
+code { font-family: ui-monospace, monospace; font-size: .9em; }
+button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #888; background: #fff; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.log-ok { color: #0a7; } .log-err { color: #c33; }
+
+/* in-chat widgets (demo-site/src/widgets.tsx) */
+.demo-card { display: flex; flex-direction: column; gap: .4rem; }
+.demo-card-story { margin: 0; font-weight: 600; }
+.demo-card-error { color: #b91c1c; }
+.demo-card-note { color: #6b7280; }
+.demo-palette { list-style: none; margin: 0; padding: 0; background: none; max-height: none; display: flex; flex-direction: column; gap: .35rem; }
+.demo-palette li { display: flex; align-items: center; gap: .6rem; margin: 0; padding: .35rem .4rem; border-radius: 8px; border: 1px solid #e5e7eb; }
+.demo-palette li[data-applied="true"] { border-color: #047857; background: #ecfdf5; }
+.demo-swatch { flex: none; width: 1.6rem; height: 1.6rem; border-radius: 6px; border: 1px solid #0003; }
+.demo-option { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.demo-option small { color: #6b7280; }
+.demo-replies { display: flex; flex-wrap: wrap; gap: .4rem; }
+.demo-replies button { border-radius: 999px; }
+
+/* the output box (show_output) */
+.output { margin: 1.25rem 0 0; }
+.output-head { display: flex; align-items: center; gap: .6rem; }
+.output-head h2 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.output-title { font-weight: 400; color: #374151; }
+.output-title:not(:empty)::before { content: '· '; color: #9ca3af; }
+.output-meta { color: #6b7280; font-size: .85rem; white-space: nowrap; }
+.output-box { margin: .5rem 0 0; background: #111827; color: #e5e7eb; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: .9rem 1rem; border-radius: 10px; min-height: 14rem; max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.output[data-empty="true"] .output-box::before { content: 'Nothing here yet. A tool call to show_output puts text here, from the chat or from a terminal Claude.'; color: #6b7280; }
