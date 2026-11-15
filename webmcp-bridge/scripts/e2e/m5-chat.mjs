@@ -1,11 +1,11 @@
 // M5: the embedded chat inside the demo page, driven through the real browser (CDP).
-// Needs: daemon on 8717 + vite on 5173. Launches its own Chrome. Uses your Claude login/model (costs tokens).
+// Needs: daemon on 8737 + vite on 5173. Launches its own Chrome. Uses your Claude login/model (costs tokens).
 // Since the threads-and-auto-mode plan: new threads start in auto mode (a mutating page tool may run without a
 // prompt), and a thread switch through the Threads panel is exercised with real Claude titles.
 import { launchChrome, waitFor, sleep } from './cdp.mjs';
 
 const DEMO = process.env.DEMO_URL ?? 'http://127.0.0.1:5173/';
-const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8717';
+const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8737';
 const out = { steps: [] }; const t0 = Date.now();
 const step = (name, data) => out.steps.push({ name, at_ms: Date.now() - t0, ...data });
 const { page, close } = await launchChrome({ url: DEMO, webmcp: true, port: 9336 });

@@ -1,11 +1,11 @@
 // M4: ACP through the daemon's own /acp relay (origin-checked), page tools via /mcp/by-page, read-only page tools pre-allowed.
-// Needs: daemon on 8717 (new code) with the demo page connected (hold-page.mjs).
+// Needs: daemon on 8737 (new code) with the demo page connected (hold-page.mjs).
 import { WebSocket } from 'ws';
 import * as acp from '@agentclientprotocol/sdk';
 import { createWebSocketStream } from '@agentclientprotocol/sdk/experimental/ws-client';
 import * as acpU from '@agentclientprotocol/sdk/unstable';
 
-const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8717';
+const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8737';
 const ORIGIN = process.env.PAGE_ORIGIN ?? 'http://127.0.0.1:5173';
 const MODEL = process.env.ACP_MODEL ?? 'sonnet';
 const out = { steps: [] }; const t0 = Date.now();
@@ -20,13 +20,13 @@ step('page', { id: page.id, tools: page.tools, agentsBefore: health.agents?.leng
 
 // A wrong origin must be refused at the upgrade.
 await new Promise((resolve) => {
-  const bad = new WebSocket(`ws://127.0.0.1:8717/acp?page=${page.id}`, { headers: { Origin: 'https://evil.example' } });
+  const bad = new WebSocket(`ws://127.0.0.1:8737/acp?page=${page.id}`, { headers: { Origin: 'https://evil.example' } });
   bad.on('open', () => { step('bad origin', { result: 'UNEXPECTED open' }); bad.close(); resolve(); });
   bad.on('error', (e) => { step('bad origin', { result: 'refused', message: e.message }); resolve(); });
 });
 
 const updates = []; const permissions = [];
-const stream = createWebSocketStream(`ws://127.0.0.1:8717/acp?page=${page.id}`, { WebSocket, headers: { Origin: ORIGIN } });
+const stream = createWebSocketStream(`ws://127.0.0.1:8737/acp?page=${page.id}`, { WebSocket, headers: { Origin: ORIGIN } });
 const text = (u) => (u.content?.type === 'text' ? u.content.text : '');
 const readOnly = ['get_state'];   // the demo marks get_state readOnlyHint; a real client reads this from the page registry
 let sessionId;

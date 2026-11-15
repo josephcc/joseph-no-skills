@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart hook: make sure the webmcp-daemon is running. Idempotent; never installs
+# SessionStart hook: make sure the webmcp-bridge is running. Idempotent; never installs
 # anything persistent (the launchd login item is a separate, opt-in command: D-16, D-26).
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,31 +13,31 @@ if [ -f "$bin_dir/webmcp-daemon.js" ]; then
     src="$here/../daemon/$f"
     if [ -f "$src" ] && ! cmp -s "$src" "$bin_dir/$f"; then mkdir -p "$(dirname "$bin_dir/$f")" && cp "$src" "$bin_dir/$f" && changed=1; fi
   done
-  plist="$HOME/Library/LaunchAgents/com.webmcp.daemon.plist"
-  if [ -z "${WEBMCP_DAEMON_PORT:-}" ] && [ -f "$plist" ] && grep -q '<string>--port</string><string>8717</string>' "$plist" 2>/dev/null; then
+  plist="$HOME/Library/LaunchAgents/com.webmcp-bridge.daemon.plist"
+  if [ -z "${WEBMCP_BRIDGE_PORT:-}" ] && [ -f "$plist" ] && grep -q '<string>--port</string><string>8737</string>' "$plist" 2>/dev/null; then
     # A login item written before port discovery pins the old default; rewrite it so launchd's daemon walks
     # the candidates too (plans/daemon-port-discovery D-7). install-launchd rewrites the plist and re-bootstraps.
     node "$bin_dir/webmcp-daemon.js" install-launchd --state-dir "$WEBMCP_STATE" >/dev/null 2>&1 && changed=0 || true
   fi
-  if [ "$changed" = 1 ] && command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1; then
-    launchctl kickstart -k "gui/$(id -u)/com.webmcp.daemon" >/dev/null 2>&1 || true
+  if [ "$changed" = 1 ] && command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.webmcp-bridge.daemon" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/$(id -u)/com.webmcp-bridge.daemon" >/dev/null 2>&1 || true
   fi
 fi
 if webmcp_healthy; then exit 0; fi
 mkdir -p "$WEBMCP_DATA" "$WEBMCP_STATE"
 daemon_js="$here/../daemon/webmcp-daemon.js"
 daemon_ts="$here/../../bridge/src/index.ts"     # repo checkout (dev) fallback
-if [ -f "$daemon_js" ]; then entry="$daemon_js"; elif [ -f "$daemon_ts" ]; then entry="$daemon_ts"; else echo "webmcp-daemon: no daemon bundle found next to the plugin" >&2; exit 0; fi
-if ! command -v node >/dev/null 2>&1; then echo "webmcp-daemon: node is required to run the daemon" >&2; exit 0; fi
+if [ -f "$daemon_js" ]; then entry="$daemon_js"; elif [ -f "$daemon_ts" ]; then entry="$daemon_ts"; else echo "webmcp-bridge: no daemon bundle found next to the plugin" >&2; exit 0; fi
+if ! command -v node >/dev/null 2>&1; then echo "webmcp-bridge: node is required to run the daemon" >&2; exit 0; fi
 # Detach fully (new process group, no inherited stdio) so the daemon outlives this hook and the session.
 # No --port unless the user pinned one: the daemon takes the first free candidate and records it (D-2, D-7). A second
 # start for the same state directory exits 0 as "already running", so racing the login item is harmless (D-3).
 # shellcheck disable=SC2086
-node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" ${WEBMCP_DAEMON_PORT:+--port "$WEBMCP_DAEMON_PORT"} --tray ${WEBMCP_DAEMON_NO_TRAY:+--no-tray} >/dev/null 2>&1 || { echo "webmcp-daemon: failed to spawn the daemon" >&2; exit 0; }
+node "$here/detach.mjs" "$WEBMCP_DATA/daemon.log" -- node "$entry" serve --state-dir "$WEBMCP_STATE" ${WEBMCP_BRIDGE_PORT:+--port "$WEBMCP_BRIDGE_PORT"} --tray ${WEBMCP_BRIDGE_NO_TRAY:+--no-tray} >/dev/null 2>&1 || { echo "webmcp-bridge: failed to spawn the daemon" >&2; exit 0; }
 for _ in $(seq 1 40); do
-  WEBMCP_PORT="$(webmcp_resolve_port || true)"; WEBMCP_URL="http://127.0.0.1:${WEBMCP_PORT:-8717}"
+  WEBMCP_PORT="$(webmcp_resolve_port || true)"; WEBMCP_URL="http://127.0.0.1:${WEBMCP_PORT:-8737}"
   if webmcp_healthy; then exit 0; fi
   sleep 0.25
 done
-echo "webmcp-daemon: started but not healthy yet (see $WEBMCP_DATA/daemon.log)" >&2
+echo "webmcp-bridge: started but not healthy yet (see $WEBMCP_DATA/daemon.log)" >&2
 exit 0

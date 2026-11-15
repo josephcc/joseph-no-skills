@@ -122,7 +122,7 @@ describe('serve', () => {
     const d = await start(config(dir, [await freePort()]));
     const id = await fetch(`http://${HOST}:${d.port}/id`, { headers: { origin: 'https://example.org' } });
     expect(id.headers.get('access-control-allow-origin')).toBe('*');
-    expect(await id.json()).toEqual({ daemon: 'webmcp-daemon', protocol: 1, version: 'test', instance: d.instance });
+    expect(await id.json()).toEqual({ daemon: 'webmcp-bridge', protocol: 1, version: 'test', instance: d.instance });
     const health = await fetch(`http://${HOST}:${d.port}/health`);
     expect(health.headers.get('access-control-allow-origin')).toBeNull();
     expect(((await health.json()) as { ok: boolean }).ok).toBe(true);
@@ -155,7 +155,7 @@ describe('findRunningDaemon and identify (Codex audit on the port-discovery buil
   });
   test('a record whose port answers as another instance is stale, not ours', async () => {
     const port = await freePort();
-    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 1, version: 'x', instance: 'theirs' } });
+    await fakeDaemon(port, { id: { daemon: 'webmcp-bridge', protocol: 1, version: 'x', instance: 'theirs' } });
     const dir = stateDir();
     writeFileSync(daemonFilePath(dir), JSON.stringify({ pid: process.pid, port, startedAt: 'x', version: 'x', instance: 'ours' }));
     expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toBeNull();
@@ -163,7 +163,7 @@ describe('findRunningDaemon and identify (Codex audit on the port-discovery buil
   });
   test('a legacy record whose port now answers as some new instance (its pid reused) is stale (Codex audit 2)', async () => {
     const port = await freePort();
-    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 1, version: 'x', instance: 'new' }, healthPid: 424242 });
+    await fakeDaemon(port, { id: { daemon: 'webmcp-bridge', protocol: 1, version: 'x', instance: 'new' }, healthPid: 424242 });
     const dir = stateDir();
     writeFileSync(daemonFilePath(dir), JSON.stringify({ pid: process.pid, port, startedAt: 'x', version: '0.0.1' }));
     expect(await findRunningDaemon(dir, HOST, { waitMs: 300 })).toBeNull();
@@ -171,7 +171,7 @@ describe('findRunningDaemon and identify (Codex audit on the port-discovery buil
   });
   test('identify passes over a daemon of another protocol version', async () => {
     const port = await freePort();
-    await fakeDaemon(port, { id: { daemon: 'webmcp-daemon', protocol: 2, version: 'x', instance: 'i' } });
+    await fakeDaemon(port, { id: { daemon: 'webmcp-bridge', protocol: 2, version: 'x', instance: 'i' } });
     expect(await identify(HOST, port)).toBeNull();
   });
 });

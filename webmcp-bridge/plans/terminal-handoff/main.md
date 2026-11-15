@@ -100,8 +100,9 @@ The client→agent pipe gains a transform on JSON-RPC requests, pure and unit-te
 | `session/load`, sessionId registered for this origin | **the handoff's cwd** | as above | `systemPrompt` turned into an **append** to Claude Code's preset (a replace-mode string becomes `{ append }`; an append passes; anything else is dropped), per D-9; options filtered as above |
 | `session/load`, any other id | the workspace | as above | as `session/new` |
 | `session/list` | the workspace | — | — |
+| `session/delete` | — | — | forwarded only for a thread of the page's own workspace (its transcript under `~/.claude/projects/<workspace slug>/`); otherwise answered with an error: a terminal's offered session is forgotten from the list, never deleted |
 
-Anything the page sent that was replaced is logged once per connection at `info` ("rewrote cwd for session/new from … to …"), so a misbehaving page is visible in the daemon log. This is the fix the security audit specified for F-1, with the handoff as the single, registry-keyed exception. A connection without a page (`/acp` with no `?page=`) keeps the `unknown` workspace as before.
+Every guarded request is **rebuilt** from the fields above rather than copied from the page's object, so a top-level `systemPrompt`, `additionalDirectories` or `_meta.additionalRoots` the page adds never reaches the adapter; `allowedTools` keeps only the page's own `mcp__page__*` tools; a call whose `id` is `null` is still a request to the SDK and is guarded like any other, and a guarded method sent with no `id` at all is dropped (security audit of 2026-11-14, below). Anything the page sent that was replaced is logged once per connection at `info` ("rewrote cwd for session/new from … to …"), so a misbehaving page is visible in the daemon log. This is the fix the security audit specified for F-1, with the handoff as the single, registry-keyed exception. A connection without a page (`/acp` with no `?page=`) keeps the `unknown` workspace as before.
 
 ### 2.4 Connector and panel (`packages/connector`)
 
@@ -252,7 +253,7 @@ A daemon restart or a page opened an hour later still sees the offer; the same t
 </decision>
 
 <decision id="D-8" title="The daemon itself refuses a handoff load while another process holds the session" status="locked" date="2026-11-14">
-Found during verification ([F-2](#F-2)): Claude Code refuses a second resume only for *background* sessions; an interactive terminal session resumed from elsewhere simply gets a second writer on the same transcript. So the relay, before forwarding a `session/load` of a registered handoff, asks `claude agents --json` afresh (no cache) who holds that id; if anyone does, it answers the request in the agent's place with a JSON-RPC error that names the holder (pid, kind, state) and what to do (Ctrl+D there, or `claude stop` for a background session), and the panel shows it. A holder whose parent process is one of the daemon's own agents (`ps -o ppid=`) does not count, so a page's reload inside the five-second grace period of its previous agent still works, and the thread list marks such a row *open in a page* rather than *open in your terminal*.
+Found during verification ([F-2](#F-2)): Claude Code refuses a second resume only for *background* sessions; an interactive terminal session resumed from elsewhere simply gets a second writer on the same transcript. So the relay, before forwarding a `session/load` of a registered handoff, asks `claude agents --json` afresh (no cache) who holds that id; if anyone does, it answers the request in the agent's place with a JSON-RPC error that names the holder (pid, kind, state) and what to do (Ctrl+D there, or `claude stop` for a background session), and the panel shows it. A holder whose parent process is one of the daemon's own agents (`ps -o ppid=`) does not count, so a page's reload inside the five-second grace period of its previous agent still works, and the thread list marks such a row *open in a page* rather than *open in your terminal*. The live list can carry one session id more than once; every row is checked and any holder that is not the daemon's own wins.
 <rationale>D-1's baton only holds if someone enforces it; the CLI does not for the case that matters here. The check costs one `claude agents --json` per handoff load (about a second) and nothing on any other frame.</rationale>
 </decision>
 
@@ -357,3 +358,26 @@ science-kg (`/Users/josephc/git/s2/science-kg`, branch `staging`) talks to the d
 - webmcp-bridge `scripts/e2e/m9-widgets.mjs`: exit 0, 16 steps — cards, chips, the activity resource, an unmapped tool, a form, restore after reload, the floating panel, the state text for the terminal hook, idle release and reconnect.
 
 What this does not cover: a paid run of science-kg against real Claude (its `local-chat-paid.mjs`), and science-kg re-vendoring the connector, which would bring the panel's handoff section along; both are Joseph's calls.
+
+## Codex audit — 2026-11-14
+
+Security-focused audit of the handoff work (commit 730f5ce plus the uncommitted two-daemons rename), gpt-5.5 at xhigh reasoning: one run over the bridge, then four narrow follow-ups on the fixes (six Codex calls in all, with the skill-side run; the budget was fifteen). Every finding was verified against the code and the bundled adapter before acting; none was rejected.
+
+**Codex verdict (first run):** "The terminal handoff/session guard still leaves several security-sensitive bypasses: raw ACP can preserve untrusted session fields, delete handed-off transcripts, and over-broaden tool approvals, while the handoff liveness and read routes have edge cases that break the intended trust boundary. The two-daemon rename also misses the pinned-port identity check in the hooks, so coexistence can still collide under a pinned environment."
+**Issue counts (Codex's, first run):** P1:4 P2:2 (the reports did not print the ISSUES line); follow-ups: P1:1, then P1:1 P2:1, then P2:2, then P2:1.
+
+**Changes made in response:**
+- `bridge/src/session-guard.ts` — every guarded request (`session/new`, `session/load`, `session/list`) is rebuilt from an allow-list of fields instead of copying the page's object: a top-level `systemPrompt` (which the adapter reads in preference to `_meta.systemPrompt`), `additionalDirectories` and `_meta.additionalRoots` never reach the adapter (run 1, P1); `allowedTools` keeps only `mcp__page__*` names, `disallowedTools` only strings, `model` only a string (run 1, P2); unknown `_meta` keys are dropped.
+- `bridge/src/session-guard.ts`, `acp.ts` — `session/delete` is answered by the relay unless the id is not a registered handoff (any origin, any casing) and the transcript is the page's own: present under the workspace's project directory (the adapter's encoding, the given and the real path, and every prefix-matching directory for names past 200 characters) with a recorded `cwd` equal to the workspace (run 1, P1; follow-ups 2 and 3, P2; follow-up 4, P2 re-rated P3).
+- `bridge/src/session-guard.ts` — a call with `id: null` is a request to the SDK and is guarded like any other; a guarded method or a delete sent without an `id` is dropped, never forwarded (follow-up 1, P1).
+- `bridge/src/session-guard.ts` — the relay's own error codes moved to -32040 and -32041: the SDK's client reads -32002 on `session/delete` and `session/close` as success, so the refusal would have looked like one (follow-up 2, P2).
+- `bridge/src/handoffs.ts` — every row of `claude agents --json` with the session id is considered and any holder that is not one of the daemon's own agents blocks the load; the list can carry one id twice (run 1, P1). `get`, `forOrigin` and `forget` lower-case the id they are given (follow-up 3, P2).
+- `bridge/src/http.ts` — `isLoopbackHost`: every request and upgrade whose `Host` is not `127.0.0.1`, `localhost`, `[::1]` or the configured host, with the daemon's port, is refused; this closes the DNS-rebinding read of `/handoffs`, `/status.json` and the rest (run 1, P2; the upstream audit's deferred F-4, now marked fixed there).
+- `plugin/scripts/common.sh` — a pinned `WEBMCP_BRIDGE_PORT` is used only when `/id` on it answers as this daemon (run 1, P2).
+- Tests for each in `bridge/test/session-guard.test.ts`, `handoffs.test.ts`, `hooks.test.ts`; 119 pass; the plugin bundle rebuilt.
+
+**Deferred / not actioned:**
+- JSON-RPC batch arrays as a guard bypass: checked by the implementing agent, not a hole (the ACP SDK refuses batches with "JSON-RPC batches are not supported"); the guard passes an array through for the adapter to refuse.
+- Prompt injection through page content and the per-prompt state block: inherent to the design, covered by the connector's preamble; unchanged.
+
+Codex's full final messages saved at `/tmp/codex-audit-20261114-151118-report.md`, `-fix-report.md`, `-fix2-report.md`, `-fix3-report.md`, `-fix4-report.md` (this run).

@@ -1,6 +1,6 @@
 // M3 spike: ACP over WebSocket → AcpServer → spawned claude-agent-acp, with the demo page's tools
 // passed as an HTTP MCP server, a replaced system prompt, and a per-session tool policy.
-// Needs: daemon on 8717 with the demo page connected (hold-page.mjs), claude logged in.
+// Needs: daemon on 8737 with the demo page connected (hold-page.mjs), claude logged in.
 import { createServer } from 'node:http';
 import { spawn, execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { AcpServer } from '@agentclientprotocol/sdk/experimental/server';
 import { createNodeHttpHandler, createNodeWebSocketUpgradeHandler } from '@agentclientprotocol/sdk/experimental/node';
 import { createWebSocketStream } from '@agentclientprotocol/sdk/experimental/ws-client';
 
-const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8717';
+const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:8737';
 const PORT = Number(process.env.ACP_PORT ?? 8790);
 const MODEL = process.env.ACP_MODEL ?? 'sonnet';
 const ADAPTER = new URL('../../node_modules/.bin/claude-agent-acp', import.meta.url).pathname;

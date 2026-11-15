@@ -153,9 +153,9 @@ function showStatus(s: ConnectorStatus) {
   const b = $('daemon-badge'); b.dataset.state = s.state;
   b.textContent = `daemon: ${s.state}${s.pageId ? ` (page ${s.pageId})` : ''}`;
   const hints: Record<string, string> = {
-    absent: 'No local daemon on the known ports (8717 and its fallbacks). Install the Claude Code plugin and run `claude` once (one-time setup: it starts the daemon, which then lives in the menu bar as "webmcp-bridge"); the chat you want is the panel on the left. Retrying…',
+    absent: 'No local daemon on the known ports (8737 and its fallbacks). Install the Claude Code plugin and run `claude` once (one-time setup: it starts the daemon, which then lives in the menu bar as "webmcp-bridge"); the chat you want is the panel on the left. Retrying…',
     'needs-approval': 'The daemon is asking you to approve this page: look for a new tab titled "approve origin".',
-    denied: 'This page was denied by the daemon. Allow it from the approval page or `webmcp-daemon status`.',
+    denied: 'This page was denied by the daemon. Allow it from the approval page or `webmcp-bridge status`.',
   };
   $('hint').textContent = hints[s.state] ?? '';
   $('connect-btn').style.display = s.state === 'connected' || s.state === 'searching' ? 'none' : '';

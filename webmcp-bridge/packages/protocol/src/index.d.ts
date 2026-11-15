@@ -1,9 +1,9 @@
 /**
- * Wire protocol between a page (via webmcp-connector) and the webmcp-daemon,
+ * Wire protocol between a page (via webmcp-connector) and the webmcp-bridge,
  * spoken as JSON text frames over the `/ws` WebSocket. See plans/combined/main.md §5.1.
  */
 export declare const PROTOCOL_VERSION: 1;
-export declare const DEFAULT_PORT = 8717;
+export declare const DEFAULT_PORT = 8737;
 export declare const PING_INTERVAL_MS = 20000;
 export declare const DEFAULT_CALL_TIMEOUT_MS = 60000;
 /** Hook-injected context is capped by Claude Code at 10,000 characters; leave headroom. */

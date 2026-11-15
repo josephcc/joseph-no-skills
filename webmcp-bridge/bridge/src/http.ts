@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DAEMON_NAME, MAX_INJECTED_CHARS, PROTOCOL_VERSION } from 'webmcp-protocol';
+import { CANDIDATE_PORTS, DAEMON_NAME, MAX_INJECTED_CHARS, PROTOCOL_VERSION } from 'webmcp-protocol';
 import { installLaunchd, uninstallLaunchd } from './launchd.ts';
 import type { DaemonConfig } from './config.ts';
 import type { HandoffRegistry } from './handoffs.ts';
@@ -32,9 +32,29 @@ export interface HttpDeps {
   adapterPids?: () => number[];
 }
 
+/**
+ * Loopback only, by the Host header too: a DNS-rebinding page resolves its own hostname to 127.0.0.1 and then reaches
+ * every route with a same-origin request that carries no Origin header. Its Host header still names that hostname,
+ * so nothing is served to it. Every client of ours (the connector's sweep, the hooks, the relay, the status page) uses
+ * 127.0.0.1 or localhost with the daemon's port.
+ */
+export function isLoopbackHost(host: string | undefined, port: number, extra?: string): boolean {
+  if (!host) return false;
+  const m = /^(\[[^\]]+\]|[^:\s]+)(?::(\d+))?$/.exec(host.trim());
+  if (!m) return false;
+  const name = m[1]!.toLowerCase();
+  const p = m[2] !== undefined ? Number(m[2]) : undefined;
+  const ok = name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || (extra !== undefined && name === extra.toLowerCase());
+  return ok && (p === undefined || p === port);
+}
+
 export function createHttpServer(deps: HttpDeps): Server {
-  const server = createServer((req, res) => { void route(deps, req, res).catch((err) => { log.error(`http ${req.method} ${req.url}: ${String(err)}`); if (!res.headersSent) json(res, 500, { error: String(err) }); }); });
+  const server = createServer((req, res) => {
+    if (!isLoopbackHost(req.headers.host, deps.config.port, deps.config.host)) { log.warn(`refused ${req.method} ${req.url} for host ${JSON.stringify(req.headers.host ?? '')}`); json(res, 403, { error: 'host not loopback' }); return; }
+    void route(deps, req, res).catch((err) => { log.error(`http ${req.method} ${req.url}: ${String(err)}`); if (!res.headersSent) json(res, 500, { error: String(err) }); });
+  });
   server.on('upgrade', (req, socket, head) => {
+    if (!isLoopbackHost(req.headers.host, deps.config.port, deps.config.host)) { log.warn(`refused upgrade ${req.url} for host ${JSON.stringify(req.headers.host ?? '')}`); socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
     const path = new URL(req.url ?? '/', 'http://x').pathname;
     if (path === '/ws') { void deps.pages.handleUpgrade(req, socket, head); return; }
     if (path === '/acp' && deps.acpUpgrade) { deps.acpUpgrade(req, socket, head); return; }
@@ -62,12 +82,13 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
   }
 
   if (path === '/' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(statusPageHtml()); return; }
+  if (path === '/favicon.ico') { res.writeHead(204); res.end(); return; }   // the status page has no icon; keep the browser console quiet
   if (path === '/status.json') {
     const sel = registry.selected()?.id;
-    const loginInstalled = existsSync(join(homedir(), 'Library', 'LaunchAgents', 'com.webmcp.daemon.plist'));
+    const loginInstalled = existsSync(join(homedir(), 'Library', 'LaunchAgents', 'com.webmcp-bridge.daemon.plist'));
     let logTail = '';
     try { logTail = readFileSync(join(config.stateDir, 'daemon.log'), 'utf8').split('\n').slice(-40).join('\n'); } catch { /* no log yet */ }
-    return json(res, 200, { version: config.version, port: config.port, stateDir: config.stateDir, loginInstalled, pid: process.pid,
+    return json(res, 200, { version: config.version, port: config.port, ports: config.portPinned ? [config.port] : (config.portCandidates ?? CANDIDATE_PORTS), stateDir: config.stateDir, loginInstalled, pid: process.pid,
       pages: registry.all().map((p) => ({ id: p.id, title: p.title, origin: p.origin, tools: p.tools.length, selected: p.id === sel })),
       agents: deps.acpStatus?.() ?? [], origins: policy.snapshot(),
       handoffs: (deps.handoffs?.all() ?? []).map(({ tags: _tags, ...h }) => h), logTail });
@@ -209,19 +230,27 @@ async function route(deps: HttpDeps, req: IncomingMessage, res: ServerResponse):
 
 function statusPageHtml(): string {
   return `<!doctype html><meta charset="utf-8"><title>webmcp-bridge</title>
-<style>body{font:15px/1.5 system-ui;margin:2rem auto;max-width:44rem;padding:0 1rem;color:#1a1a1a}h1{font-size:1.4rem}h2{font-size:1rem;margin:1.4rem 0 .4rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}button{font:inherit;padding:.35rem .8rem;border-radius:6px;border:1px solid #888;background:#fff;cursor:pointer}.on{background:#0a7;color:#fff;border-color:#0a7}.muted{color:#666}ul{padding-left:1.2rem}pre{background:#111;color:#eee;padding:.6rem;border-radius:6px;font-size:.8rem;max-height:16rem;overflow:auto}</style>
-<h1>● webmcp-bridge <span class="muted" id="v"></span></h1>
-<p>The local daemon that connects web pages to your Claude Code. Everything on this page stays on this computer.</p>
-<p><button id="login"></button> <span class="muted">A login item keeps the daemon (and this menu bar presence) available without a terminal.</span></p>
-<h2>Connected pages</h2><ul id="pages"><li class="muted">none</li></ul>
-<h2>Embedded chats</h2><ul id="agents"><li class="muted">none</li></ul>
-<h2>Approved origins</h2><ul id="origins"><li class="muted">none</li></ul>
-<h2>Claude Code</h2><p>MCP endpoint: <code id="mcp"></code> · state folder: <code id="state"></code></p>
-<h2>Log</h2><pre id="log"></pre>
+<style>:root{--accent:#5b4bd6;--deep:#2d2a6e;--bg:#f6f5ff;--border:#dedbf5;--muted:#6b6a85}
+body{font:15px/1.5 system-ui;margin:0;background:var(--bg);color:#1d1b3a}
+header{background:linear-gradient(135deg,var(--deep),var(--accent));color:#fff;padding:1.2rem 1.5rem}header h1{margin:0;font-size:1.3rem;font-weight:600}header p{margin:.2rem 0 0;opacity:.85;font-size:.9rem}header code{background:rgba(255,255,255,.18);color:#fff}
+main{max-width:46rem;margin:1.2rem auto;padding:0 1rem}section{background:#fff;border:1px solid var(--border);border-radius:10px;padding:.8rem 1rem;margin:.8rem 0}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin:0 0 .4rem}code{background:#eeecfb;padding:.1rem .3rem;border-radius:4px}
+button{font:inherit;padding:.35rem .8rem;border-radius:6px;border:1px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer}.on{background:var(--accent);color:#fff}
+.muted{color:var(--muted)}ul{padding-left:1.2rem;margin:.2rem 0}pre{background:#1d1b3a;color:#e9e7ff;padding:.6rem;border-radius:8px;font-size:.78rem;max-height:16rem;overflow:auto}.live{color:#b45309}.held{color:var(--accent)}</style>
+<header><h1>webmcp-bridge <span id="v" style="opacity:.7;font-weight:400"></span></h1><p>The skills' bridge between web pages and your Claude Code, on port <code id="port"></code>. Everything on this page stays on this computer.</p></header>
+<main>
+<section><button id="login"></button> <span class="muted">A login item keeps the daemon (and its menu bar item) available without a terminal.</span></section>
+<section><h2>Connected pages</h2><ul id="pages"><li class="muted">none</li></ul></section>
+<section><h2>Embedded chats</h2><ul id="agents"><li class="muted">none</li></ul></section>
+<section><h2>Terminal handoffs</h2><ul id="handoffs"><li class="muted">none</li></ul><p class="muted" style="margin:.3rem 0 0;font-size:.82rem">A terminal Claude Code session offered to a page: its chat continues the thread under the same id.</p></section>
+<section><h2>Approved origins</h2><ul id="origins"><li class="muted">none</li></ul></section>
+<section><h2>Claude Code</h2><p>MCP endpoint: <code id="mcp"></code> · state folder: <code id="state"></code> · candidate ports: <code id="ports"></code></p></section>
+<section><h2>Log</h2><pre id="log"></pre></section>
+</main>
 <script>
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){const s=await (await fetch('/status.json')).json();
-document.getElementById('v').textContent='v'+s.version;
+document.getElementById('v').textContent='v'+s.version;document.getElementById('port').textContent=s.port;document.getElementById('ports').textContent=(s.ports||[]).join(', ');
 const b=document.getElementById('login');b.textContent=s.loginInstalled?'Start at login: on (click to turn off)':'Start at login: off (click to turn on)';b.className=s.loginInstalled?'on':'';
 b.onclick=async()=>{b.disabled=true;const r=await (await fetch('/launchd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:s.loginInstalled?'uninstall':'install'})})).json();alert(r.message);load();};
 const li=(h)=>'<li>'+h+'</li>';
@@ -231,18 +260,19 @@ const o=[...s.origins.preapproved.map(x=>({o:x,fixed:true})),...s.origins.allowe
 document.getElementById('origins').innerHTML=o.length?o.map(x=>li(esc(x.o)+(x.fixed?' <span class=muted>(command line)</span>':' <button data-o="'+esc(x.o)+'">forget</button>'))).join(''):'<li class=muted>none</li>';
 for(const f of document.querySelectorAll('button[data-o]'))f.onclick=async()=>{await fetch('/origins/forget',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({origin:f.dataset.o})});load();};
 document.getElementById('mcp').textContent=location.origin+'/mcp';document.getElementById('state').textContent=s.stateDir;
-document.getElementById('log').textContent=s.logTail||'(empty)';}
+document.getElementById('log').textContent=s.logTail||'(empty)';
+try{const h=(await (await fetch('/handoffs')).json()).handoffs||[];document.getElementById('handoffs').innerHTML=h.length?h.map(x=>li(esc(x.title||x.cwd)+' <span class=muted>'+esc(x.sessionId.slice(0,8))+' · '+esc(x.cwd)+(x.origin?' · for '+esc(x.origin):'')+'</span> '+(x.live?(x.live.heldByPage?'<span class=held>open in a page</span>':'<span class=live>open in your terminal'+(x.live.pid?' · pid '+x.live.pid:'')+'</span>'):'<span class=muted>waiting</span>'))).join(''):'<li class=muted>none</li>';}catch{}}
 load();setInterval(load,5000);
 </script>`;
 }
 
 function frameState(title: string, origin: string, text: string): string {
-  return `[webmcp] Current UI state of "${title}" (${origin}), captured ${new Date().toISOString()}:\n${text}`;
+  return `[webmcp-bridge] Current UI state of "${title}" (${origin}), captured ${new Date().toISOString()}:\n${text}`;
 }
 
 /** What the plugin's SessionStart hook injects: the summary, or a head of the full text, plus pointers (≤ MAX_INJECTED_CHARS). */
 export function hookInstructions(page: { title: string; origin: string; slug: string; instructions?: string; instructionsSummary?: string; tools: { name: string }[] }, stateDir: string): string {
-  const header = `[webmcp] The page "${page.title}" (${page.origin}) is connected. Its tools are the non-webmcp_ tools of the \"webmcp\" MCP server (webmcp_list_tools shows the live set); the current UI state is injected with each prompt.`;
+  const header = `[webmcp-bridge] The page "${page.title}" (${page.origin}) is connected. Its tools are the non-webmcp_ tools of the \"webmcp\" MCP server (webmcp_list_tools shows the live set); the current UI state is injected with each prompt.`;
   const full = page.instructions ?? '';
   const file = `${stateDir}/workspaces/${page.slug}/CLAUDE.md`;
   const pointer = full ? `\n\nFull page instructions (${full.length} chars): run /webmcp:page-instructions, or read ${file}` : '';

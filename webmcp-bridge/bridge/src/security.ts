@@ -87,10 +87,10 @@ function openInBrowser(url: string) {
 
 export function approvalPageHtml(id: string, origin: string, title?: string): string {
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-  return `<!doctype html><meta charset="utf-8"><title>webmcp-daemon: approve origin</title>
+  return `<!doctype html><meta charset="utf-8"><title>webmcp-bridge: approve origin</title>
 <style>body{font:16px/1.5 system-ui;margin:3rem auto;max-width:36rem;padding:0 1rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}button{font:inherit;padding:.6rem 1.2rem;margin-right:.5rem;border-radius:6px;border:1px solid #888;cursor:pointer}.allow{background:#0a7;color:#fff;border-color:#0a7}label{display:block;margin:1rem 0}.muted{color:#666}</style>
-<h1>A web page wants to use your local Claude</h1>
-<p><strong>${esc(title ?? '(untitled page)')}</strong> at <code>${esc(origin)}</code> asked to connect to the webmcp-daemon on this computer.</p>
+<h1>A web page wants to use your local Claude through webmcp-bridge</h1>
+<p><strong>${esc(title ?? '(untitled page)')}</strong> at <code>${esc(origin)}</code> asked to connect to the webmcp-bridge on this computer.</p>
 <p class="muted">If you allow it, that page can expose its tools to Claude Code and, if it embeds a chat, start Claude Code sessions that act on the page. Only allow origins you trust.</p>
 <label><input type="checkbox" id="remember" checked> Remember this decision for <code>${esc(origin)}</code></label>
 <p><button class="allow" onclick="go(true)">Allow</button><button onclick="go(false)">Deny</button></p>

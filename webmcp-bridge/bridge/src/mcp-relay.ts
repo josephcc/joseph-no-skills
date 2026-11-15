@@ -21,13 +21,13 @@ import { CANDIDATE_PORTS } from 'webmcp-protocol';
 import { identify, locateDaemon } from './instance.ts';
 
 const HOST = '127.0.0.1';
-const stateDir = process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), '.webmcp-daemon');
-const pinned = process.env.WEBMCP_DAEMON_PORT ? Number(process.env.WEBMCP_DAEMON_PORT) : undefined;
+const stateDir = process.env.WEBMCP_BRIDGE_STATE ?? join(homedir(), '.webmcp-bridge');
+const pinned = process.env.WEBMCP_BRIDGE_PORT ? Number(process.env.WEBMCP_BRIDGE_PORT) : undefined;
 /** The SessionStart hook usually starts the daemon at the same moment; give it this long before starting one here. */
-const HOOK_GRACE_MS = Number(process.env.WEBMCP_RELAY_WAIT_MS ?? 5_000);
+const HOOK_GRACE_MS = Number(process.env.WEBMCP_BRIDGE_RELAY_WAIT_MS ?? 5_000);
 const START_WAIT_MS = 20_000;
 /** How often the relay checks the daemon is still the one it dialled. */
-const LIVENESS_MS = Number(process.env.WEBMCP_RELAY_LIVENESS_MS ?? 5_000);
+const LIVENESS_MS = Number(process.env.WEBMCP_BRIDGE_RELAY_LIVENESS_MS ?? 5_000);
 const log = (msg: string) => process.stderr.write(`webmcp-mcp: ${msg}\n`);
 
 async function locate(): Promise<number | null> {
@@ -56,7 +56,7 @@ function startDaemon(): boolean {
   if (!entry) { log('no daemon bundle next to the relay'); return false; }
   mkdirSync(stateDir, { recursive: true });
   const fd = openSync(join(stateDir, 'daemon.log'), 'a');
-  const args = [entry, 'serve', '--state-dir', stateDir, ...(pinned ? ['--port', String(pinned)] : []), ...(process.env.WEBMCP_DAEMON_NO_TRAY ? [] : ['--tray'])];
+  const args = [entry, 'serve', '--state-dir', stateDir, ...(pinned ? ['--port', String(pinned)] : []), ...(process.env.WEBMCP_BRIDGE_NO_TRAY ? [] : ['--tray'])];
   const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', fd, fd], env: process.env });
   child.unref();
   log(`started the daemon (pid ${child.pid})`);
@@ -65,7 +65,7 @@ function startDaemon(): boolean {
 
 async function main(): Promise<void> {
   let port = await waitFor(HOOK_GRACE_MS);
-  if (port === null && process.env.WEBMCP_RELAY_START !== '0' && startDaemon()) port = await waitFor(START_WAIT_MS);
+  if (port === null && process.env.WEBMCP_BRIDGE_RELAY_START !== '0' && startDaemon()) port = await waitFor(START_WAIT_MS);
   if (port === null) { log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(', ')}); run the plugin's setup`); process.exit(1); }
   // The instance we dialled; a missed first probe is filled in by the first probe that answers (Codex audit 2).
   let identity = await identify(HOST, port);

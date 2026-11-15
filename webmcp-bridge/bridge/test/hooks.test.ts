@@ -46,7 +46,7 @@ describe('common.sh resolves the daemon port', () => {
     const dir = stateDir();
     const d = await serve(config(dir, [a, b]));
     daemons.push(d);
-    expect(resolve({ WEBMCP_DAEMON_STATE: dir, WEBMCP_CANDIDATE_PORTS: '1 2' })).toBe(String(b));
+    expect(resolve({ WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_CANDIDATE_PORTS: '1 2' })).toBe(String(b));
   });
   test('from the candidate list when there is no record; nothing when there is no daemon', async () => {
     const [a, b] = [await freePort(), await freePort()];
@@ -54,22 +54,27 @@ describe('common.sh resolves the daemon port', () => {
     const d = await serve(config(dir, [b]));
     daemons.push(d);
     unlinkSync(daemonFilePath(dir));
-    expect(resolve({ WEBMCP_DAEMON_STATE: dir, WEBMCP_CANDIDATE_PORTS: `${a} ${b}` })).toBe(String(b));
-    expect(resolve({ WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_CANDIDATE_PORTS: `${a}` })).toBe('');
+    expect(resolve({ WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_CANDIDATE_PORTS: `${a} ${b}` })).toBe(String(b));
+    expect(resolve({ WEBMCP_BRIDGE_STATE: stateDir(), WEBMCP_BRIDGE_CANDIDATE_PORTS: `${a}` })).toBe('');
   });
-  test('a pinned WEBMCP_DAEMON_PORT wins without probing', () => {
-    expect(resolve({ WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_DAEMON_PORT: '12345', WEBMCP_CANDIDATE_PORTS: '1' })).toBe('12345');
+  test('a pinned WEBMCP_BRIDGE_PORT wins over the record and the list, once it answers as this daemon', async () => {
+    const [a, b] = [await freePort(), await freePort()];
+    const dir = stateDir();
+    daemons.push(await serve(config(dir, [b])));   // the record says b
+    daemons.push(await serve(config(stateDir(), [a])));
+    expect(resolve({ WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_PORT: String(a), WEBMCP_BRIDGE_CANDIDATE_PORTS: `${b}` })).toBe(String(a));
+    expect(resolve({ WEBMCP_BRIDGE_STATE: stateDir(), WEBMCP_BRIDGE_PORT: '12345', WEBMCP_BRIDGE_CANDIDATE_PORTS: '1' })).toBe('');   // pinned to nothing: nothing
   });
 });
 
 describe('with no daemon identified, the hooks read nothing (Codex audit)', () => {
   test('WEBMCP_URL stays empty; inject-state prints nothing; inject-instructions says no daemon answered', async () => {
     const a = await freePort();
-    const env = { ...process.env, WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_CANDIDATE_PORTS: String(a), CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT: 'true' };
+    const env = { ...process.env, WEBMCP_BRIDGE_STATE: stateDir(), WEBMCP_BRIDGE_CANDIDATE_PORTS: String(a), CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT: 'true' };
     expect(execFileSync('bash', ['-c', `. "${SCRIPTS}/common.sh"; printf '%s|%s' "$WEBMCP_PORT" "$WEBMCP_URL"`], { env, encoding: 'utf8' })).toBe('|');
     expect(execFileSync('bash', [join(SCRIPTS, 'inject-state.sh')], { env, encoding: 'utf8' })).toBe('');
     const out = JSON.parse(execFileSync('bash', [join(SCRIPTS, 'inject-instructions.sh')], { env, encoding: 'utf8' })) as { hookSpecificOutput: { additionalContext: string } };
-    expect(out.hookSpecificOutput.additionalContext).toMatch(/No webmcp-daemon answered/);
+    expect(out.hookSpecificOutput.additionalContext).toMatch(/No webmcp-bridge daemon answered/);
   });
 });
 
@@ -81,7 +86,7 @@ describe('ensure-daemon.sh', () => {
     const d = await serve(config(dir, [a, b]));
     daemons.push(d);
     const before = readDaemonRecord(dir);
-    const r = spawnSync('bash', [join(SCRIPTS, 'ensure-daemon.sh')], { env: { ...process.env, WEBMCP_DAEMON_STATE: dir, WEBMCP_CANDIDATE_PORTS: '1 2', WEBMCP_DAEMON_NO_TRAY: '1' }, encoding: 'utf8', timeout: 20_000 });
+    const r = spawnSync('bash', [join(SCRIPTS, 'ensure-daemon.sh')], { env: { ...process.env, WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_CANDIDATE_PORTS: '1 2', WEBMCP_BRIDGE_NO_TRAY: '1' }, encoding: 'utf8', timeout: 20_000 });
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
     expect(readDaemonRecord(dir)).toEqual(before);
@@ -90,7 +95,7 @@ describe('ensure-daemon.sh', () => {
     const pinned = await freePort();
     const dir = stateDir();
     // Pinned here only so the spawned daemon lands on a known free port instead of the real candidates.
-    const r = spawnSync('bash', [join(SCRIPTS, 'ensure-daemon.sh')], { env: { ...process.env, WEBMCP_DAEMON_STATE: dir, WEBMCP_DAEMON_PORT: String(pinned), WEBMCP_DAEMON_NO_TRAY: '1', WEBMCP_DAEMON_NO_BROWSER: '1' }, encoding: 'utf8', timeout: 30_000 });
+    const r = spawnSync('bash', [join(SCRIPTS, 'ensure-daemon.sh')], { env: { ...process.env, WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_PORT: String(pinned), WEBMCP_BRIDGE_NO_TRAY: '1', WEBMCP_BRIDGE_NO_BROWSER: '1' }, encoding: 'utf8', timeout: 30_000 });
     const rec = readDaemonRecord(dir);
     if (rec) spawnedPids.push(rec.pid);
     expect(r.status).toBe(0);
@@ -98,5 +103,13 @@ describe('ensure-daemon.sh', () => {
     expect(rec?.port).toBe(pinned);
     const health = await fetch(`http://${HOST}:${pinned}/health`).then((x) => x.json() as Promise<{ ok: boolean }>);
     expect(health.ok).toBe(true);
+  });
+});
+
+describe('a pinned port is only ours when it answers as this daemon (two-daemons plan, Codex audit)', () => {
+  test('WEBMCP_BRIDGE_PORT on a port that is not this daemon resolves to nothing', async () => {
+    const port = await freePort();
+    await squat(port);   // something listens there, but it is not us (no /id)
+    expect(resolve({ WEBMCP_BRIDGE_PORT: String(port), WEBMCP_BRIDGE_STATE: stateDir() })).toBe('');
   });
 });

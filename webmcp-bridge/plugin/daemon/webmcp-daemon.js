@@ -9993,13 +9993,13 @@ var require_content_type = __commonJS((exports) => {
 // bridge/src/index.ts
 import { mkdirSync as mkdirSync5, readFileSync as readFileSync5 } from "node:fs";
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 
 // packages/connector/src/protocol.ts
 var PROTOCOL_VERSION = 1;
-var CANDIDATE_PORTS = [8717, 49217, 52431, 55893, 61307];
+var CANDIDATE_PORTS = [8737, 49237, 52451, 55913, 61327];
 var DEFAULT_PORT = CANDIDATE_PORTS[0];
-var DAEMON_NAME = "webmcp-daemon";
+var DAEMON_NAME = "webmcp-bridge";
 var PING_INTERVAL_MS = 20000;
 var MAX_INJECTED_CHARS = 9500;
 function isPageFrame(value) {
@@ -10011,18 +10011,18 @@ import { join } from "node:path";
 function parseArgs(argv, version) {
   const config = {
     host: "127.0.0.1",
-    port: Number(process.env.WEBMCP_DAEMON_PORT ?? DEFAULT_PORT),
-    portPinned: process.env.WEBMCP_DAEMON_PORT !== undefined,
-    stateDir: process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), ".webmcp-daemon"),
+    port: Number(process.env.WEBMCP_BRIDGE_PORT ?? DEFAULT_PORT),
+    portPinned: process.env.WEBMCP_BRIDGE_PORT !== undefined,
+    stateDir: process.env.WEBMCP_BRIDGE_STATE ?? join(homedir(), ".webmcp-bridge"),
     allowOrigins: [],
-    noBrowser: process.env.WEBMCP_DAEMON_NO_BROWSER === "1",
-    approval: process.env.WEBMCP_DAEMON_NO_BROWSER === "1" ? "reject" : process.env.WEBMCP_DAEMON_APPROVAL ?? "open",
+    noBrowser: process.env.WEBMCP_BRIDGE_NO_BROWSER === "1",
+    approval: process.env.WEBMCP_BRIDGE_NO_BROWSER === "1" ? "reject" : process.env.WEBMCP_BRIDGE_APPROVAL ?? "open",
     agents: [],
     callTimeoutMs: 60000,
     idleAgentMs: 10 * 60000,
     claudePath: process.env.CLAUDE_CODE_EXECUTABLE,
-    tray: process.env.WEBMCP_DAEMON_TRAY === "1",
-    trayText: process.env.WEBMCP_DAEMON_TRAY_TEXT === "1",
+    tray: process.env.WEBMCP_BRIDGE_TRAY === "1",
+    trayText: process.env.WEBMCP_BRIDGE_TRAY_TEXT === "1",
     version
   };
   let command = "serve";
@@ -10149,10 +10149,10 @@ function parseArgs(argv, version) {
   }
   return { command, config, handoff };
 }
-var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
-  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(", ")}; env WEBMCP_DAEMON_PORT)
+var HELP = `webmcp-bridge [serve|status|stop|install-launchd|uninstall-launchd] [options]
+  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(", ")}; env WEBMCP_BRIDGE_PORT)
   --ports <a,b,…>            the candidate ports to walk instead (tests, private daemons)
-  --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
+  --state-dir <dir>          state directory (default ~/.webmcp-bridge, env WEBMCP_BRIDGE_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected
   --approval open|log|reject  what to do for an unknown origin (default open; log = hold and print the URL)
@@ -10160,7 +10160,7 @@ var HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] 
   --call-timeout-ms <n>      per page-tool call (default 60000)
   --idle-agent-ms <n>        reap idle embedded-chat agents (default 600000)
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
-  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
+  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_BRIDGE_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
   handoff [--session <uuid>] [--cwd <dir>] [--origin <origin>] [--title <t>] [--note <n>] [--tag k=v …] [--forget]
                              offer this terminal's Claude Code session to a page's embedded chat (the session id defaults to
@@ -10175,7 +10175,7 @@ class AlreadyRunningError extends Error {
   pid;
   port;
   constructor(pid, port, host, legacy = false) {
-    super(`already running on ${host}:${port} (pid ${pid})${legacy ? "; it predates port discovery: restart it (webmcp-daemon stop, then the plugin or the login item starts the new one)" : ""}`);
+    super(`already running on ${host}:${port} (pid ${pid})${legacy ? "; it predates port discovery: restart it (webmcp-bridge stop, then the plugin or the login item starts the new one)" : ""}`);
     this.name = "AlreadyRunningError";
     this.pid = pid;
     this.port = port;
@@ -10185,7 +10185,7 @@ class AlreadyRunningError extends Error {
 class AllPortsTakenError extends Error {
   ports;
   constructor(ports, host) {
-    super(`every candidate port is taken on ${host} (${ports.join(", ")}); free one, or pin another with --port <n> / WEBMCP_DAEMON_PORT`);
+    super(`every candidate port is taken on ${host} (${ports.join(", ")}); free one, or pin another with --port <n> / WEBMCP_BRIDGE_PORT`);
     this.name = "AllPortsTakenError";
     this.ports = ports;
   }
@@ -10318,7 +10318,7 @@ var log = {
 function write(level, msg, extra) {
   const t = ((Date.now() - started) / 1000).toFixed(1).padStart(7);
   const tail = extra === undefined ? "" : " " + safe(extra);
-  process.stderr.write(`[webmcp-daemon ${t}s ${level}] ${msg}${tail}
+  process.stderr.write(`[webmcp-bridge ${t}s ${level}] ${msg}${tail}
 `);
 }
 function safe(v) {
@@ -10430,10 +10430,10 @@ function openInBrowser(url) {
 }
 function approvalPageHtml(id, origin, title) {
   const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  return `<!doctype html><meta charset="utf-8"><title>webmcp-daemon: approve origin</title>
+  return `<!doctype html><meta charset="utf-8"><title>webmcp-bridge: approve origin</title>
 <style>body{font:16px/1.5 system-ui;margin:3rem auto;max-width:36rem;padding:0 1rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}button{font:inherit;padding:.6rem 1.2rem;margin-right:.5rem;border-radius:6px;border:1px solid #888;cursor:pointer}.allow{background:#0a7;color:#fff;border-color:#0a7}label{display:block;margin:1rem 0}.muted{color:#666}</style>
-<h1>A web page wants to use your local Claude</h1>
-<p><strong>${esc(title ?? "(untitled page)")}</strong> at <code>${esc(origin)}</code> asked to connect to the webmcp-daemon on this computer.</p>
+<h1>A web page wants to use your local Claude through webmcp-bridge</h1>
+<p><strong>${esc(title ?? "(untitled page)")}</strong> at <code>${esc(origin)}</code> asked to connect to the webmcp-bridge on this computer.</p>
 <p class="muted">If you allow it, that page can expose its tools to Claude Code and, if it embeds a chat, start Claude Code sessions that act on the page. Only allow origins you trust.</p>
 <label><input type="checkbox" id="remember" checked> Remember this decision for <code>${esc(origin)}</code></label>
 <p><button class="allow" onclick="go(true)">Allow</button><button onclick="go(false)">Deny</button></p>
@@ -10481,14 +10481,16 @@ class HandoffRegistry {
   }
   forget(sessionId) {
     const before = this.#records.length;
-    this.#records = this.#records.filter((r) => r.sessionId !== sessionId);
+    const key = sessionId.toLowerCase();
+    this.#records = this.#records.filter((r) => r.sessionId !== key);
     if (this.#records.length === before)
       return false;
     this.#save();
     return true;
   }
   get(sessionId) {
-    return this.#records.find((r) => r.sessionId === sessionId);
+    const key = sessionId.toLowerCase();
+    return this.#records.find((r) => r.sessionId === key);
   }
   forOrigin(sessionId, origin) {
     const h = this.get(sessionId);
@@ -10505,16 +10507,21 @@ class HandoffRegistry {
     return Promise.all(records.map(async (r) => {
       if (rows === null)
         return { ...r, live: null, liveUnknown: true };
-      const live = rows.find((s) => s.sessionId === r.sessionId);
-      return { ...r, live: live ? { ...live, heldByPage: await this.#isOurs(live, ownAdapterPids) } : null };
+      return { ...r, live: await this.#holderOf(rows, r.sessionId, ownAdapterPids) };
     }));
+  }
+  async#holderOf(rows, sessionId, ownAdapterPids) {
+    const matches = rows.filter((s) => s.sessionId === sessionId.toLowerCase());
+    if (!matches.length)
+      return null;
+    const flagged = await Promise.all(matches.map(async (s) => ({ ...s, heldByPage: await this.#isOurs(s, ownAdapterPids) })));
+    return flagged.find((s) => !s.heldByPage) ?? flagged[0];
   }
   async liveHolder(sessionId, opts = {}) {
     if (opts.fresh && !this.#pending)
       this.#live = undefined;
     const rows = await this.#liveRows();
-    const live = rows?.find((s) => s.sessionId === sessionId.toLowerCase());
-    return live ? { ...live, heldByPage: await this.#isOurs(live, opts.ownAdapterPids ?? []) } : null;
+    return rows ? this.#holderOf(rows, sessionId, opts.ownAdapterPids ?? []) : null;
   }
   async#isOurs(live, ownAdapterPids) {
     if (!live.pid || !ownAdapterPids.length)
@@ -10644,7 +10651,7 @@ import { copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync3, unlin
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname, join as join5 } from "node:path";
 import { execFileSync } from "node:child_process";
-var LAUNCHD_LABEL = "com.webmcp.daemon";
+var LAUNCHD_LABEL = "com.webmcp-bridge.daemon";
 function launchdPlan(config, entry) {
   const binDir = join5(config.stateDir, "bin");
   const daemonCopy = join5(binDir, basename(entry));
@@ -10687,7 +10694,7 @@ ${plan.plist}`;
   execFileSync("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: "inherit" });
   writeFileSync4(join5(config.stateDir, "setup-done"), new Date().toISOString() + `
 `);
-  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
+  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-bridge uninstall-launchd`;
 }
 function uninstallLaunchd() {
   const plistPath = join5(homedir2(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
@@ -10732,8 +10739,24 @@ function sanitiseToolName(name) {
 }
 
 // bridge/src/http.ts
+function isLoopbackHost(host, port, extra) {
+  if (!host)
+    return false;
+  const m = /^(\[[^\]]+\]|[^:\s]+)(?::(\d+))?$/.exec(host.trim());
+  if (!m)
+    return false;
+  const name = m[1].toLowerCase();
+  const p = m[2] !== undefined ? Number(m[2]) : undefined;
+  const ok = name === "127.0.0.1" || name === "localhost" || name === "[::1]" || extra !== undefined && name === extra.toLowerCase();
+  return ok && (p === undefined || p === port);
+}
 function createHttpServer(deps) {
   const server = createServer2((req, res) => {
+    if (!isLoopbackHost(req.headers.host, deps.config.port, deps.config.host)) {
+      log.warn(`refused ${req.method} ${req.url} for host ${JSON.stringify(req.headers.host ?? "")}`);
+      json(res, 403, { error: "host not loopback" });
+      return;
+    }
     route(deps, req, res).catch((err) => {
       log.error(`http ${req.method} ${req.url}: ${String(err)}`);
       if (!res.headersSent)
@@ -10741,6 +10764,15 @@ function createHttpServer(deps) {
     });
   });
   server.on("upgrade", (req, socket, head) => {
+    if (!isLoopbackHost(req.headers.host, deps.config.port, deps.config.host)) {
+      log.warn(`refused upgrade ${req.url} for host ${JSON.stringify(req.headers.host ?? "")}`);
+      socket.write(`HTTP/1.1 403 Forbidden\r
+Connection: close\r
+\r
+`);
+      socket.destroy();
+      return;
+    }
     const path = new URL(req.url ?? "/", "http://x").pathname;
     if (path === "/ws") {
       deps.pages.handleUpgrade(req, socket, head);
@@ -10781,9 +10813,14 @@ async function route(deps, req, res) {
     res.end(statusPageHtml());
     return;
   }
+  if (path === "/favicon.ico") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   if (path === "/status.json") {
     const sel = registry.selected()?.id;
-    const loginInstalled = existsSync3(join6(homedir3(), "Library", "LaunchAgents", "com.webmcp.daemon.plist"));
+    const loginInstalled = existsSync3(join6(homedir3(), "Library", "LaunchAgents", "com.webmcp-bridge.daemon.plist"));
     let logTail = "";
     try {
       logTail = readFileSync4(join6(config.stateDir, "daemon.log"), "utf8").split(`
@@ -10793,6 +10830,7 @@ async function route(deps, req, res) {
     return json(res, 200, {
       version: config.version,
       port: config.port,
+      ports: config.portPinned ? [config.port] : config.portCandidates ?? CANDIDATE_PORTS,
       stateDir: config.stateDir,
       loginInstalled,
       pid: process.pid,
@@ -10989,19 +11027,27 @@ async function route(deps, req, res) {
 }
 function statusPageHtml() {
   return `<!doctype html><meta charset="utf-8"><title>webmcp-bridge</title>
-<style>body{font:15px/1.5 system-ui;margin:2rem auto;max-width:44rem;padding:0 1rem;color:#1a1a1a}h1{font-size:1.4rem}h2{font-size:1rem;margin:1.4rem 0 .4rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:4px}button{font:inherit;padding:.35rem .8rem;border-radius:6px;border:1px solid #888;background:#fff;cursor:pointer}.on{background:#0a7;color:#fff;border-color:#0a7}.muted{color:#666}ul{padding-left:1.2rem}pre{background:#111;color:#eee;padding:.6rem;border-radius:6px;font-size:.8rem;max-height:16rem;overflow:auto}</style>
-<h1>● webmcp-bridge <span class="muted" id="v"></span></h1>
-<p>The local daemon that connects web pages to your Claude Code. Everything on this page stays on this computer.</p>
-<p><button id="login"></button> <span class="muted">A login item keeps the daemon (and this menu bar presence) available without a terminal.</span></p>
-<h2>Connected pages</h2><ul id="pages"><li class="muted">none</li></ul>
-<h2>Embedded chats</h2><ul id="agents"><li class="muted">none</li></ul>
-<h2>Approved origins</h2><ul id="origins"><li class="muted">none</li></ul>
-<h2>Claude Code</h2><p>MCP endpoint: <code id="mcp"></code> · state folder: <code id="state"></code></p>
-<h2>Log</h2><pre id="log"></pre>
+<style>:root{--accent:#5b4bd6;--deep:#2d2a6e;--bg:#f6f5ff;--border:#dedbf5;--muted:#6b6a85}
+body{font:15px/1.5 system-ui;margin:0;background:var(--bg);color:#1d1b3a}
+header{background:linear-gradient(135deg,var(--deep),var(--accent));color:#fff;padding:1.2rem 1.5rem}header h1{margin:0;font-size:1.3rem;font-weight:600}header p{margin:.2rem 0 0;opacity:.85;font-size:.9rem}header code{background:rgba(255,255,255,.18);color:#fff}
+main{max-width:46rem;margin:1.2rem auto;padding:0 1rem}section{background:#fff;border:1px solid var(--border);border-radius:10px;padding:.8rem 1rem;margin:.8rem 0}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin:0 0 .4rem}code{background:#eeecfb;padding:.1rem .3rem;border-radius:4px}
+button{font:inherit;padding:.35rem .8rem;border-radius:6px;border:1px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer}.on{background:var(--accent);color:#fff}
+.muted{color:var(--muted)}ul{padding-left:1.2rem;margin:.2rem 0}pre{background:#1d1b3a;color:#e9e7ff;padding:.6rem;border-radius:8px;font-size:.78rem;max-height:16rem;overflow:auto}.live{color:#b45309}.held{color:var(--accent)}</style>
+<header><h1>webmcp-bridge <span id="v" style="opacity:.7;font-weight:400"></span></h1><p>The skills' bridge between web pages and your Claude Code, on port <code id="port"></code>. Everything on this page stays on this computer.</p></header>
+<main>
+<section><button id="login"></button> <span class="muted">A login item keeps the daemon (and its menu bar item) available without a terminal.</span></section>
+<section><h2>Connected pages</h2><ul id="pages"><li class="muted">none</li></ul></section>
+<section><h2>Embedded chats</h2><ul id="agents"><li class="muted">none</li></ul></section>
+<section><h2>Terminal handoffs</h2><ul id="handoffs"><li class="muted">none</li></ul><p class="muted" style="margin:.3rem 0 0;font-size:.82rem">A terminal Claude Code session offered to a page: its chat continues the thread under the same id.</p></section>
+<section><h2>Approved origins</h2><ul id="origins"><li class="muted">none</li></ul></section>
+<section><h2>Claude Code</h2><p>MCP endpoint: <code id="mcp"></code> · state folder: <code id="state"></code> · candidate ports: <code id="ports"></code></p></section>
+<section><h2>Log</h2><pre id="log"></pre></section>
+</main>
 <script>
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function load(){const s=await (await fetch('/status.json')).json();
-document.getElementById('v').textContent='v'+s.version;
+document.getElementById('v').textContent='v'+s.version;document.getElementById('port').textContent=s.port;document.getElementById('ports').textContent=(s.ports||[]).join(', ');
 const b=document.getElementById('login');b.textContent=s.loginInstalled?'Start at login: on (click to turn off)':'Start at login: off (click to turn on)';b.className=s.loginInstalled?'on':'';
 b.onclick=async()=>{b.disabled=true;const r=await (await fetch('/launchd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:s.loginInstalled?'uninstall':'install'})})).json();alert(r.message);load();};
 const li=(h)=>'<li>'+h+'</li>';
@@ -11011,16 +11057,17 @@ const o=[...s.origins.preapproved.map(x=>({o:x,fixed:true})),...s.origins.allowe
 document.getElementById('origins').innerHTML=o.length?o.map(x=>li(esc(x.o)+(x.fixed?' <span class=muted>(command line)</span>':' <button data-o="'+esc(x.o)+'">forget</button>'))).join(''):'<li class=muted>none</li>';
 for(const f of document.querySelectorAll('button[data-o]'))f.onclick=async()=>{await fetch('/origins/forget',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({origin:f.dataset.o})});load();};
 document.getElementById('mcp').textContent=location.origin+'/mcp';document.getElementById('state').textContent=s.stateDir;
-document.getElementById('log').textContent=s.logTail||'(empty)';}
+document.getElementById('log').textContent=s.logTail||'(empty)';
+try{const h=(await (await fetch('/handoffs')).json()).handoffs||[];document.getElementById('handoffs').innerHTML=h.length?h.map(x=>li(esc(x.title||x.cwd)+' <span class=muted>'+esc(x.sessionId.slice(0,8))+' · '+esc(x.cwd)+(x.origin?' · for '+esc(x.origin):'')+'</span> '+(x.live?(x.live.heldByPage?'<span class=held>open in a page</span>':'<span class=live>open in your terminal'+(x.live.pid?' · pid '+x.live.pid:'')+'</span>'):'<span class=muted>waiting</span>'))).join(''):'<li class=muted>none</li>';}catch{}}
 load();setInterval(load,5000);
 </script>`;
 }
 function frameState(title, origin, text) {
-  return `[webmcp] Current UI state of "${title}" (${origin}), captured ${new Date().toISOString()}:
+  return `[webmcp-bridge] Current UI state of "${title}" (${origin}), captured ${new Date().toISOString()}:
 ${text}`;
 }
 function hookInstructions(page, stateDir) {
-  const header = `[webmcp] The page "${page.title}" (${page.origin}) is connected. Its tools are the non-webmcp_ tools of the "webmcp" MCP server (webmcp_list_tools shows the live set); the current UI state is injected with each prompt.`;
+  const header = `[webmcp-bridge] The page "${page.title}" (${page.origin}) is connected. Its tools are the non-webmcp_ tools of the "webmcp" MCP server (webmcp_list_tools shows the live set); the current UI state is injected with each prompt.`;
   const full = page.instructions ?? "";
   const file = `${stateDir}/workspaces/${page.slug}/CLAUDE.md`;
   const pointer = full ? `
@@ -11180,7 +11227,7 @@ class Workspaces {
 
 This workspace belongs to the web page at ${page.origin}. The page's tools are available through the "page" MCP server. The page provided no further instructions.
 `;
-    const body = `<!-- generated by webmcp-daemon from the page at ${page.origin}; edits are overwritten when the page reconnects -->
+    const body = `<!-- generated by webmcp-bridge from the page at ${page.origin}; edits are overwritten when the page reconnects -->
 
 ${text}
 `;
@@ -22311,7 +22358,7 @@ function toMcpTool(name, t, page, pageScoped) {
 var PAGE_ID_ARG = { page_id: { type: "string", description: "Page id (or id prefix) from webmcp_list_pages; defaults to the selected page" } };
 function metaTools() {
   return [
-    { name: "webmcp_list_pages", description: "Web pages currently connected to this computer's webmcp-daemon, with their tool counts and which one is selected (its tools are mirrored here by name).", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true, openWorldHint: false } },
+    { name: "webmcp_list_pages", description: "Web pages currently connected to this computer's webmcp-bridge, with their tool counts and which one is selected (its tools are mirrored here by name).", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true, openWorldHint: false } },
     { name: "webmcp_use_page", description: "Select which connected page is mirrored by name (and whose UI state is injected). Persists until that page disconnects.", inputSchema: { type: "object", properties: PAGE_ID_ARG, required: ["page_id"] }, annotations: { readOnlyHint: false, openWorldHint: false } },
     { name: "webmcp_list_tools", description: "List a page's WebMCP tools with their full input schemas and annotations.", inputSchema: { type: "object", properties: PAGE_ID_ARG }, annotations: { readOnlyHint: true, openWorldHint: false } },
     { name: "webmcp_call_tool", description: "Call a page tool by its own name (works even when mirrored tools have not refreshed yet).", inputSchema: { type: "object", properties: { ...PAGE_ID_ARG, name: { type: "string", description: "Tool name as listed by webmcp_list_tools" }, args: { type: "object", description: "Arguments matching the tool's input schema", additionalProperties: true } }, required: ["name"] }, annotations: { openWorldHint: false } },
@@ -22409,9 +22456,9 @@ function readJson(req) {
 
 // bridge/src/acp.ts
 import { spawn as spawn2, execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync6 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
-import { dirname as dirname2, join as join8 } from "node:path";
+import { dirname as dirname2, join as join9 } from "node:path";
 import { Readable as Readable2, Writable } from "node:stream";
 
 // node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
@@ -27723,53 +27770,167 @@ function destroyUpgradeSocket(socket, error2) {
 }
 
 // bridge/src/session-guard.ts
+import { closeSync, existsSync as existsSync5, openSync, readdirSync, readSync, realpathSync } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join8 } from "node:path";
 var GUARDED_METHODS = new Set(["session/new", "session/load", "session/list"]);
 var ALLOWED_OPTION_KEYS = new Set(["allowedTools", "disallowedTools", "model"]);
-function isRequest(msg) {
-  return !!msg && typeof msg === "object" && typeof msg.method === "string" && msg.id !== undefined && msg.id !== null;
+var PAGE_TOOL_PREFIX = "mcp__page__";
+var HELD_ELSEWHERE_CODE = -32040;
+var DELETE_REFUSED_CODE = -32041;
+var UUID_RE2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isCall(msg) {
+  return !!msg && typeof msg === "object" && !Array.isArray(msg) && typeof msg.method === "string";
 }
-function handoffLoadOf(msg, ctx) {
-  if (!isRequest(msg) || msg.method !== "session/load")
-    return;
-  const id = msg.params && typeof msg.params === "object" ? msg.params.sessionId : undefined;
-  return typeof id === "string" && ctx.handoffFor(id) ? id : undefined;
-}
-function heldElsewhereError(msg, live) {
-  const where = live.kind === "background" ? "a background session" : "your terminal (or another tab)";
-  const pid = live.pid ? `, pid ${live.pid}` : "";
-  return { jsonrpc: "2.0", id: msg.id, error: { code: -32001, message: `That session is still open in ${where}${pid}${live.status ? `, ${live.status}` : ""}. Press Ctrl+D there (or run \`claude stop\` for a background session) and try again; the thread is kept.` } };
-}
+var hasId = (msg) => Object.prototype.hasOwnProperty.call(msg, "id");
+var asObject = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 function rewriteOutbound(msg, ctx) {
-  if (!isRequest(msg) || !GUARDED_METHODS.has(msg.method))
+  if (!isCall(msg) || !GUARDED_METHODS.has(msg.method))
     return msg;
-  const p = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? { ...msg.params } : {};
+  if (!hasId(msg)) {
+    ctx.log?.(`${msg.method} without an id dropped`);
+    return;
+  }
+  const sent = asObject(msg.params);
   const changes = [];
+  const sessionId = typeof sent.sessionId === "string" ? sent.sessionId : undefined;
   let cwd = ctx.workspaceDir;
   let handoff2 = false;
-  if (msg.method === "session/load" && typeof p.sessionId === "string") {
-    const h = ctx.handoffFor(p.sessionId);
+  if (msg.method === "session/load" && sessionId) {
+    const h = ctx.handoffFor(sessionId);
     if (h) {
       cwd = h.cwd;
       handoff2 = true;
     }
   }
-  if (p.cwd !== cwd)
-    changes.push(`cwd ${JSON.stringify(p.cwd)} → ${cwd}`);
+  if (sent.cwd !== cwd)
+    changes.push(`cwd ${JSON.stringify(sent.cwd)} → ${cwd}`);
+  const p = {};
+  if (msg.method === "session/load" && sessionId)
+    p.sessionId = sessionId;
   p.cwd = cwd;
-  if (msg.method !== "session/list") {
+  const known = new Set(["sessionId", "cwd"]);
+  if (msg.method === "session/list") {
+    known.add("cursor");
+    if (typeof sent.cursor === "string")
+      p.cursor = sent.cursor;
+  } else {
+    known.add("mcpServers");
+    known.add("_meta");
     const want = ctx.pageMcpUrl ? [{ type: "http", name: "page", url: ctx.pageMcpUrl, headers: [] }] : [];
-    if (!sameServers(p.mcpServers, want))
-      changes.push(`mcpServers ${JSON.stringify(p.mcpServers)} → ${want.length ? "the page server" : "none"}`);
+    if (!sameServers(sent.mcpServers, want))
+      changes.push(`mcpServers ${JSON.stringify(sent.mcpServers)} → ${want.length ? "the page server" : "none"}`);
     p.mcpServers = want;
-    const meta2 = filterMeta(p._meta, handoff2, changes);
-    if (meta2 === undefined)
-      delete p._meta;
-    else
+    const meta2 = filterMeta(sent._meta, handoff2, changes);
+    if (meta2 !== undefined)
       p._meta = meta2;
   }
+  for (const k of Object.keys(sent))
+    if (!known.has(k))
+      changes.push(`${k} dropped`);
   if (changes.length)
     ctx.log?.(`${msg.method}${handoff2 ? " (registered handoff)" : ""}: ${changes.join("; ")}`);
   return { ...msg, params: p };
+}
+function handoffLoadOf(msg, ctx) {
+  if (!isCall(msg) || !hasId(msg) || msg.method !== "session/load")
+    return;
+  const id = asObject(msg.params).sessionId;
+  return typeof id === "string" && ctx.handoffFor(id) ? id : undefined;
+}
+function heldElsewhereError(msg, live) {
+  const where = live.kind === "background" ? "a background session" : "your terminal (or another tab)";
+  const pid = live.pid ? `, pid ${live.pid}` : "";
+  return { jsonrpc: "2.0", id: msg.id ?? null, error: { code: HELD_ELSEWHERE_CODE, message: `That session is still open in ${where}${pid}${live.status ? `, ${live.status}` : ""}. Press Ctrl+D there (or run \`claude stop\` for a background session) and try again; the thread is kept.` } };
+}
+function refusedDelete(msg, ctx) {
+  if (!isCall(msg) || msg.method !== "session/delete")
+    return;
+  const id = asObject(msg.params).sessionId;
+  const allowed = typeof id === "string" && !ctx.isHandoff?.(id) && !!ctx.ownsSession?.(id);
+  if (allowed)
+    return;
+  if (!hasId(msg))
+    return "drop";
+  return { jsonrpc: "2.0", id: msg.id ?? null, error: { code: DELETE_REFUSED_CODE, message: "Only a thread of this page can be deleted here. A terminal session offered to the page is forgotten from the list, never deleted." } };
+}
+var TRANSCRIPT_HEAD_BYTES = 1 << 20;
+var samePath = (a, b) => {
+  const norm = (p) => {
+    const t = p.replace(/\/+$/, "");
+    try {
+      return realpathSync(t);
+    } catch {
+      return t;
+    }
+  };
+  return a === b || norm(a) === norm(b);
+};
+var MAX_PROJECT_NAME = 200;
+function encodeProjectPath(cwd) {
+  const normalized = process.platform === "darwin" ? cwd.normalize("NFC") : cwd;
+  const sanitized = normalized.replace(/[^a-zA-Z0-9]/g, "-");
+  if (sanitized.length <= MAX_PROJECT_NAME)
+    return sanitized;
+  let hash = 0;
+  for (let i = 0;i < normalized.length; i++)
+    hash = (hash << 5) - hash + normalized.charCodeAt(i) | 0;
+  return `${sanitized.slice(0, MAX_PROJECT_NAME)}-${Math.abs(hash).toString(36)}`;
+}
+function sessionBelongsToWorkspace(sessionId, workspaceDir, configDir = process.env.CLAUDE_CONFIG_DIR ?? join8(homedir4(), ".claude")) {
+  if (!UUID_RE2.test(sessionId))
+    return false;
+  const spellings = [workspaceDir.replace(/\/+$/, "")];
+  try {
+    const real = realpathSync(workspaceDir);
+    if (!spellings.includes(real))
+      spellings.push(real);
+  } catch {}
+  for (const dir of spellings) {
+    for (const name of projectDirNames(dir, configDir)) {
+      const file = join8(configDir, "projects", name, `${sessionId.toLowerCase()}.jsonl`);
+      if (!existsSync5(file))
+        continue;
+      const cwd = recordedCwd(file);
+      if (cwd !== undefined && samePath(cwd, workspaceDir))
+        return true;
+    }
+  }
+  return false;
+}
+function projectDirNames(cwd, configDir) {
+  const exact = encodeProjectPath(cwd);
+  const sanitized = (process.platform === "darwin" ? cwd.normalize("NFC") : cwd).replace(/[^a-zA-Z0-9]/g, "-");
+  if (sanitized.length <= MAX_PROJECT_NAME)
+    return [exact];
+  const prefix = sanitized.slice(0, MAX_PROJECT_NAME);
+  let names = [];
+  try {
+    names = readdirSync(join8(configDir, "projects")).filter((n) => n.startsWith(prefix) && n !== exact);
+  } catch {}
+  return [exact, ...names];
+}
+function recordedCwd(file) {
+  let fd;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(TRANSCRIPT_HEAD_BYTES);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    const m = /"cwd":("(?:[^"\\]|\\.)*")/.exec(buf.toString("utf8", 0, n));
+    if (!m)
+      return;
+    try {
+      const v = JSON.parse(m[1]);
+      return typeof v === "string" ? v : undefined;
+    } catch {
+      return;
+    }
+  } catch {
+    return;
+  } finally {
+    if (fd !== undefined)
+      closeSync(fd);
+  }
 }
 function sameServers(sent, want) {
   if (!Array.isArray(sent) || sent.length !== want.length)
@@ -27803,11 +27964,26 @@ function filterMeta(meta2, handoff2, changes) {
       continue;
     }
     if (k === "claudeCode") {
-      const cc = v && typeof v === "object" && !Array.isArray(v) ? v : {};
-      const options = cc.options && typeof cc.options === "object" && !Array.isArray(cc.options) ? cc.options : {};
+      const cc = asObject(v);
+      const options = asObject(cc.options);
       const kept = {};
       for (const [ok, ov] of Object.entries(options)) {
-        if (ALLOWED_OPTION_KEYS.has(ok) || ok === "allowDangerouslySkipPermissions" && ov === false)
+        if (ok === "allowedTools") {
+          const tools = Array.isArray(ov) ? ov.filter((t) => typeof t === "string" && t.startsWith(PAGE_TOOL_PREFIX)) : [];
+          if (!Array.isArray(ov) || tools.length !== ov.length)
+            changes.push("_meta.claudeCode.options.allowedTools: only the page's own tools kept");
+          kept.allowedTools = tools;
+        } else if (ok === "disallowedTools") {
+          const tools = Array.isArray(ov) ? ov.filter((t) => typeof t === "string") : [];
+          if (!Array.isArray(ov) || tools.length !== ov.length)
+            changes.push("_meta.claudeCode.options.disallowedTools: non-strings dropped");
+          kept.disallowedTools = tools;
+        } else if (ok === "model") {
+          if (typeof ov === "string")
+            kept.model = ov;
+          else
+            changes.push("_meta.claudeCode.options.model dropped (not a string)");
+        } else if (ok === "allowDangerouslySkipPermissions" && ov === false)
           kept[ok] = ov;
         else
           changes.push(`_meta.claudeCode.options.${ok} dropped`);
@@ -27818,7 +27994,7 @@ function filterMeta(meta2, handoff2, changes) {
       out.claudeCode = { options: kept };
       continue;
     }
-    out[k] = v;
+    changes.push(`_meta.${k} dropped`);
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -27901,6 +28077,8 @@ class AcpRelay {
           workspaceDir: cwd,
           pageMcpUrl: page ? `http://${this.#deps.config.host}:${this.#deps.config.port}/mcp/by-page/${page.id}` : undefined,
           handoffFor: (id) => this.#deps.handoffs?.forOrigin(id, ctx.origin),
+          ownsSession: (id) => sessionBelongsToWorkspace(id, cwd),
+          isHandoff: (id) => !!this.#deps.handoffs?.get(id),
           log: (line) => log.info(`acp guard (${ctx.origin}, pid ${child.pid}): ${line}`)
         };
         let toClient;
@@ -27912,6 +28090,13 @@ class AcpRelay {
         } });
         const touch = new TransformStream({ transform: async (m, c) => {
           meta2.lastActivity = Date.now();
+          const refusedDel = refusedDelete(m, guard);
+          if (refusedDel) {
+            log.warn(`acp guard (${ctx.origin}, pid ${child.pid}): refused session/delete of a session that is not this page's${refusedDel === "drop" ? " (no id: dropped)" : ""}`);
+            if (refusedDel !== "drop")
+              toClient?.enqueue(refusedDel);
+            return;
+          }
           const handoffId = handoffLoadOf(m, guard);
           if (handoffId && this.#deps.handoffs) {
             const live = await this.#deps.handoffs.liveHolder(handoffId, { fresh: true, ownAdapterPids: this.adapterPids() }).catch(() => null);
@@ -27921,7 +28106,9 @@ class AcpRelay {
               return;
             }
           }
-          c.enqueue(rewriteOutbound(m, guard));
+          const out = rewriteOutbound(m, guard);
+          if (out !== undefined)
+            c.enqueue(out);
         } });
         const stopSoon = () => {
           if (child.exitCode === null && !child.killed)
@@ -27963,22 +28150,22 @@ class AcpRelay {
   #adapter() {
     if (this.#adapterCmd)
       return this.#adapterCmd;
-    const explicit = process.env.WEBMCP_ACP_AGENT;
+    const explicit = process.env.WEBMCP_BRIDGE_ACP_AGENT;
     if (explicit) {
       const [cmd, ...args] = explicit.split(" ");
       this.#adapterCmd = { cmd, args };
       return this.#adapterCmd;
     }
-    const sibling = join8(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
-    if (existsSync5(sibling)) {
+    const sibling = join9(dirname2(process.argv[1] ?? ""), "claude-agent-acp.js");
+    if (existsSync6(sibling)) {
       this.#adapterCmd = { cmd: process.execPath, args: [sibling] };
       return this.#adapterCmd;
     }
     try {
       const require2 = createRequire2(import.meta.url);
       const pkg = require2.resolve(`${ADAPTER_PACKAGE}/package.json`);
-      const entry = join8(dirname2(pkg), "dist", "index.js");
-      if (existsSync5(entry)) {
+      const entry = join9(dirname2(pkg), "dist", "index.js");
+      if (existsSync6(entry)) {
         this.#adapterCmd = { cmd: process.execPath, args: [entry] };
         return this.#adapterCmd;
       }
@@ -28040,9 +28227,9 @@ Content-Length: 0\r
 
 // bridge/src/tray.ts
 import { spawn as spawn3 } from "node:child_process";
-import { existsSync as existsSync6 } from "node:fs";
-import { dirname as dirname3, join as join9 } from "node:path";
-import { homedir as homedir4 } from "node:os";
+import { existsSync as existsSync7 } from "node:fs";
+import { dirname as dirname3, join as join10 } from "node:path";
+import { homedir as homedir5 } from "node:os";
 class Tray {
   #deps;
   #child;
@@ -28053,15 +28240,15 @@ class Tray {
   }
   static helperPath() {
     const candidates = [
-      process.env.WEBMCP_TRAY_HELPER,
-      join9(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
-      join9(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
+      process.env.WEBMCP_BRIDGE_TRAY_HELPER,
+      join10(dirname3(process.argv[1] ?? ""), "tray", "webmcp-bridge-tray"),
+      join10(dirname3(process.argv[1] ?? ""), "..", "..", "plugin", "daemon", "tray", "webmcp-bridge-tray")
     ].filter((p) => !!p);
-    return candidates.find((p) => existsSync6(p));
+    return candidates.find((p) => existsSync7(p));
   }
   static iconPath(helper) {
-    const p = process.env.WEBMCP_TRAY_ICON ?? join9(dirname3(helper), "webmcp-bridge-icon.png");
-    return existsSync6(p) ? p : undefined;
+    const p = process.env.WEBMCP_BRIDGE_TRAY_ICON ?? join10(dirname3(helper), "webmcp-bridge-icon.png");
+    return existsSync7(p) ? p : undefined;
   }
   start() {
     if (process.platform !== "darwin")
@@ -28110,7 +28297,7 @@ class Tray {
       return;
     const pages = this.#deps.registry.all().length;
     const agents = this.#deps.agentCount();
-    const login = existsSync6(join9(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+    const login = existsSync7(join10(homedir5(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
     const items = [
       { id: "name", title: `webmcp-bridge ${this.#deps.config.version}`, enabled: false },
       { id: "status", title: `Daemon: running on 127.0.0.1:${this.#deps.config.port} · ${pages} page${pages === 1 ? "" : "s"} · ${agents} chat${agents === 1 ? "" : "s"}`, enabled: false },
@@ -28129,8 +28316,8 @@ class Tray {
       title: "● webmcp-bridge",
       image: text ? "" : this.#icon ?? "",
       template: true,
-      icon: text ? "" : "point.3.connected.trianglepath.dotted",
-      tooltip: `webmcp-bridge (webmcp-daemon ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`,
+      icon: text ? "" : "app.connected.to.app.below.app",
+      tooltip: `webmcp-bridge (webmcp-bridge ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`,
       items
     });
   }
@@ -28145,7 +28332,7 @@ class Tray {
     try {
       switch (msg.id) {
         case "login": {
-          const installed = existsSync6(join9(homedir4(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
+          const installed = existsSync7(join10(homedir5(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`));
           log.info(installed ? uninstallLaunchd() : installLaunchd(config2, process.argv[1]));
           break;
         }
@@ -28153,7 +28340,7 @@ class Tray {
           spawn3("open", [`http://${config2.host}:${config2.port}/`], { stdio: "ignore", detached: true }).unref();
           break;
         case "log":
-          openPath(join9(config2.stateDir, existsSync6(join9(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
+          openPath(join10(config2.stateDir, existsSync7(join10(config2.stateDir, "daemon.log")) ? "daemon.log" : ""));
           break;
         case "folder":
           openPath(config2.stateDir);
@@ -28203,7 +28390,7 @@ async function serve(config2) {
     if (other)
       throw new AlreadyRunningError(other.pid, other.port, config2.host);
     if (!claimDaemonFile(config2.stateDir, record3))
-      throw new Error(`could not claim ${join10(config2.stateDir, "daemon.json")}`);
+      throw new Error(`could not claim ${join11(config2.stateDir, "daemon.json")}`);
   }
   try {
     const candidates = config2.portPinned ? [config2.port] : config2.portCandidates ?? CANDIDATE_PORTS;
@@ -28302,7 +28489,7 @@ ${HELP}`);
   }
   if (command === "stop") {
     try {
-      const { pid } = JSON.parse(readFileSync5(join10(config2.stateDir, "daemon.json"), "utf8"));
+      const { pid } = JSON.parse(readFileSync5(join11(config2.stateDir, "daemon.json"), "utf8"));
       process.kill(pid, "SIGTERM");
       process.stdout.write(`sent SIGTERM to ${pid}
 `);
@@ -28359,7 +28546,7 @@ async function runHandoff(config2, args) {
   const candidates = config2.portCandidates ?? CANDIDATE_PORTS;
   const port = config2.portPinned ? config2.port : await locateDaemon(config2.stateDir, config2.host, candidates);
   if (!port) {
-    process.stderr.write(`handoff: no webmcp-daemon on ${config2.host} (tried ${candidates.join(", ")}); start one with \`claude\` (the plugin's session hook) or \`webmcp-daemon serve\`.
+    process.stderr.write(`handoff: no webmcp-bridge on ${config2.host} (tried ${candidates.join(", ")}); start one with \`claude\` (the plugin's session hook) or \`webmcp-bridge serve\`.
 `);
     process.exit(1);
   }

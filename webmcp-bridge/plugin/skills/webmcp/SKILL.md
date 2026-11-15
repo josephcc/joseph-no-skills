@@ -1,12 +1,12 @@
 ---
 name: webmcp
-description: Work with a web page that is connected to this computer's webmcp-daemon (the `webmcp` MCP server). Use when the user refers to "the page", "the demo", what they are looking at in the browser, or asks to read or change something on a web page that exposes WebMCP tools.
+description: Work with a web page that is connected to this computer's webmcp-bridge (the `webmcp` MCP server). Use when the user refers to "the page", "the demo", what they are looking at in the browser, or asks to read or change something on a web page that exposes WebMCP tools.
 ---
 
 # Working with a connected web page
 
 A page that embeds `webmcp-connector` registers WebMCP tools and connects to the local
-webmcp-daemon. This plugin exposes them to you through the `webmcp` MCP server.
+webmcp-bridge. This plugin exposes them to you through the `webmcp` MCP server.
 
 ## What you already have
 
@@ -35,4 +35,4 @@ webmcp-daemon. This plugin exposes them to you through the `webmcp` MCP server.
 
 `webmcp_list_pages` returns an empty list. Tell the user to open a page that embeds the
 connector and to approve it in the browser tab the daemon opens. The daemon itself is started
-by this plugin at session start (`~/.webmcp-daemon` or the plugin data directory holds its log).
+by this plugin at session start (`~/.webmcp-bridge` or the plugin data directory holds its log).

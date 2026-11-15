@@ -57,12 +57,12 @@ try {
   if (seen.filter((s) => s === 'GET /id').length !== 1 || seen.length !== 1) throw new Error(`the stranger saw more than one GET /id: ${seen.join(', ')}`);
 
   // c10: the hook's resolution.
-  const resolved = await new Promise((resolve) => { const p = spawn('bash', ['-c', `. "${join(ROOT, 'plugin/scripts/common.sh')}"; printf '%s' "$WEBMCP_PORT"`], { env: { ...process.env, WEBMCP_DAEMON_STATE: stateDir, WEBMCP_CANDIDATE_PORTS: `${A} ${B}` } }); let t = ''; p.stdout.on('data', (d) => { t += d; }); p.on('exit', () => resolve(t)); });
+  const resolved = await new Promise((resolve) => { const p = spawn('bash', ['-c', `. "${join(ROOT, 'plugin/scripts/common.sh')}"; printf '%s' "$WEBMCP_PORT"`], { env: { ...process.env, WEBMCP_BRIDGE_STATE: stateDir, WEBMCP_BRIDGE_CANDIDATE_PORTS: `${A} ${B}` } }); let t = ''; p.stdout.on('data', (d) => { t += d; }); p.on('exit', () => resolve(t)); });
   step('common.sh resolves B (c10)', { resolved });
   if (resolved !== String(B)) throw new Error('the hook did not resolve port B');
 
   // c11: the relay.
-  const relay = spawn(process.execPath, [join(ROOT, 'bridge/src/mcp-relay.ts')], { env: { ...process.env, WEBMCP_DAEMON_STATE: stateDir, WEBMCP_RELAY_START: '0' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const relay = spawn(process.execPath, [join(ROOT, 'bridge/src/mcp-relay.ts')], { env: { ...process.env, WEBMCP_BRIDGE_STATE: stateDir, WEBMCP_BRIDGE_RELAY_START: '0' }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(relay);
   const replies = new Map(); let relayErr = '';
   relay.stderr.on('data', (d) => { relayErr += d; });

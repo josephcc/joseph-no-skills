@@ -1,4 +1,4 @@
-// webmcp-bridge-tray: a minimal macOS status-bar item driven by the webmcp-daemon over stdin/stdout.
+// webmcp-bridge-tray: a minimal macOS status-bar item driven by the webmcp-bridge over stdin/stdout.
 // Protocol (one JSON object per line):
 //   daemon → helper: {"type":"set","title":"● webmcp-bridge","image":"/path/to/icon.png","template":false,"icon":"<SF Symbol name>","tooltip":"…","items":[{"id":"status","title":"…","enabled":false},{"sep":true},{"id":"login","title":"Start at login","checked":true}]}
 //     The button shows, in order of preference: the PNG at "image" (drawn at 18×18 pt; "template":true turns it into a

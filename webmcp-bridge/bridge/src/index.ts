@@ -144,7 +144,7 @@ async function runHandoff(config: DaemonConfig, args: HandoffArgs): Promise<void
   if (!session) { process.stderr.write('handoff: no session id. Pass --session <uuid>, or run this inside a Claude Code session (its shell commands carry CLAUDE_CODE_SESSION_ID).\n'); process.exit(2); }
   const candidates = config.portCandidates ?? CANDIDATE_PORTS;
   const port = config.portPinned ? config.port : await locateDaemon(config.stateDir, config.host, candidates);
-  if (!port) { process.stderr.write(`handoff: no webmcp-daemon on ${config.host} (tried ${candidates.join(', ')}); start one with \`claude\` (the plugin's session hook) or \`webmcp-daemon serve\`.\n`); process.exit(1); }
+  if (!port) { process.stderr.write(`handoff: no webmcp-bridge on ${config.host} (tried ${candidates.join(', ')}); start one with \`claude\` (the plugin's session hook) or \`webmcp-bridge serve\`.\n`); process.exit(1); }
   const base = `http://${config.host}:${port}`;
   const post = async (path: string, body: unknown) => {
     const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

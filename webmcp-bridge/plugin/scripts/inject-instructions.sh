@@ -11,14 +11,14 @@ if [ "$inject" != "false" ] && [ -n "$WEBMCP_URL" ]; then
   instructions="$(curl -sf --max-time 3 "$WEBMCP_URL/instructions?page=selected" 2>/dev/null || true)"
 fi
 if [ -n "$WEBMCP_URL" ]; then
-  notice="[webmcp] The webmcp-daemon is running on 127.0.0.1:$WEBMCP_PORT (pages that embed webmcp-connector connect to it). A connected page has its own chat panel in the browser; that panel is the intended place to work on the page, and this terminal session is not required for it."
+  notice="[webmcp-bridge] The webmcp-bridge daemon is running on 127.0.0.1:$WEBMCP_PORT (pages that embed webmcp-connector connect to it). A connected page has its own chat panel in the browser; that panel is the intended place to work on the page, and this terminal session is not required for it."
 else
-  notice="[webmcp] No webmcp-daemon answered on its candidate ports (and starting one failed; see ~/.webmcp-daemon/daemon.log). Run /webmcp-daemon:setup to diagnose."
+  notice="[webmcp-bridge] No webmcp-bridge daemon answered on its candidate ports (and starting one failed; see ~/.webmcp-bridge/daemon.log). Run /webmcp-bridge:setup to diagnose."
 fi
 setup_needed=0
-if [ ! -f "$WEBMCP_STATE/setup-done" ] && [ ! -f "$HOME/Library/LaunchAgents/com.webmcp.daemon.plist" ] && ! pgrep -x webmcp-bridge >/dev/null 2>&1; then
+if [ ! -f "$WEBMCP_STATE/setup-done" ] && [ ! -f "$HOME/Library/LaunchAgents/com.webmcp-bridge.daemon.plist" ] && ! pgrep -x webmcp-bridge >/dev/null 2>&1; then
   setup_needed=1
-  notice="$notice Setup is not finished: the daemon currently stops when this computer restarts. Offer to make it start at login (/webmcp-daemon:setup) so the browser chat works without a terminal; afterwards this session can be closed."
+  notice="$notice Setup is not finished: the daemon currently stops when this computer restarts. Offer to make it start at login (/webmcp-bridge:setup) so the browser chat works without a terminal; afterwards this session can be closed."
 fi
 context="$notice"
 if [ -n "$instructions" ]; then context="$context"$'\n\n'"$instructions"; fi

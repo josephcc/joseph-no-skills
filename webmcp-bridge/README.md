@@ -13,7 +13,7 @@ Three things ship from this repo:
 | Deliverable | Path | What it is |
 |---|---|---|
 | `webmcp-connector` (0.0.6, not yet published) | `packages/connector` | The browser library: `connect()` mirrors the page's tools to the daemon (with a shim when the browser lacks the API) and carries the page's instructions and UI state; `<AgentChat>` and `<FloatingWidgetPanel>` (`webmcp-connector/react`) are the embedded chat with threads and page-provided cards. |
-| `webmcp-daemon` Claude Code plugin | `plugin` | Runs the daemon, gives terminal Claude the page's tools over MCP, and injects each page's instructions and live state through hooks. |
+| `webmcp-bridge` Claude Code plugin | `plugin` | Runs the daemon, gives terminal Claude the page's tools over MCP, and injects each page's instructions and live state through hooks. |
 | The demo page | `demo-site` | A sentence on a coloured background with eight tools, three cards and the chat: the page every example below uses. |
 
 The design record is under [`plans/`](plans/main.md): one plan per thread of work, with the decisions and the evidence.
@@ -29,18 +29,18 @@ Claude Code, point the marketplace at the directory:
 
 ```
 /plugin marketplace add /path/to/joseph-no-skills/webmcp-bridge
-/plugin install webmcp-daemon@webmcp-bridge
+/plugin install webmcp-bridge@webmcp-bridge
 ```
 
 Then run `claude` once, in any directory. The plugin's session hook starts the daemon, an **webmcp-bridge** item
 appears in the menu bar (macOS), and, until setup is finished, Claude offers to make the daemon start at login
-(`/webmcp-daemon:setup` does the same at any time). After that the browser chat works with no terminal open.
+(`/webmcp-bridge:setup` does the same at any time). After that the browser chat works with no terminal open.
 
 
 From a checkout instead: `bun install`, then `claude --plugin-dir ./plugin`, or `bun run daemon` to run the daemon
 by hand (`-- --allow-origin http://127.0.0.1:5173` skips the approval tab for the demo).
 
-Everything the daemon keeps (approvals, per-page workspaces, logs, the port it took) lives in `~/.webmcp-daemon`,
+Everything the daemon keeps (approvals, per-page workspaces, logs, the port it took) lives in `~/.webmcp-bridge`,
 shared by the CLI, the plugin, the login item and the menu bar item. The plugin has one setting, *Inject page
 context into terminal sessions* (default on); turn it off if you only use the chat in the browser.
 
@@ -115,6 +115,7 @@ replacing it. Press Ctrl+D in the terminal first: the daemon refuses to open a t
 another process still holds (Claude Code only refuses that for background sessions), and says so in the panel.
 `claude --resume <id>` takes the thread back to the terminal whenever you like; the panel's idle release after ten
 minutes, or closing the panel, lets go of it. `handoff --forget` withdraws the offer; the list's × does the same.
+A page can delete only its own threads; an offered terminal session is forgotten from the list, never deleted.
 A page never registers a handoff and never picks the agent's directory: the daemon rewrites `cwd` and `mcpServers`
 on every session request, and a registered handoff is the one exception. The design record is
 [plans/terminal-handoff/main.md](plans/terminal-handoff/main.md); the first page built on it is the
@@ -125,7 +126,7 @@ thematic-analysis workbench.
 **Stop** in the menu bar item stops the daemon, as does the daemon CLI: `node "${CLAUDE_PLUGIN_ROOT}/daemon/webmcp-daemon.js" stop`
 (from a checkout, `bun run daemon -- stop`); `status` says which port it is on; `uninstall-launchd` removes the
 login item. The daemon keeps per-page workspaces, logs and the origin
-allow-list under `~/.webmcp-daemon`; delete that directory to remove them. See [PRIVACY.md](PRIVACY.md).
+allow-list under `~/.webmcp-bridge`; delete that directory to remove them. See [PRIVACY.md](PRIVACY.md).
 
 ---
 
@@ -359,9 +360,10 @@ node scripts/docs/screenshots.mjs    # the README's images and terminal transcri
 
 The menu bar item is a 150 KB status-bar helper (`plugin/daemon/tray/webmcp-bridge-tray`, Objective-C, universal
 binary, `bun run build:tray`) the daemon drives over stdin/stdout; it shows the daemon's status, page and chat
-counts, *Start at login*, the log, the state folder, the MCP URL, and stop. The glyph is an SF Symbol (a PNG named
-`webmcp-bridge-icon.png` next to the helper, or `WEBMCP_TRAY_ICON`, replaces it as a template image); `--tray-text`
-shows the name instead. The plugin hook and the login item start
+counts, *Start at login*, the log, the state folder, the MCP URL, and stop. The glyph is a small bridge drawn by
+`scripts/make-tray-icon.py` (`plugin/daemon/tray/webmcp-bridge-icon.png`, a template image the menu bar colours itself;
+`WEBMCP_BRIDGE_TRAY_ICON` points at another); without the file the helper shows the SF Symbol
+`app.connected.to.app.below.app`. `--tray-text` shows the name instead. The plugin hook and the login item start
 the daemon with `--tray`; `bun run daemon` does not (add `-- --tray`).
 
 ## Privacy

@@ -2,7 +2,7 @@
 import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-const tls = process.env.WEBMCP_TLS_DIR ?? '/tmp/webmcp-e2e/tls';
+const tls = process.env.WEBMCP_BRIDGE_TLS_DIR ?? '/tmp/webmcp-e2e/tls';
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   server: { port: 5174, strictPort: true, host: '127.0.0.1', https: { key: readFileSync(`${tls}/key.pem`), cert: readFileSync(`${tls}/cert.pem`) } },

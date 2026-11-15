@@ -14,7 +14,7 @@ import type { HandoffRegistry } from './handoffs.ts';
 import { log } from './log.ts';
 import type { Registry } from './registry.ts';
 import type { OriginPolicy } from './security.ts';
-import { handoffLoadOf, heldElsewhereError, rewriteOutbound, type GuardContext } from './session-guard.ts';
+import { handoffLoadOf, heldElsewhereError, refusedDelete, rewriteOutbound, sessionBelongsToWorkspace, type GuardContext } from './session-guard.ts';
 import type { Workspaces } from './workspace.ts';
 
 export interface AcpDeps { registry: Registry; policy: OriginPolicy; workspaces: Workspaces; config: DaemonConfig; handoffs?: HandoffRegistry }
@@ -96,6 +96,8 @@ export class AcpRelay {
           origin: ctx.origin, workspaceDir: cwd,
           pageMcpUrl: page ? `http://${this.#deps.config.host}:${this.#deps.config.port}/mcp/by-page/${page.id}` : undefined,
           handoffFor: (id) => this.#deps.handoffs?.forOrigin(id, ctx.origin),
+          ownsSession: (id) => sessionBelongsToWorkspace(id, cwd),
+          isHandoff: (id) => !!this.#deps.handoffs?.get(id),
           log: (line) => log.info(`acp guard (${ctx.origin}, pid ${child.pid}): ${line}`),
         };
         // Agent → page, with a handle to answer in the agent's place: a handoff load is refused here, before the adapter
@@ -105,6 +107,8 @@ export class AcpRelay {
         const touch2 = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ start: (c) => { toClient = c; }, transform: (m, c) => { meta.lastActivity = Date.now(); c.enqueue(m); } });
         const touch = new TransformStream<acp.AnyMessage, acp.AnyMessage>({ transform: async (m, c) => {
           meta.lastActivity = Date.now();
+          const refusedDel = refusedDelete(m, guard);
+          if (refusedDel) { log.warn(`acp guard (${ctx.origin}, pid ${child.pid}): refused session/delete of a session that is not this page's${refusedDel === 'drop' ? ' (no id: dropped)' : ''}`); if (refusedDel !== 'drop') toClient?.enqueue(refusedDel as acp.AnyMessage); return; }
           const handoffId = handoffLoadOf(m, guard);
           if (handoffId && this.#deps.handoffs) {
             const live = await this.#deps.handoffs.liveHolder(handoffId, { fresh: true, ownAdapterPids: this.adapterPids() }).catch(() => null);
@@ -114,7 +118,8 @@ export class AcpRelay {
               return;
             }
           }
-          c.enqueue(rewriteOutbound(m, guard) as acp.AnyMessage);
+          const out = rewriteOutbound(m, guard);
+          if (out !== undefined) c.enqueue(out as acp.AnyMessage);
         } });
         // When the browser side goes away, give the adapter a few seconds (it persists the session) and then stop it;
         // a reload reconnects with a fresh adapter and `session/load`.
@@ -149,7 +154,7 @@ export class AcpRelay {
 
   #adapter(): { cmd: string; args: string[] } {
     if (this.#adapterCmd) return this.#adapterCmd;
-    const explicit = process.env.WEBMCP_ACP_AGENT;
+    const explicit = process.env.WEBMCP_BRIDGE_ACP_AGENT;
     if (explicit) { const [cmd, ...args] = explicit.split(' '); this.#adapterCmd = { cmd: cmd!, args }; return this.#adapterCmd; }
     const sibling = join(dirname(process.argv[1] ?? ''), 'claude-agent-acp.js');   // bundled next to the daemon (plugin)
     if (existsSync(sibling)) { this.#adapterCmd = { cmd: process.execPath, args: [sibling] }; return this.#adapterCmd; }

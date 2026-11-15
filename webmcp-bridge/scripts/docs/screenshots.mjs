@@ -101,7 +101,7 @@ try {
   const TERMINAL_PROMPT = "I have a web page open in my browser. What is it showing right now? Then change its sentence to 'Hello from terminal Claude' and propose a warmer palette for it.";
   const claude = spawn('claude', ['-p', TERMINAL_PROMPT, '--mcp-config', mcpConfig, '--strict-mcp-config', '--allowedTools', 'mcp__webmcp', '--output-format', 'stream-json', '--verbose', '--model', 'sonnet'], {
     cwd: stateDir,
-    env: { ...process.env, CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT: 'false', WEBMCP_DAEMON_PORT: String(PORT) },
+    env: { ...process.env, CLAUDE_PLUGIN_OPTION_INJECT_PAGE_CONTEXT: 'false', WEBMCP_BRIDGE_PORT: String(PORT) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(claude);

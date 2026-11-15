@@ -27,7 +27,7 @@ export class AlreadyRunningError extends Error {
   readonly pid: number;
   readonly port: number;
   constructor(pid: number, port: number, host: string, legacy = false) {
-    super(`already running on ${host}:${port} (pid ${pid})${legacy ? '; it predates port discovery: restart it (webmcp-daemon stop, then the plugin or the login item starts the new one)' : ''}`);
+    super(`already running on ${host}:${port} (pid ${pid})${legacy ? '; it predates port discovery: restart it (webmcp-bridge stop, then the plugin or the login item starts the new one)' : ''}`);
     this.name = 'AlreadyRunningError';
     this.pid = pid;
     this.port = port;
@@ -37,7 +37,7 @@ export class AlreadyRunningError extends Error {
 export class AllPortsTakenError extends Error {
   readonly ports: readonly number[];
   constructor(ports: readonly number[], host: string) {
-    super(`every candidate port is taken on ${host} (${ports.join(', ')}); free one, or pin another with --port <n> / WEBMCP_DAEMON_PORT`);
+    super(`every candidate port is taken on ${host} (${ports.join(', ')}); free one, or pin another with --port <n> / WEBMCP_BRIDGE_PORT`);
     this.name = 'AllPortsTakenError';
     this.ports = ports;
   }

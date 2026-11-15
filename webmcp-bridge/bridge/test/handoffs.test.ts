@@ -51,7 +51,7 @@ describe('HandoffRegistry', () => {
     expect(JSON.parse(readFileSync(join(state, 'handoffs.json'), 'utf8'))).toHaveLength(2);
     const again = new HandoffRegistry(state, none);
     expect(again.all().map((h) => h.sessionId)).toEqual([ID(1), ID(2)]);
-    expect(again.forget(ID(2))).toBe(true);
+    expect(again.forget(ID(2).toUpperCase())).toBe(true);
     expect(again.forget(ID(2))).toBe(false);
     expect(again.all()).toHaveLength(1);
     for (let i = 10; i < 10 + HANDOFF_CAP + 5; i++) again.offer({ sessionId: ID(i), cwd });
@@ -67,6 +67,8 @@ describe('HandoffRegistry', () => {
     expect(reg.visibleTo('http://localhost:47821').map((h) => h.sessionId)).toEqual([ID(2), ID(1)]);
     expect(reg.visibleTo(undefined).map((h) => h.sessionId)).toEqual([ID(3), ID(2), ID(1)]);
     expect(reg.forOrigin(ID(1), 'http://localhost:47821')?.cwd).toBe(cwd);
+    expect(reg.get(ID(1).toUpperCase())?.sessionId).toBe(ID(1));   // a re-cased UUID is the same record
+    expect(reg.forOrigin(ID(1).toUpperCase(), 'http://localhost:47821')?.cwd).toBe(cwd);
     expect(reg.forOrigin(ID(1), 'http://localhost:5173')).toBeUndefined();
     expect(reg.forOrigin(ID(2), 'http://localhost:5173')?.cwd).toBe(cwd);
   });
@@ -161,4 +163,39 @@ describe('HandoffRegistry.liveHolder', () => {
     const views = await reg.withLiveness(reg.all(), [200]);
     expect(views.map((v) => [v.sessionId, v.live?.heldByPage])).toEqual([[ID(2), true], [ID(1), false]]);
   });
+});
+
+describe('one session id listed twice (Codex audit, 2026-11-14)', () => {
+  test('a holder that is not one of the daemon\'s agents wins over one that is', async () => {
+    const cwd = tmp();
+    const parents: Record<number, number> = { 7: 100, 8: 555 };
+    const reg = new HandoffRegistry(tmp(), async () => [{ sessionId: ID(1), pid: 7, kind: 'interactive' }, { sessionId: ID(1), pid: 8, kind: 'interactive', status: 'idle' }], async (pid) => parents[pid]);
+    reg.offer({ sessionId: ID(1), cwd });
+    const h = await reg.liveHolder(ID(1), { ownAdapterPids: [100] });
+    expect(h).toEqual({ sessionId: ID(1), pid: 8, kind: 'interactive', status: 'idle', heldByPage: false });
+    const views = await reg.withLiveness(reg.all(), [100]);
+    expect(views[0]!.live?.pid).toBe(8);
+    const onlyOurs = new HandoffRegistry(tmp(), async () => [{ sessionId: ID(1), pid: 7 }], async () => 100);
+    onlyOurs.offer({ sessionId: ID(1), cwd });
+    expect((await onlyOurs.liveHolder(ID(1), { ownAdapterPids: [100] }))?.heldByPage).toBe(true);
+  });
+});
+
+describe('loopback Host only (DNS rebinding)', () => {
+  function config(dir: string, port: number): DaemonConfig {
+    return { host: HOST, port, portPinned: true, stateDir: dir, allowOrigins: ['http://localhost:47821'], noBrowser: true, approval: 'reject', agents: [], callTimeoutMs: 1000, idleAgentMs: 60_000, tray: false, trayText: false, version: 'test' };
+  }
+  test('a rebound hostname is refused on every route; 127.0.0.1 and localhost with the port are served', async () => {
+    const port = await freePort();
+    daemons.push(await serve(config(tmp(), port)));
+    const base = `http://${HOST}:${port}`;
+    for (const path of ['/handoffs', '/status.json', '/id', '/health', '/pages']) {
+      const r = await fetch(`${base}${path}`, { headers: { host: 'evil.example' } });
+      expect([path, r.status]).toEqual([path, 403]);
+    }
+    expect((await fetch(`${base}/handoffs`, { headers: { host: `127.0.0.1.attacker.example:${port}` } })).status).toBe(403);
+    expect((await fetch(`${base}/handoffs`, { headers: { host: `localhost:${port}` } })).status).toBe(200);
+    expect((await fetch(`${base}/handoffs`, { headers: { host: `localhost:${port + 1}` } })).status).toBe(403);
+    expect((await fetch(`${base}/id`)).status).toBe(200);
+  }, 15_000);
 });

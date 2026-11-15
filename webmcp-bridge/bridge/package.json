@@ -1,11 +1,11 @@
 {
-  "name": "webmcp-daemon",
+  "name": "webmcp-bridge",
   "version": "0.0.1",
   "description": "Local daemon: exposes a page's WebMCP tools to Claude Code over MCP and hosts the embedded chat over ACP.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "webmcp-daemon": "./src/index.ts"
+    "webmcp-bridge": "./src/index.ts"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.100.0",

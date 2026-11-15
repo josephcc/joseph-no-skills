@@ -24,7 +24,7 @@ function serveId(port: number, body: unknown, { status = 200, hang = false }: { 
     s.listen(port, HOST, () => resolve());
   });
 }
-const identity = (instance = 'i1') => ({ daemon: 'webmcp-daemon', protocol: 1, version: 'test', instance });
+const identity = (instance = 'i1') => ({ daemon: 'webmcp-bridge', protocol: 1, version: 'test', instance });
 
 describe('identifyDaemon', () => {
   test('the daemon identifies itself; a stranger does not', async () => {

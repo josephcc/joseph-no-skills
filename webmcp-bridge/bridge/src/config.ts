@@ -6,7 +6,7 @@ export interface DaemonConfig {
   host: string;
   /** The port in use: the pinned one, or the first free candidate once `serve` has picked it. */
   port: number;
-  /** `--port` / WEBMCP_DAEMON_PORT given: exactly that port, no fallback (plans/daemon-port-discovery D-2). */
+  /** `--port` / WEBMCP_BRIDGE_PORT given: exactly that port, no fallback (plans/daemon-port-discovery D-2). */
   portPinned: boolean;
   /** The ports to walk when not pinned; tests substitute free ones. Default CANDIDATE_PORTS. */
   portCandidates?: readonly number[];
@@ -29,7 +29,7 @@ export interface DaemonConfig {
   version: string;
 }
 
-/** `webmcp-daemon handoff …`: offer (or forget) the calling terminal session to a page (plans/terminal-handoff §2.5). */
+/** `webmcp-bridge handoff …`: offer (or forget) the calling terminal session to a page (plans/terminal-handoff §2.5). */
 export interface HandoffArgs {
   /** Default: $CLAUDE_CODE_SESSION_ID, which every Claude Code session sets for its shell commands. */
   session?: string;
@@ -45,18 +45,18 @@ export interface HandoffArgs {
 export function parseArgs(argv: string[], version: string): { command: string; config: DaemonConfig; handoff: HandoffArgs } {
   const config: DaemonConfig = {
     host: '127.0.0.1',
-    port: Number(process.env.WEBMCP_DAEMON_PORT ?? DEFAULT_PORT),
-    portPinned: process.env.WEBMCP_DAEMON_PORT !== undefined,
-    stateDir: process.env.WEBMCP_DAEMON_STATE ?? join(homedir(), '.webmcp-daemon'),
+    port: Number(process.env.WEBMCP_BRIDGE_PORT ?? DEFAULT_PORT),
+    portPinned: process.env.WEBMCP_BRIDGE_PORT !== undefined,
+    stateDir: process.env.WEBMCP_BRIDGE_STATE ?? join(homedir(), '.webmcp-bridge'),
     allowOrigins: [],
-    noBrowser: process.env.WEBMCP_DAEMON_NO_BROWSER === '1',
-    approval: process.env.WEBMCP_DAEMON_NO_BROWSER === '1' ? 'reject' : (process.env.WEBMCP_DAEMON_APPROVAL as 'open' | 'log' | undefined) ?? 'open',
+    noBrowser: process.env.WEBMCP_BRIDGE_NO_BROWSER === '1',
+    approval: process.env.WEBMCP_BRIDGE_NO_BROWSER === '1' ? 'reject' : (process.env.WEBMCP_BRIDGE_APPROVAL as 'open' | 'log' | undefined) ?? 'open',
     agents: [],
     callTimeoutMs: 60_000,
     idleAgentMs: 10 * 60_000,
     claudePath: process.env.CLAUDE_CODE_EXECUTABLE,
-    tray: process.env.WEBMCP_DAEMON_TRAY === '1',
-    trayText: process.env.WEBMCP_DAEMON_TRAY_TEXT === '1',
+    tray: process.env.WEBMCP_BRIDGE_TRAY === '1',
+    trayText: process.env.WEBMCP_BRIDGE_TRAY_TEXT === '1',
     version,
   };
   let command = 'serve';
@@ -76,7 +76,7 @@ export function parseArgs(argv: string[], version: string): { command: string; c
       case '--forget': handoff.forget = true; break;
       case '--port': config.port = Number(next()); config.portPinned = true; break;
       case '--ports': {
-        // A list to walk: it also unpins WEBMCP_DAEMON_PORT or an earlier --port (the last of --port/--ports wins).
+        // A list to walk: it also unpins WEBMCP_BRIDGE_PORT or an earlier --port (the last of --port/--ports wins).
         const ports = next().split(',').map((p) => p.trim()).filter(Boolean).map((p) => { const n = Number(p); if (!Number.isInteger(n) || n <= 0 || n > 65535) throw new Error(`--ports: not a port: ${p}`); return n; });
         if (!ports.length) throw new Error('--ports expects a comma-separated list');
         config.portCandidates = ports; config.port = ports[0]!; config.portPinned = false;
@@ -101,10 +101,10 @@ export function parseArgs(argv: string[], version: string): { command: string; c
   return { command, config, handoff };
 }
 
-export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-launchd] [options]
-  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(', ')}; env WEBMCP_DAEMON_PORT)
+export const HELP = `webmcp-bridge [serve|status|stop|install-launchd|uninstall-launchd] [options]
+  --port <n>                 pin the listen port (default: the first free of ${CANDIDATE_PORTS.join(', ')}; env WEBMCP_BRIDGE_PORT)
   --ports <a,b,…>            the candidate ports to walk instead (tests, private daemons)
-  --state-dir <dir>          state directory (default ~/.webmcp-daemon, env WEBMCP_DAEMON_STATE)
+  --state-dir <dir>          state directory (default ~/.webmcp-bridge, env WEBMCP_BRIDGE_STATE)
   --allow-origin <origin[,…]> pre-approve page origins (e.g. http://127.0.0.1:5173)
   --no-browser               never open the approval page; unknown origins are rejected
   --approval open|log|reject  what to do for an unknown origin (default open; log = hold and print the URL)
@@ -112,7 +112,7 @@ export const HELP = `webmcp-daemon [serve|status|stop|install-launchd|uninstall-
   --call-timeout-ms <n>      per page-tool call (default 60000)
   --idle-agent-ms <n>        reap idle embedded-chat agents (default 600000)
   --claude <path>            claude executable for the embedded chat (env CLAUDE_CODE_EXECUTABLE)
-  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_DAEMON_TRAY=1)
+  --tray / --no-tray         show the webmcp-bridge menu bar item (macOS; env WEBMCP_BRIDGE_TRAY=1)
   install-launchd [--dry-run] register a login item (macOS, opt-in); uninstall-launchd removes it
   handoff [--session <uuid>] [--cwd <dir>] [--origin <origin>] [--title <t>] [--note <n>] [--tag k=v …] [--forget]
                              offer this terminal's Claude Code session to a page's embedded chat (the session id defaults to

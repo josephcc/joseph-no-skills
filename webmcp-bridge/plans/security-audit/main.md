@@ -77,7 +77,9 @@ Each workspace is created with `permissions.defaultMode: 'auto'` (`bridge/src/wo
 **Fix:** decide the default in [Q-2](#Q-2); whatever the default, the approval page should list what the origin gets (its own page tools; which Claude Code tools; the workspace path) and the site's requested policy, and the status page should show it per origin.
 </finding>
 
-<finding id="F-4" title="DNS rebinding reaches /mcp and the read-only routes: no Host check, no Origin check on /mcp" severity="p1" status="deferred" effort="small">
+<finding id="F-4" title="DNS rebinding reaches /mcp and the read-only routes: no Host check, no Origin check on /mcp" severity="p1" status="fixed" effort="small">
+**Update 2026-11-14 (webmcp-bridge):** fixed. `isLoopbackHost` in `bridge/src/http.ts` refuses every HTTP request and WebSocket upgrade whose `Host` header is not `127.0.0.1`, `localhost` or `[::1]` with the daemon\'s port (tested in `bridge/test/handoffs.test.ts`); found again by the Codex security audit of the handoff work, see [terminal-handoff](../terminal-handoff/main.md).
+
 No route checks the `Host` header, and the MCP route checks no `Origin` (`bridge/src/mcp.ts:42`). A site whose hostname rebinds to `127.0.0.1` is same-origin with the daemon in the browser's eyes: it can read `/pages`, `/status.json` (which includes the log tail and approved origins, `bridge/src/http.ts:60`), and POST JSON to `/mcp`, calling a connected page's tools and reading its context. `/ws`, `/acp`, `/call` and `/approve` are safe because the browser still sends the attacker's real `Origin`. Chrome's Local Network Access permission ([§7](#7-rollout-what-a-user-sees)) prompts the user before such a request reaches loopback, which blunts this in Chrome; Firefox and Safari do not enforce it.
 
 **Fix:** an allow-list on `Host` (`127.0.0.1:<port>`, `localhost:<port>`) in the HTTP router; refuse POST `/mcp` when a browser `Origin` is present and is neither the daemon's own nor approved; the MCP SDK already implements both as options (`enableDnsRebindingProtection`, `allowedHosts`, `allowedOrigins` in `node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js:78`). Deferred per [D-1](#D-1).
@@ -180,7 +182,7 @@ In order; each is small except the site-side work. Tick when done.
 <check id="k3" status="todo">[F-3](#F-3): the approval page lists what approval grants (page tools, the Claude Code tools under the chosen default, the workspace path) and the site's requested policy; the status page shows the policy per origin.</check>
 <check id="k4" status="todo">[Q-2](#Q-2): implement the chosen default (connector `toolPolicy` default + workspace `settings.json`), and on the science-kg side declare what its skills need instead of allowing everything.</check>
 <check id="k5" status="todo">[Q-1](#Q-1): the chosen deployment shape as a plugin option (allow-list + approval policy), documented in the README's install section.</check>
-<check id="k6" status="todo">[F-4](#F-4), when un-deferred: `Host` allow-list in the router, `Origin` rule on POST `/mcp`, the SDK's rebinding option; a test with a foreign `Host`.</check>
+<check id="k6" status="done">[F-4](#F-4), when un-deferred: `Host` allow-list in the router, `Origin` rule on POST `/mcp`, the SDK's rebinding option; a test with a foreign `Host`.</check>
 <check id="k7" status="todo">[F-9](#F-9): `/id` returns `daemon` and `protocol` only; `version` and `instance` move to `/health`; the relay and hooks read them there.</check>
 <check id="k8" status="todo">[F-10](#F-10) and [Q-3](#Q-3): the connector reports "blocked by the browser" separately from "no daemon"; the site's copy explains the Chrome prompt and names Safari as unsupported.</check>
 <check id="k9" status="todo">[F-5](#F-5), site side: CSP review of the hosted app, third-party scripts off the app origin, SRI for CDN assets, dependency audit in CI; page tools audited for `readOnlyHint` accuracy.</check>

@@ -14,8 +14,8 @@ export interface TrayDeps { registry: Registry; config: DaemonConfig; agentCount
 /**
  * macOS menu bar presence ("webmcp-bridge"), owned by the daemon: spawns the tiny status-item helper that ships next
  * to the daemon bundle (plugin/daemon/tray/webmcp-bridge-tray) and drives it over JSON lines. The menu bar glyph is an
- * SF Symbol; a PNG next to the helper (webmcp-bridge-icon.png, or WEBMCP_TRAY_ICON) replaces it as a template image
- * when one is shipped. If the helper is missing or we are not on macOS, the daemon simply runs without a tray. Plan D-30.
+ * SF Symbol unless the PNG next to the helper (webmcp-bridge-icon.png, drawn by scripts/make-tray-icon.py; or
+ * WEBMCP_BRIDGE_TRAY_ICON) is there, which it is: a small bridge, shown as a template image the menu bar colours itself. If the helper is missing or we are not on macOS, the daemon simply runs without a tray. Plan D-30.
  */
 export class Tray {
   readonly #deps: TrayDeps;
@@ -27,7 +27,7 @@ export class Tray {
 
   static helperPath(): string | undefined {
     const candidates = [
-      process.env.WEBMCP_TRAY_HELPER,
+      process.env.WEBMCP_BRIDGE_TRAY_HELPER,
       join(dirname(process.argv[1] ?? ''), 'tray', 'webmcp-bridge-tray'),                      // next to the daemon bundle (plugin, login-item copy)
       join(dirname(process.argv[1] ?? ''), '..', '..', 'plugin', 'daemon', 'tray', 'webmcp-bridge-tray'),   // repo checkout (bridge/src/index.ts)
     ].filter((p): p is string => !!p);
@@ -36,7 +36,7 @@ export class Tray {
 
   /** An optional PNG next to the helper (launchd and the plugin hook copy it alongside when it exists). */
   static iconPath(helper: string): string | undefined {
-    const p = process.env.WEBMCP_TRAY_ICON ?? join(dirname(helper), 'webmcp-bridge-icon.png');
+    const p = process.env.WEBMCP_BRIDGE_TRAY_ICON ?? join(dirname(helper), 'webmcp-bridge-icon.png');
     return existsSync(p) ? p : undefined;
   }
 
@@ -90,8 +90,8 @@ export class Tray {
       title: '● webmcp-bridge',
       image: text ? '' : (this.#icon ?? ''),                                   // the icon
       template: true,                                                          // menu bar convention: monochrome, coloured by the system (white in dark mode, black in light)
-      icon: text ? '' : 'point.3.connected.trianglepath.dotted',               // fallback if the PNG is missing
-      tooltip: `webmcp-bridge (webmcp-daemon ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`,
+      icon: text ? '' : 'app.connected.to.app.below.app',                       // fallback if the PNG is missing
+      tooltip: `webmcp-bridge (webmcp-bridge ${this.#deps.config.version}): ${pages} page(s), ${agents} chat(s)`,
       items,
     });
   }

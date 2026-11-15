@@ -72,7 +72,7 @@ ${body}
     box({ x: 64, y: 100, w: 300, h: 170, title: 'Your page', fill: C.white, edge: C.pageEdge, lines: ['registers tools on', { text: 'document.modelContext', mono: true }, 'and describes itself:', 'instructions + what the user sees'] }),
     box({ x: 64, y: 330, w: 300, h: 205, title: 'webmcp-connector', fill: C.white, edge: C.pageEdge, lines: [{ text: 'connect()', mono: true }, 'mirrors the tools, answers', 'context requests, runs calls', { text: '<AgentChat> the chat panel', mono: true }, { text: '<FloatingWidgetPanel> cards', mono: true }] }),
     // Daemon
-    box({ x: 470, y: 40, w: 300, h: 530, title: 'webmcp-daemon', fill: C.daemon, edge: C.daemonEdge, lines: [{ text: 'one process on 127.0.0.1,', dim: true }, { text: 'first free of 5 candidate ports', dim: true }] }),
+    box({ x: 470, y: 40, w: 300, h: 530, title: 'webmcp-bridge', fill: C.daemon, edge: C.daemonEdge, lines: [{ text: 'one process on 127.0.0.1,', dim: true }, { text: 'first free of 5 candidate ports', dim: true }] }),
     box({ x: 506, y: 150, w: 240, h: 76, title: '/mcp', fill: C.white, edge: C.daemonEdge, lines: ['the page\'s tools, over MCP'], titleSize: 20, pad: 12 }),
     box({ x: 506, y: 330, w: 240, h: 76, title: '/ws', fill: C.white, edge: C.daemonEdge, lines: ['pages, WebSocket'], titleSize: 20, pad: 12 }),
     box({ x: 506, y: 440, w: 240, h: 76, title: '/acp', fill: C.white, edge: C.daemonEdge, lines: ['the chat, ACP over WebSocket'], titleSize: 20, pad: 12 }),
@@ -80,7 +80,7 @@ ${body}
     note({ x: 506, y: 532, lines: ['origin approval · page registry', 'a workspace per page origin'], size: 14 }),
     // Local Claude Code, both ways in
     box({ x: 820, y: 40, w: 340, h: 530, title: 'Local Claude Code', fill: C.claude, edge: C.claudeEdge, lines: [{ text: 'your login, your skills, your plugins', dim: true }] }),
-    box({ x: 856, y: 120, w: 280, h: 125, title: 'Terminal session', fill: C.white, edge: C.claudeEdge, lines: ['the webmcp-daemon plugin:', 'hooks inject instructions + state,', 'a stdio relay carries MCP'], titleSize: 20, bodySize: 16 }),
+    box({ x: 856, y: 120, w: 280, h: 125, title: 'Terminal session', fill: C.white, edge: C.claudeEdge, lines: ['the webmcp-bridge plugin:', 'hooks inject instructions + state,', 'a stdio relay carries MCP'], titleSize: 20, bodySize: 16 }),
     box({ x: 856, y: 350, w: 280, h: 190, title: 'The chat\'s agent', fill: C.white, edge: C.claudeEdge, lines: [{ text: 'claude-agent-acp', mono: true }, 'around Claude Code, one per open', 'thread, started by the daemon in', 'the page\'s workspace, with the', 'page\'s instructions as its prompt'], titleSize: 20, bodySize: 16 }),
     // Arrows: a badge above (or beside) each, a few words under it, the caption explains them in order.
     arrow({ points: [[214, 270], [214, 330]] }), badge(192, 300, 1), note({ x: 226, y: 305, lines: ['register tools'], size: 14 }),
@@ -163,7 +163,7 @@ ${body}
     box({ x: 40, y: 150, w: 200, h: 90, title: 'serve', fill: C.daemon, edge: C.daemonEdge, lines: ['(no --port)'] }),
     box({ x: 300, y: 120, w: 300, h: 150, title: 'A daemon recorded here?', fill: C.white, edge: C.daemonEdge, lines: ['daemon.json in this state dir:', 'pid alive, and GET /id', 'answers as that instance'] }),
     box({ x: 660, y: 40, w: 500, h: 80, title: 'yes → exit 0', fill: C.page, edge: C.pageEdge, lines: ['already running on 127.0.0.1:<port> (pid …)'] }),
-    box({ x: 660, y: 170, w: 500, h: 110, title: 'no → claim daemon.json, then walk the list', fill: C.white, edge: C.daemonEdge, lines: [{ text: '8717 → 49217 → 52431 → 55893 → 61307', mono: true }, 'first free: listen, record the port · all taken: exit 1'] }),
+    box({ x: 660, y: 170, w: 500, h: 110, title: 'no → claim daemon.json, then walk the list', fill: C.white, edge: C.daemonEdge, lines: [{ text: '8737 → 49237 → 52451 → 55913 → 61327', mono: true }, 'first free: listen, record the port · all taken: exit 1'] }),
     box({ x: 40, y: 340, w: 1120, h: 120, title: 'Every client walks the same list', fill: C.claude, edge: C.claudeEdge, lines: ['pages: GET /id on each candidate, then a WebSocket only to the port that answered as the daemon', 'the plugin\'s hooks and the webmcp-mcp relay: daemon.json first, then the list'] }),
     arrow({ points: [[240, 195], [300, 195]] }),
     arrow({ points: [[600, 165], [660, 80]], label: 'yes', labelDy: -14 }),

@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { DaemonConfig } from './config.ts';
 
-export const LAUNCHD_LABEL = 'com.webmcp.daemon';
+export const LAUNCHD_LABEL = 'com.webmcp-bridge.daemon';
 
 /**
  * Opt-in login item (D-26): a per-user LaunchAgent that starts the daemon at login and restarts it if it dies.
@@ -44,7 +44,7 @@ export function installLaunchd(config: DaemonConfig, entry: string, { dryRun = f
   writeFileSync(plan.plistPath, plan.plist);
   execFileSync('launchctl', ['bootstrap', `gui/${process.getuid?.() ?? 501}`, plan.plistPath], { stdio: 'inherit' });
   writeFileSync(join(config.stateDir, 'setup-done'), new Date().toISOString() + '\n');
-  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-daemon uninstall-launchd`;
+  return `installed ${plan.plistPath} (daemon copied to ${plan.binDir}); it now starts at login. Remove with: webmcp-bridge uninstall-launchd`;
 }
 
 export function uninstallLaunchd(): string {

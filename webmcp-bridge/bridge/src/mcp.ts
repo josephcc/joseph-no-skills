@@ -154,7 +154,7 @@ const PAGE_ID_ARG = { page_id: { type: 'string', description: 'Page id (or id pr
 
 function metaTools(): Tool[] {
   return [
-    { name: 'webmcp_list_pages', description: 'Web pages currently connected to this computer\'s webmcp-daemon, with their tool counts and which one is selected (its tools are mirrored here by name).', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true, openWorldHint: false } },
+    { name: 'webmcp_list_pages', description: 'Web pages currently connected to this computer\'s webmcp-bridge, with their tool counts and which one is selected (its tools are mirrored here by name).', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true, openWorldHint: false } },
     { name: 'webmcp_use_page', description: 'Select which connected page is mirrored by name (and whose UI state is injected). Persists until that page disconnects.', inputSchema: { type: 'object', properties: PAGE_ID_ARG, required: ['page_id'] }, annotations: { readOnlyHint: false, openWorldHint: false } },
     { name: 'webmcp_list_tools', description: 'List a page\'s WebMCP tools with their full input schemas and annotations.', inputSchema: { type: 'object', properties: PAGE_ID_ARG }, annotations: { readOnlyHint: true, openWorldHint: false } },
     { name: 'webmcp_call_tool', description: 'Call a page tool by its own name (works even when mirrored tools have not refreshed yet).', inputSchema: { type: 'object', properties: { ...PAGE_ID_ARG, name: { type: 'string', description: 'Tool name as listed by webmcp_list_tools' }, args: { type: 'object', description: 'Arguments matching the tool\'s input schema', additionalProperties: true } }, required: ['name'] }, annotations: { openWorldHint: false } },

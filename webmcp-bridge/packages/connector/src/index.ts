@@ -28,7 +28,7 @@ const STATE_TEXT_BUDGET = 9_000;
 const CLAIM_MEMORY_MS = 60_000;
 
 /**
- * Connect this page to the local webmcp-daemon: mirrors the page's WebMCP tools,
+ * Connect this page to the local webmcp-bridge: mirrors the page's WebMCP tools,
  * answers context requests, and executes tool calls on the daemon's behalf.
  */
 export function connect(options: ConnectOptions = {}): PageConnection {

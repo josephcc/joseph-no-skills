@@ -79,13 +79,15 @@ export class HandoffRegistry {
 
   forget(sessionId: string): boolean {
     const before = this.#records.length;
-    this.#records = this.#records.filter((r) => r.sessionId !== sessionId);
+    const key = sessionId.toLowerCase();
+    this.#records = this.#records.filter((r) => r.sessionId !== key);
     if (this.#records.length === before) return false;
     this.#save();
     return true;
   }
 
-  get(sessionId: string): Handoff | undefined { return this.#records.find((r) => r.sessionId === sessionId); }
+  /** Ids are stored lower-cased; a lookup normalises too, so a page cannot slip past a check by re-casing a UUID. */
+  get(sessionId: string): Handoff | undefined { const key = sessionId.toLowerCase(); return this.#records.find((r) => r.sessionId === key); }
 
   /** The record a page at `origin` may load under that id: offered to that origin, or to none. */
   forOrigin(sessionId: string, origin: string): Handoff | undefined {
@@ -108,9 +110,16 @@ export class HandoffRegistry {
     const rows = await this.#liveRows();
     return Promise.all(records.map(async (r) => {
       if (rows === null) return { ...r, live: null, liveUnknown: true as const };
-      const live = rows.find((s) => s.sessionId === r.sessionId);
-      return { ...r, live: live ? { ...live, heldByPage: await this.#isOurs(live, ownAdapterPids) } : null };
+      return { ...r, live: await this.#holderOf(rows, r.sessionId, ownAdapterPids) };
     }));
+  }
+
+  /** The process holding a session, with a holder that is not one of the daemon's own agents taking precedence: the live list can carry one id more than once. */
+  async #holderOf(rows: LiveSession[], sessionId: string, ownAdapterPids: readonly number[]): Promise<(LiveSession & { heldByPage: boolean }) | null> {
+    const matches = rows.filter((s) => s.sessionId === sessionId.toLowerCase());
+    if (!matches.length) return null;
+    const flagged = await Promise.all(matches.map(async (s) => ({ ...s, heldByPage: await this.#isOurs(s, ownAdapterPids) })));
+    return flagged.find((s) => !s.heldByPage) ?? flagged[0]!;
   }
 
   /**
@@ -120,8 +129,7 @@ export class HandoffRegistry {
   async liveHolder(sessionId: string, opts: { fresh?: boolean; ownAdapterPids?: readonly number[] } = {}): Promise<(LiveSession & { heldByPage: boolean }) | null> {
     if (opts.fresh && !this.#pending) this.#live = undefined;
     const rows = await this.#liveRows();
-    const live = rows?.find((s) => s.sessionId === sessionId.toLowerCase());
-    return live ? { ...live, heldByPage: await this.#isOurs(live, opts.ownAdapterPids ?? []) } : null;
+    return rows ? this.#holderOf(rows, sessionId, opts.ownAdapterPids ?? []) : null;
   }
 
   async #isOurs(live: LiveSession, ownAdapterPids: readonly number[]): Promise<boolean> {

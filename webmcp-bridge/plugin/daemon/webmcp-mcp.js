@@ -9102,9 +9102,9 @@ class StdioServerTransport {
 
 // packages/connector/src/protocol.ts
 var PROTOCOL_VERSION = 1;
-var CANDIDATE_PORTS = [8717, 49217, 52431, 55893, 61307];
+var CANDIDATE_PORTS = [8737, 49237, 52451, 55913, 61327];
 var DEFAULT_PORT = CANDIDATE_PORTS[0];
-var DAEMON_NAME = "webmcp-daemon";
+var DAEMON_NAME = "webmcp-bridge";
 // bridge/src/instance.ts
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9150,11 +9150,11 @@ async function locateDaemon(stateDir, host, candidates, timeoutMs = 300) {
 
 // bridge/src/mcp-relay.ts
 var HOST = "127.0.0.1";
-var stateDir = process.env.WEBMCP_DAEMON_STATE ?? join2(homedir(), ".webmcp-daemon");
-var pinned = process.env.WEBMCP_DAEMON_PORT ? Number(process.env.WEBMCP_DAEMON_PORT) : undefined;
-var HOOK_GRACE_MS = Number(process.env.WEBMCP_RELAY_WAIT_MS ?? 5000);
+var stateDir = process.env.WEBMCP_BRIDGE_STATE ?? join2(homedir(), ".webmcp-bridge");
+var pinned = process.env.WEBMCP_BRIDGE_PORT ? Number(process.env.WEBMCP_BRIDGE_PORT) : undefined;
+var HOOK_GRACE_MS = Number(process.env.WEBMCP_BRIDGE_RELAY_WAIT_MS ?? 5000);
 var START_WAIT_MS = 20000;
-var LIVENESS_MS = Number(process.env.WEBMCP_RELAY_LIVENESS_MS ?? 5000);
+var LIVENESS_MS = Number(process.env.WEBMCP_BRIDGE_RELAY_LIVENESS_MS ?? 5000);
 var log = (msg) => process.stderr.write(`webmcp-mcp: ${msg}
 `);
 async function locate() {
@@ -9186,7 +9186,7 @@ function startDaemon() {
   }
   mkdirSync(stateDir, { recursive: true });
   const fd = openSync(join2(stateDir, "daemon.log"), "a");
-  const args = [entry, "serve", "--state-dir", stateDir, ...pinned ? ["--port", String(pinned)] : [], ...process.env.WEBMCP_DAEMON_NO_TRAY ? [] : ["--tray"]];
+  const args = [entry, "serve", "--state-dir", stateDir, ...pinned ? ["--port", String(pinned)] : [], ...process.env.WEBMCP_BRIDGE_NO_TRAY ? [] : ["--tray"]];
   const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
   child.unref();
   log(`started the daemon (pid ${child.pid})`);
@@ -9194,7 +9194,7 @@ function startDaemon() {
 }
 async function main() {
   let port = await waitFor(HOOK_GRACE_MS);
-  if (port === null && process.env.WEBMCP_RELAY_START !== "0" && startDaemon())
+  if (port === null && process.env.WEBMCP_BRIDGE_RELAY_START !== "0" && startDaemon())
     port = await waitFor(START_WAIT_MS);
   if (port === null) {
     log(`no daemon on ${HOST} (candidates ${CANDIDATE_PORTS.join(", ")}); run the plugin's setup`);

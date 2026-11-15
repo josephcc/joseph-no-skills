@@ -66,7 +66,7 @@ describe('webmcp-mcp relay', () => {
     await squat(a);
     const dir = stateDir();
     daemons.push(await serve(config(dir, [a, b])));
-    const r = relay({ WEBMCP_DAEMON_STATE: dir, WEBMCP_RELAY_START: '0', WEBMCP_RELAY_WAIT_MS: '3000' });
+    const r = relay({ WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_RELAY_START: '0', WEBMCP_BRIDGE_RELAY_WAIT_MS: '3000' });
     const init = await r.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
     expect((init.result as { serverInfo: { name: string } }).serverInfo.name).toBe('webmcp');
     r.notify('notifications/initialized');
@@ -83,7 +83,7 @@ describe('webmcp-mcp relay', () => {
     const dir = stateDir();
     const d = await serve({ ...config(dir, [port]), port, portPinned: true });
     daemons.push(d);
-    const r = relay({ WEBMCP_DAEMON_STATE: dir, WEBMCP_RELAY_START: '0', WEBMCP_RELAY_WAIT_MS: '3000', WEBMCP_RELAY_LIVENESS_MS: '200' });
+    const r = relay({ WEBMCP_BRIDGE_STATE: dir, WEBMCP_BRIDGE_RELAY_START: '0', WEBMCP_BRIDGE_RELAY_WAIT_MS: '3000', WEBMCP_BRIDGE_RELAY_LIVENESS_MS: '200' });
     const init = await r.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
     expect((init.result as { serverInfo: { name: string } }).serverInfo.name).toBe('webmcp');
     r.notify('notifications/initialized');
@@ -96,7 +96,7 @@ describe('webmcp-mcp relay', () => {
   }, 20_000);
 
   test('no daemon within the wait, and starting disabled, is a clear exit 1', async () => {
-    const r = relay({ WEBMCP_DAEMON_STATE: stateDir(), WEBMCP_RELAY_START: '0', WEBMCP_RELAY_WAIT_MS: '300', WEBMCP_DAEMON_PORT: String(await freePort()) });
+    const r = relay({ WEBMCP_BRIDGE_STATE: stateDir(), WEBMCP_BRIDGE_RELAY_START: '0', WEBMCP_BRIDGE_RELAY_WAIT_MS: '300', WEBMCP_BRIDGE_PORT: String(await freePort()) });
     expect(await r.exited).toBe(1);
     expect(r.stderr()).toContain('no daemon');
   }, 20_000);

@@ -25,7 +25,7 @@ export interface ConnectorStatus {
   toolCount: number;
   /** The daemon's port once found (the pinned URL's, or the sweep's). */
   port?: number;
-  /** The WebSocket base in use, e.g. ws://127.0.0.1:49217. */
+  /** The WebSocket base in use, e.g. ws://127.0.0.1:49237. */
   daemonUrl?: string;
 }
 
@@ -37,7 +37,7 @@ export interface ToolPolicy {
 export interface ConnectOptions {
   /**
    * WebSocket base of the daemon, e.g. ws://127.0.0.1:8720: pins it, no sweep.
-   * Default: the first of the candidate ports (8717, 49217, 52431, 55893, 61307)
+   * Default: the first of the candidate ports (8737, 49237, 52451, 55913, 61327)
    * that answers `GET /id` as the daemon (plans/daemon-port-discovery D-4).
    */
   daemonUrl?: string;
