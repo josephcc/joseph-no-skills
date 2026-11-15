@@ -40,7 +40,7 @@ highlighted span — threads you and the agent can both reply to and resolve:
 
 **Highlights**
 - **Single `.md` source of truth** — no sidecar; the tags carry state (`status="open|locked"`, …) so both the renderer and any agent understand them.
-- **Five tags**: open questions (single/multi choice + Other + freeform), decisions (lockable, with rationale), Google-Docs comments anchored to highlighted spans, and audit findings (filterable severity matrix).
+- **Seven tags**: open questions (single/multi choice + Other + freeform), decisions (lockable, with rationale), Google-Docs comments anchored to highlighted spans, audit findings (filterable severity matrix), checklists, and check tables: a markdown table with a checkbox on every row, sortable and searchable, for picking papers or files out of a long list.
 - **Live round-trip**: the viewer watches the file and re-renders when the agent rewrites it, and warns on edit conflicts.
 - **Selected state**: click a highlighted span and both the span and its comment card switch to one teal "selected" style (click again to deselect), so a page with dozens of anchored threads stays legible.
 - **Clickable code refs**: `file.ts:123` opens in your editor (default [Zed](https://zed.dev), configurable), resolving shorthand paths against the repo.
