@@ -1641,3 +1641,89 @@ def test_accept_json_mode_prints_only_json(study: ta.Analysis, capsys):
     out = json.loads(capsys.readouterr().out)          # the daemon parses stdout whole
     assert [o["id"] for o in out["accepted"]] == [proposal["id"]] and out["failed"] == {}
     assert ta.Analysis(study.root).theme("TH1")["brief"].startswith("## Rule")
+
+
+# ---- the terminal handoff to the workbench (plans/2026-11-14-embedded-claude.plan.md) ----
+
+def test_workbench_origin_from_server_output():
+    out = "[ta-workbench] http://localhost:47821/?analysis=%2Fs%2Fanalysis&view=transcript\n[ta-workbench] daemon pid 1 — stop with: node server.mjs --stop\n"
+    assert ta.workbench_origin_from(out) == "http://localhost:47821"
+    assert ta.workbench_origin_from("nothing here") is None
+
+
+def _fake_daemon(handler_state: dict):
+    """A stand-in for the webmcp-bridge daemon: answers /id as the daemon and records /handoff bodies."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):  # quiet
+            pass
+
+        def do_GET(self):
+            if self.path == "/id":
+                body = _json.dumps({"daemon": "webmcp-bridge", "protocol": 1, "version": "t", "instance": "x"}).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            handler_state["posts"].append((self.path, _json.loads(self.rfile.read(n) or b"{}"), self.headers.get("Origin")))
+            code = handler_state.get("code", 200)
+            self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(b'{"ok":true}' if code == 200 else b'{"error":"nope"}')
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_offer_handoff_posts_the_session_for_the_workbench_origin(study: ta.Analysis, monkeypatch):
+    state = {"posts": []}
+    srv = _fake_daemon(state)
+    try:
+        monkeypatch.setenv("WEBMCP_BRIDGE_PORT", str(srv.server_address[1]))
+        monkeypatch.setenv("CLAUDE_PID", "4242")
+        sid = "7a1c2e4d-1b2c-4d5e-8f90-a1b2c3d4e5f6"
+        ok, msg = ta.offer_handoff(study, "http://localhost:47821", sid)
+        assert ok, msg
+        assert "[handoff]" in msg and "Ctrl+D" in msg and f"claude --resume {sid}" in msg
+        path, body, origin = state["posts"][0]
+        assert path == "/handoff" and origin is None
+        assert body["sessionId"] == sid and body["origin"] == "http://localhost:47821" and body["pid"] == 4242
+        assert body["cwd"] == str(Path.cwd())
+        assert body["tags"] == {"skill": "thematic-analysis", "analysis": str(study.root.resolve())}
+        assert body["title"].startswith("fixture")
+        # withdraw
+        ok, msg = ta.offer_handoff(study, "http://localhost:47821", sid, forget=True)
+        assert ok and state["posts"][1][0] == "/handoffs/forget"
+        # a refusal is reported, never raised
+        state["code"] = 400
+        ok, msg = ta.offer_handoff(study, "http://localhost:47821", sid)
+        assert not ok and "refused" in msg
+    finally:
+        srv.shutdown()
+
+
+def test_offer_handoff_without_a_daemon_is_one_line(study: ta.Analysis, monkeypatch):
+    monkeypatch.setenv("WEBMCP_BRIDGE_PORT", "1")   # nothing listens on port 1
+    ok, msg = ta.offer_handoff(study, "http://localhost:47821", "7a1c2e4d-1b2c-4d5e-8f90-a1b2c3d4e5f6")
+    assert not ok and "webmcp-bridge" in msg
+
+
+def test_open_registers_only_inside_a_claude_session(study: ta.Analysis, monkeypatch, capsys):
+    """`open --no-open` with no CLAUDE_CODE_SESSION_ID says nothing about handoffs; with one, it reports the outcome."""
+    calls = []
+    monkeypatch.setattr(ta, "launch_workbench", lambda an, args: (0, "[ta-workbench] http://localhost:47821/?analysis=x\n"))
+    monkeypatch.setattr(ta, "offer_handoff", lambda an, origin, sid, forget=False: calls.append((origin, sid)) or (True, "[handoff] waiting"))
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert run(study, "open", "--no-open") == 0
+    assert calls == [] and "[handoff]" not in capsys.readouterr().out
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "7a1c2e4d-1b2c-4d5e-8f90-a1b2c3d4e5f6")
+    assert run(study, "open", "--no-open") == 0
+    assert calls == [("http://localhost:47821", "7a1c2e4d-1b2c-4d5e-8f90-a1b2c3d4e5f6")]
+    assert "[handoff] waiting" in capsys.readouterr().out
+    assert run(study, "open", "--no-open", "--no-handoff") == 0
+    assert len(calls) == 1

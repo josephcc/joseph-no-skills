@@ -60,7 +60,7 @@ function Row({ o, onUndo, onAccept, onOpen }: { o: Op; onUndo: (id: string) => v
   );
 }
 
-export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onResolve, onClose, applyHint }: {
+export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onResolve, onClose, applyHint, onAskReview }: {
   ops: Op[];
   onUndo: (id: string) => void;
   /** Accept one proposal: carried out now as the researcher's decision. */
@@ -72,6 +72,8 @@ export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onRe
   onResolve: (id: string) => void;
   onClose: () => void;
   applyHint: string;
+  /** Hand the pass back without leaving the page: sends "review my feedback" to the embedded agent. */
+  onAskReview?: () => void;
 }) {
   const actionable = ops.filter((o) => !isThread(o));
   // What the agent proposed is the reviewing work; what the researcher staged is already decided.
@@ -87,6 +89,14 @@ export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onRe
           Close
         </button>
       </header>
+      {onAskReview && (
+        <p className="wb-ask-review">
+          <button className="wb-btn wb-btn-primary wb-tiny" onClick={onAskReview} title="Sends “review my feedback” to your local Claude in the Agent panel">
+            Ask the agent to review my feedback
+          </button>
+          <span className="wb-muted">the same four commands, run from the panel instead of the terminal</span>
+        </p>
+      )}
       {actionable.length === 0 && threads.length === 0 && (
         <p className="wb-muted">
           Nothing waiting. Your own edits apply as you make them; what waits here is the agent's proposals, and your threads.

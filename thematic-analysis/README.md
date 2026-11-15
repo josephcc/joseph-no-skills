@@ -243,6 +243,15 @@ If a question could be answered by a click, it belongs in the workbench. If answ
 sentence, it belongs in the document. The agent should never ask you something in prose that it
 would then have to translate back into a command.
 
+**The agent is in the workbench too.** With the [webmcp-bridge](../webmcp-bridge/README.md)
+daemon running (its Claude Code plugin starts it), the **Agent** button opens a panel that is your own
+local Claude Code. When the agent opened the workbench from a terminal, that terminal thread is
+offered to the page: a banner says *Your terminal thread is waiting*, and one click continues the
+same session in the panel, with everything it read and staged still in context (press Ctrl+D in the
+terminal first; Claude Code refuses to resume a session that is still open elsewhere). The pending
+drawer's *Ask the agent to review my feedback* sends the hand-back from the page, and `claude
+--resume <id>` takes the thread back to the terminal whenever you prefer it there.
+
 ---
 
 ## What is in the analysis folder

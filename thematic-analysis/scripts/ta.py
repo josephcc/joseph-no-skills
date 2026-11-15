@@ -4811,16 +4811,136 @@ def cmd_open(an: Analysis, args) -> int:
     if errors and not args.force:
         print(f"open: {len(errors)} error(s). Fix the data first, or pass --force to open anyway.")
         return 1
+    rc, out = launch_workbench(an, args)
+    sys.stdout.write(out)
+    if rc != 0:
+        raise SystemExit(f"the workbench daemon did not start (exit {rc})")
+    # The handoff (plans/2026-11-14-embedded-claude.plan.md §2.3): inside a Claude Code session, offer this
+    # very thread to the page, so the researcher can continue it in the workbench's Agent panel.
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if session_id and not getattr(args, "no_handoff", False):
+        origin = workbench_origin_from(out) or WORKBENCH_DEFAULT_ORIGIN
+        ok, msg = offer_handoff(an, origin, session_id)
+        (sys.stdout if ok else sys.stderr).write(msg + "\n")
+    return 0
+
+
+def launch_workbench(an: Analysis, args) -> tuple[int, str]:
+    """Start (or reuse) the workbench daemon on this folder; returns the exit code and stdout (the URL line)."""
+    import subprocess
+
     params = resolve_open_target(an, args.target)
     cmd = ["node", str(app_dir() / "server.mjs"), str(an.root.resolve()), "--params", params]
     if args.no_open:
         cmd.append("--no-open")
     res = subprocess.run(cmd, capture_output=True, text=True)
-    sys.stdout.write(res.stdout)
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
-        raise SystemExit(f"the workbench daemon did not start (exit {res.returncode})")
-    return 0
+    return res.returncode, res.stdout
+
+
+# ---- the terminal handoff: this Claude Code thread, continued in the workbench's Agent panel ----
+# The webmcp-bridge daemon (this repo's `webmcp-bridge` Claude Code plugin) keeps a registry of terminal sessions
+# offered to pages. `open` offers this session; the page lists it under "From your terminal" and loads
+# it under the same id. Found the way the plugin's own hooks find the daemon.
+WEBMCP_CANDIDATE_PORTS = (8737, 49237, 52451, 55913, 61327)
+WORKBENCH_DEFAULT_ORIGIN = "http://localhost:47821"
+WORKBENCH_PIDFILE = Path("/tmp/ta-workbench.json")
+
+
+def webmcp_daemon_base() -> str | None:
+    """`http://127.0.0.1:<port>` of the running webmcp-bridge daemon, or None."""
+    import urllib.request
+
+    def is_daemon(port: int | str) -> bool:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/id", timeout=1) as r:
+                return json.load(r).get("daemon") == "webmcp-bridge"
+        except Exception:
+            return False
+
+    pinned = os.environ.get("WEBMCP_BRIDGE_PORT", "").strip()
+    if pinned:
+        return f"http://127.0.0.1:{pinned}"
+    state = Path(os.environ.get("WEBMCP_BRIDGE_STATE") or Path.home() / ".webmcp-bridge")
+    try:
+        port = json.loads((state / "daemon.json").read_text()).get("port")
+        if port and is_daemon(port):
+            return f"http://127.0.0.1:{port}"
+    except Exception:
+        pass
+    for port in WEBMCP_CANDIDATE_PORTS:
+        if is_daemon(port):
+            return f"http://127.0.0.1:{port}"
+    return None
+
+
+def workbench_origin_from(stdout: str) -> str | None:
+    """The workbench's origin from server.mjs's `[ta-workbench] http://localhost:<port>/?analysis=…` line."""
+    m = re.search(r"\[ta-workbench\] (https?://[^/\s]+)", stdout)
+    return m.group(1) if m else None
+
+
+def workbench_origin_running() -> str | None:
+    """The origin of the workbench daemon already running on this machine, from its pidfile."""
+    try:
+        port = json.loads(WORKBENCH_PIDFILE.read_text()).get("port")
+        return f"http://localhost:{port}" if port else None
+    except Exception:
+        return None
+
+
+def offer_handoff(an: Analysis, origin: str, session_id: str, forget: bool = False) -> tuple[bool, str]:
+    """Offer (or withdraw) a terminal session to the workbench page at `origin`. Never raises: (ok, one line)."""
+    import urllib.error
+    import urllib.request
+
+    base = webmcp_daemon_base()
+    if base is None:
+        return False, "[handoff] skipped: no webmcp-bridge daemon is running (the webmcp-bridge plugin starts one with each Claude Code session)"
+    if forget:
+        path, body = "/handoffs/forget", {"sessionId": session_id}
+    else:
+        pid = os.environ.get("CLAUDE_PID", "").strip()
+        body = {
+            "sessionId": session_id,
+            "cwd": str(Path.cwd()),
+            "origin": origin,
+            "title": f"{an.study.get('study') or an.root.name} · thematic analysis",
+            "note": "handed off by ta.py open",
+            "tags": {"skill": "thematic-analysis", "analysis": str(an.root.resolve())},
+        }
+        if pid.isdigit():
+            body["pid"] = int(pid)
+        path = "/handoff"
+    req = urllib.request.Request(f"{base}{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:200]
+        if e.code == 404 and not forget:
+            return False, f"[handoff] skipped: the webmcp-bridge daemon at {base} predates handoffs; restart it from the current plugin (it refused /handoff: {detail})"
+        return False, f"[handoff] the webmcp-bridge daemon at {base} refused it ({e.code}): {detail}"
+    except Exception as e:  # connection refused, timeout
+        return False, f"[handoff] could not reach the webmcp-bridge daemon at {base}: {e}"
+    if forget:
+        return True, f"[handoff] withdrawn: session {session_id} is no longer offered to the workbench"
+    return True, (
+        f"[handoff] this terminal thread ({session_id[:8]}…) is waiting in the workbench: Agent → Threads → From your terminal. "
+        f"Press Ctrl+D here to release it before continuing in the browser; `claude --resume {session_id}` brings it back."
+    )
+
+
+def cmd_handoff(an: Analysis, args) -> int:
+    session_id = (args.session or os.environ.get("CLAUDE_CODE_SESSION_ID", "")).strip()
+    if not session_id:
+        print("handoff: no session id; run this inside a Claude Code session (its shell commands carry CLAUDE_CODE_SESSION_ID), or pass --session", file=sys.stderr)
+        return 2
+    origin = args.origin or workbench_origin_running() or WORKBENCH_DEFAULT_ORIGIN
+    ok, msg = offer_handoff(an, origin, session_id, forget=args.forget)
+    print(msg, file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
 
 
 def cmd_serve(an: Analysis, args) -> int:
@@ -4968,7 +5088,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("target", nargs="?", help="a transcript / extract / code / theme id, or a view name")
     p.add_argument("--no-open", action="store_true", help="print the URL without opening a browser")
     p.add_argument("--force", action="store_true", help="open even though the preflight found errors")
+    p.add_argument("--no-handoff", action="store_true", help="do not offer this terminal thread to the workbench's Agent panel")
     p.set_defaults(fn=cmd_open)
+
+    p = sub.add_parser("handoff", help="offer this terminal's Claude Code thread to the workbench's Agent panel (open does it too)")
+    p.add_argument("--forget", action="store_true", help="withdraw the offer instead")
+    p.add_argument("--origin", help="the workbench's origin (default: the running daemon's, else http://localhost:47821)")
+    p.add_argument("--session", help="the session id (default: $CLAUDE_CODE_SESSION_ID)")
+    p.set_defaults(fn=cmd_handoff)
 
     p = sub.add_parser("serve", help="start, inspect, or stop the workbench daemon")
     p.add_argument("--status", action="store_true")

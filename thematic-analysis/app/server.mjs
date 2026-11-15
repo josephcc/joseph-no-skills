@@ -724,6 +724,16 @@ function ensureBuilt() {
       return 'npm';
     }
   })();
+  // The embedded agent's connector is the repo's own webmcp-bridge, depended on by path; its build output
+  // is not tracked, so a fresh clone builds it here once (bun workspaces: install at the webmcp-bridge root).
+  const bridge = path.resolve(SKILL_ROOT, '..', 'webmcp-bridge');
+  const connectorDist = path.join(bridge, 'packages', 'connector', 'dist', 'react', 'index.js');
+  if (fs.existsSync(path.join(bridge, 'package.json')) && !fs.existsSync(connectorDist)) {
+    if (pm !== 'bun') throw new Error('bun is required to build webmcp-bridge/packages/connector (https://bun.sh)');
+    console.error('[ta-workbench] building the webmcp-bridge connector (first run)…');
+    execFileSync('bun', ['install'], { cwd: bridge, stdio: 'inherit' });
+    execFileSync('bun', ['run', 'build:connector'], { cwd: bridge, stdio: 'inherit' });
+  }
   if (!fs.existsSync(path.join(__dirname, 'node_modules'))) {
     console.error('[ta-workbench] installing deps (first run)…');
     execFileSync(pm, ['install'], { cwd: __dirname, stdio: 'inherit' });

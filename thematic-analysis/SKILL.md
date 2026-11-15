@@ -239,8 +239,19 @@ tinted by code family, one chip per extract with its id, kind and codes, the def
 the passage, delta mode so only what changed since the last review is vivid, and every timestamp
 hovering to the `watch-recording` frame so a `did` can be checked against the screen.
 
+`open` also **hands this terminal thread to the workbench** when the webmcp-bridge daemon is running:
+it registers your session id with the daemon, and the workbench's **Agent** panel lists it under
+*Threads → From your terminal*, so the researcher can continue this very conversation in the
+browser, with everything you have read and staged still in context. The script prints a
+`[handoff]` line when it did; repeat it in your closing message, and say the two things it depends
+on: **they press Ctrl+D in this terminal before continuing in the browser** (Claude Code refuses to
+resume a session that is still open elsewhere), and `claude --resume <id>` brings the thread back
+to the terminal when they want it here again. `--no-handoff` skips the registration; `ta.py
+handoff` does it on its own for a session that opened the workbench earlier.
+
 **5. Read what they did, then apply what they left you.** When the user says *"review my
-feedback"*:
+feedback"* — in the terminal, or from the workbench's Agent panel, whose *Ask the agent to review my
+feedback* button sends the same request into the thread, with a snapshot of the view they are on:
 
 ```bash
 uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> changes        # what they changed directly
@@ -631,7 +642,8 @@ ta.py annotate T-01 -o reviews/annotated/T-01-P1.plan.md   # the coded transcrip
 ta.py recode E-0041 --highlight "why it matters"  # flag a paper-worthy quote (surfaces in the quote bank)
 
 # the review workbench
-ta.py open [T-07 | E-0042 | trust.stakes | TH1 | codebook | coverage | themes | quotes | study | history]
+ta.py open [T-07 | E-0042 | trust.stakes | TH1 | codebook | coverage | themes | quotes | study | history] [--no-handoff]
+ta.py handoff [--forget] [--origin URL]           # offer this terminal thread to the workbench's Agent panel (open does it too)
 ta.py serve --status | --stop                    # the daemon (one, shared, on port 47821 if free)
 ta.py changes [--ack]                            # what the researcher changed directly since you last acknowledged
 ta.py inbox [--json]                             # your proposals they left standing, and their threads

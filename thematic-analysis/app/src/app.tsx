@@ -4,11 +4,14 @@
 // reviewing the coding of an interview, reviewing the codebook whole, reading coverage,
 // building themes, and picking quotes. They are views here because none of them is a
 // linear document — but the round documents stay, and this links back to them.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AgentHandle } from 'webmcp-connector/react';
 import { analysisDir, param } from './api';
 import type { Op } from './types';
 import { useWorkbench } from './store';
 import { PendingDrawer } from './pending';
+import { AgentPanel, HandoffBanner, useAgentPage } from './agent-panel';
+import { buildState, handoffForAnalysis, pendingRows, REVIEW_PROMPT } from './agent';
 import { TranscriptView } from './views/transcript';
 import { CodebookView } from './views/codebook';
 import { CoverageView } from './views/coverage';
@@ -61,6 +64,41 @@ export function App() {
     if (patch.cmp !== undefined) setCmp(patch.cmp);
   }, []);
   const nav: Nav = { view, t, e, c, th, cmp, go };
+
+  // The embedded agent: one daemon connection per tab, tools that read the latest state through
+  // refs, a panel, and the banner for a terminal thread handed off to this folder.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [openRequest, setOpenRequest] = useState<{ id: string; at: number }>();
+  const handleRef = useRef<AgentHandle | undefined>(undefined);
+  const queuedPromptRef = useRef<string | null>(null);
+  const latest = useCallback(() => buildState({ dir: dir ?? '', bundle: wb.bundle, nav: { view, t, e, c, th, cmp }, pending: wb.pending, drawer }), [dir, wb.bundle, view, t, e, c, th, cmp, wb.pending, drawer]);
+  const agentActions = useMemo(() => ({
+    navigate: (patch: Record<string, string | null | undefined>) => go(patch as Partial<Omit<Nav, 'go'>>),
+    openDrawer: setDrawer,
+    pendingRows: () => pendingRows(wb.inbox),
+  }), [go, wb.inbox]);
+  const bridge = useAgentPage(dir, latest, agentActions);
+  const handoff = useMemo(() => (bridge && dir ? handoffForAnalysis(bridge.handoffs, dir) : undefined), [bridge, dir]);
+  const onHandle = useCallback((h: AgentHandle | undefined) => {
+    handleRef.current = h;
+    const queued = queuedPromptRef.current;
+    if (h && queued) { queuedPromptRef.current = null; void h.prompt(queued).catch(() => {}); }
+  }, []);
+  /** "Ask the agent to review my feedback": into the active thread, or open the panel and send once a thread is there. */
+  const askReview = useCallback(() => {
+    const h = handleRef.current;
+    const state = h?.model.snapshot().state;
+    if (h && chatOpen && state === 'ready') { void h.prompt(REVIEW_PROMPT).catch(() => {}); setDrawer(false); return; }
+    // No open thread yet (or it is busy, released or closed): the prompt goes out when the next handle arrives.
+    queuedPromptRef.current = REVIEW_PROMPT;
+    setChatOpen(true); setDrawer(false);
+  }, [chatOpen]);
+  const closeChat = useCallback(() => { handleRef.current = undefined; setChatOpen(false); }, []);
+  const continueHandoff = useCallback(() => {
+    if (!handoff) return;
+    setChatOpen(true);
+    setOpenRequest({ id: handoff.sessionId, at: Date.now() });
+  }, [handoff]);
 
   // Keep the URL a deep link, so a round document can point at a code or an extract
   // and a reload lands in the same place.
@@ -146,8 +184,10 @@ export function App() {
     setDrawer(false);
   };
 
+  const activeHandoff = !!handoff && handleRef.current?.sessionId === handoff.sessionId && chatOpen;
+
   return (
-    <div className="wb-app">
+    <div className={`wb-app${chatOpen ? ' wb-with-chat' : ''}`}>
       <header className="wb-header">
         <div className="wb-header-main">
           <h1>{b.study}</h1>
@@ -191,8 +231,16 @@ export function App() {
           <button className={`wb-pending ${pendingCount ? 'wb-pending-on' : ''}`} onClick={() => setDrawer((d) => !d)}>
             Pending ({pendingCount})
           </button>
+          <button
+            className={`wb-pending wb-agent ${chatOpen ? 'wb-pending-on' : ''}`}
+            onClick={() => setChatOpen((o) => !o)}
+            title={bridge?.status.state === 'connected' ? 'Your local Claude Code, in this workbench' : `Local Claude: ${bridge?.status.state ?? 'no daemon'}`}
+          >
+            Agent{bridge?.status.state === 'connected' ? '' : ' ·'}
+          </button>
         </div>
       </header>
+      {handoff && !activeHandoff && <HandoffBanner handoff={handoff} onOpen={continueHandoff} />}
 
       <nav className="wb-nav">
         {VIEWS.map((v) => (
@@ -225,7 +273,12 @@ export function App() {
           onResolve={(id) => wb.thread(id, 'resolved')}
           onClose={() => setDrawer(false)}
           applyHint={applyHint}
+          onAskReview={bridge ? askReview : undefined}
         />
+      )}
+
+      {chatOpen && bridge && dir && (
+        <AgentPanel bridge={bridge} dir={dir} openRequest={openRequest} onClose={closeChat} onHandle={onHandle} onHandoffs={bridge.setHandoffs} />
       )}
     </div>
   );
