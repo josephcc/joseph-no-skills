@@ -5,7 +5,8 @@
 // rejected by undoing them) and the threads. Undo deletes the line; after `apply` a change
 // of mind is a new operation, which is why the drawer says who staged what.
 import { describe, isThread } from './ops';
-import type { Op } from './types';
+import { proposalArgs } from './inspector/proposed-theme';
+import type { Op, ThemePreview } from './types';
 
 /** A thread row: opens the extract, code or theme the comment is about, and resolves it in place.
  *  Resolving keeps the conversation in the record; it only takes it off this list. */
@@ -16,19 +17,23 @@ function ThreadRow({ o, replies, onOpen, onResolve }: { o: Op; replies: number; 
         <span className="wb-op-id">{o.id}</span>
         <span className="wb-op-text">{describe(o)}</span>
       </button>
-      <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
-      {replies > 0 && (
-        <span className="wb-muted">
-          {replies} repl{replies === 1 ? 'y' : 'ies'}
+      <span className="wb-op-meta">
+        <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
+        {replies > 0 && (
+          <span className="wb-op-note">
+            {replies} repl{replies === 1 ? 'y' : 'ies'}
+          </span>
+        )}
+        <span className="wb-op-actions">
+          <button
+            className="wb-btn wb-btn-ghost wb-tiny"
+            title="Resolve this thread: it stays in the record and leaves the pending list"
+            onClick={() => onResolve(o.id)}
+          >
+            ✓ resolve
+          </button>
         </span>
-      )}
-      <button
-        className="wb-btn wb-btn-ghost wb-op-undo"
-        title="Resolve this thread: it stays in the record and leaves the pending list"
-        onClick={() => onResolve(o.id)}
-      >
-        ✓ resolve
-      </button>
+      </span>
     </li>
   );
 }
@@ -36,32 +41,85 @@ function ThreadRow({ o, replies, onOpen, onResolve }: { o: Op; replies: number; 
 function Row({ o, onUndo, onAccept, onOpen }: { o: Op; onUndo: (id: string) => void; onAccept?: (id: string) => void; onOpen: (o: Op) => void }) {
   const proposal = o.by === 'agent';
   return (
-    <li className={`${o.status === 'failed' || o.status === 'stalled' ? 'wb-op-failed' : ''} wb-op-row`}>
+    <li className={`wb-op-row${o.status === 'failed' || o.status === 'stalled' ? ' wb-op-failed' : ''}`}>
       <button className="wb-op-open" onClick={() => onOpen(o)} title="open what this operation is about">
         <span className="wb-op-id">{o.id}</span>
         <span className="wb-op-text">{describe(o)}</span>
       </button>
-      <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
-      {o.note && <span className="wb-op-note">{o.note}</span>}
+      <span className="wb-op-meta">
+        <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
+        {o.note && <span className="wb-op-note">{o.note}</span>}
+        <span className="wb-op-actions">
+          {proposal && onAccept && (
+            <button className="wb-btn wb-btn-primary wb-tiny" title="carry this out now, as your decision" onClick={() => onAccept(o.id)}>
+              accept
+            </button>
+          )}
+          <button
+            className="wb-btn wb-btn-ghost wb-tiny"
+            title={proposal ? 'reject this proposal: it leaves the inbox and nothing changes' : 'Remove this staged operation'}
+            onClick={() => onUndo(o.id)}
+          >
+            {proposal ? 'reject' : 'undo'}
+          </button>
+        </span>
+      </span>
       {o.error && <span className="wb-op-error">{o.error}</span>}
-      {proposal && onAccept && (
-        <button className="wb-btn wb-btn-primary wb-tiny" title="carry this out now, as your decision" onClick={() => onAccept(o.id)}>
-          accept
-        </button>
-      )}
-      <button
-        className="wb-btn wb-btn-ghost wb-op-undo"
-        title={proposal ? 'reject this proposal: it leaves the inbox and nothing changes' : 'Remove this staged operation'}
-        onClick={() => onUndo(o.id)}
-      >
-        {proposal ? 'reject' : 'undo'}
-      </button>
     </li>
   );
 }
 
-export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onResolve, onClose, applyHint, onAskReview }: {
+/** A proposed theme: the whole claim, its essence, and what it would gather and cover, with
+ *  the script's numbers — enough to triage here, and a click away from the case itself. The
+ *  one-line form hid the name past forty characters and said nothing else. */
+function ThemeProposalRow({ o, preview, onUndo, onAccept, onOpen }: {
+  o: Op;
+  preview: ThemePreview | undefined;
+  onUndo: (id: string) => void;
+  onAccept: (id: string) => void;
+  onOpen: (o: Op) => void;
+}) {
+  const a = proposalArgs(o);
+  const k = preview?.codes.length ?? a.codes.length;
+  const unknown = preview?.unknown.length ?? 0;
+  const stuck = o.status === 'failed' || o.status === 'stalled' || unknown > 0;
+  return (
+    <li className={`wb-op-row wb-op-theme${o.status === 'failed' || o.status === 'stalled' ? ' wb-op-failed' : ''}`}>
+      <button className="wb-op-open-block" onClick={() => onOpen(o)} title="open it on the Themes board: the story, the extracts, the codes it would gather">
+        <span>
+          <span className="wb-op-id">{o.id}</span> <span className="wb-muted">new theme</span>
+          {a.rq && <span className="wb-col-rq">{a.rq}</span>}
+        </span>
+        <span className="wb-op-theme-name">{a.name || 'unnamed'}</span>
+        {a.essence && <span className="wb-op-theme-essence">{a.essence}</span>}
+        <span className="wb-op-theme-meta">
+          {k ? `gathers ${k} code${k === 1 ? '' : 's'}` : 'names no codes'}
+          {unknown ? ` (${unknown} unknown)` : ''}
+          {preview && k ? ` · would cover ${preview.n}/${preview.N} participants · ${preview.extracts} extracts` : ''}
+          {' · open it to read the case'}
+        </span>
+      </button>
+      <span className="wb-op-meta">
+        <span className={`wb-op-by wb-by-${o.by}`}>{o.by}</span>
+        {o.note && <span className="wb-op-note">{o.note}</span>}
+        <span className="wb-op-actions">
+          <button className="wb-btn wb-btn-primary wb-tiny" disabled={stuck} title="create this theme now, with its codes, as your decision" onClick={() => onAccept(o.id)}>
+            accept
+          </button>
+          <button className="wb-btn wb-btn-ghost wb-tiny" title="reject this proposal: it leaves the inbox and nothing changes" onClick={() => onUndo(o.id)}>
+            reject
+          </button>
+        </span>
+      </span>
+      {o.error && <span className="wb-op-error">{o.error}</span>}
+    </li>
+  );
+}
+
+export function PendingDrawer({ ops, previews = {}, onUndo, onAccept, onAcceptAll, onOpen, onResolve, onClose, applyHint, onAskReview }: {
   ops: Op[];
+  /** What each staged `new-theme` would be, by op id, as ta.py counted it. */
+  previews?: Record<string, ThemePreview>;
   onUndo: (id: string) => void;
   /** Accept one proposal: carried out now as the researcher's decision. */
   onAccept: (id: string) => void;
@@ -105,7 +163,7 @@ export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onRe
       {proposals.length > 0 && (
         <>
           <h4>
-            Proposed by the agent <span className="wb-muted">({proposals.length}) — open each to see what it would change</span>
+            Proposed by the agent <span className="wb-muted">({proposals.length})</span>
             <button
               className="wb-btn wb-btn-ghost wb-tiny wb-accept-all"
               title="carry out every proposal here, in order, as your decisions"
@@ -115,9 +173,13 @@ export function PendingDrawer({ ops, onUndo, onAccept, onAcceptAll, onOpen, onRe
             </button>
           </h4>
           <ul className="wb-drawer-list">
-            {proposals.map((o) => (
-              <Row key={o.id} o={o} onUndo={onUndo} onAccept={onAccept} onOpen={onOpen} />
-            ))}
+            {proposals.map((o) =>
+              o.op === 'new-theme' ? (
+                <ThemeProposalRow key={o.id} o={o} preview={previews[o.id]} onUndo={onUndo} onAccept={onAccept} onOpen={onOpen} />
+              ) : (
+                <Row key={o.id} o={o} onUndo={onUndo} onAccept={onAccept} onOpen={onOpen} />
+              ),
+            )}
           </ul>
           <p className="wb-muted wb-apply-hint">
             <b>accept</b> carries a proposal out now, as your decision; <b>reject</b> drops it. One you leave standing is applied when you

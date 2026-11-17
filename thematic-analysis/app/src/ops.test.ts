@@ -21,6 +21,11 @@ describe('draft', () => {
 });
 
 describe('describe', () => {
+  it('says how much a proposed theme would gather, so the drawer line is not just a name', () => {
+    expect(describeOp(op({ op: 'new-theme', args: { name: 'Checking is a habit', codes: ['trust', 'control'] } })))
+      .toBe('new theme “Checking is a habit” gathering 2 codes');
+    expect(describeOp(op({ op: 'new-theme', args: { name: 'Checking is a habit' } }))).toBe('new theme “Checking is a habit”');
+  });
   it('reads as the sentence the researcher would have typed', () => {
     expect(describeOp(op({ op: 'recode', target: 'E-42', args: { add: ['trust.stakes'], remove: ['trust'] } })))
       .toBe('E-42: +trust.stakes −trust');
@@ -34,6 +39,7 @@ describe('describe', () => {
     expect(describeOp(op({ op: 'assign-theme', target: 'trust', args: { theme: 'op-0031', why: 'acting on the process' } })))
       .toBe('trust → op-0031 — acting on the process');
     expect(describeOp(op({ op: 'assign-theme', target: 'trust', args: { theme: 'TH3', from: 'TH1' } }))).toBe('trust (from TH1) → TH3');
+    expect(describeOp(op({ op: 'assign-theme', target: 'trust', args: { theme: 'TH6', add: true, why: 'it belongs in both' } }))).toBe('trust → also TH6 — it belongs in both');
     expect(describeOp(op({ op: 'theme-request', target: 'TH1', args: { kind: 'codes' } }))).toBe('TH1: ask the agent for codes');
     expect(describeOp(op({ op: 'theme-request', target: 'op-0031', args: { kind: 'both' } }))).toBe('op-0031: ask the agent for codes and claims');
     expect(describeOp(op({ op: 'set-framing', args: { value: 'x' } }))).toBe('the paper’s framing reworded');

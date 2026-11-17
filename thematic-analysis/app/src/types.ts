@@ -177,6 +177,20 @@ export interface StaleRow {
   severity: 'recode' | 'version-only';
 }
 
+/** What a staged `new-theme` would be — computed by ta.py from the codes the proposal names,
+ *  the way a theme row is, so the board can draw a theme that does not exist yet. */
+export interface ThemePreview {
+  /** Live code ids: a code merged since the proposal was staged is reported as its target. */
+  codes: string[];
+  unknown: string[];
+  renamed: { from: string; to: string }[];
+  family: string[];
+  participants: string[];
+  n: number;
+  N: number;
+  extracts: number;
+}
+
 export interface Op {
   id: string;
   at: string;
@@ -245,6 +259,8 @@ export interface Bundle {
   extracts_all: Extract[];
   changelog: { version: number; date: string; change: string }[];
   inbox: Op[];
+  /** By the op id of each staged `new-theme`. */
+  theme_previews: Record<string, ThemePreview>;
   spread: Spread;
   memos: string;
   applied_logs: string[];

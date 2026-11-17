@@ -29,8 +29,10 @@ export interface Workbench {
   /** Carry out a gesture: a thread is staged for the agent; anything else is applied at once. */
   stage: (d: Draft) => Promise<Applied | null>;
   undo: (id: string) => Promise<void>;
-  /** Accept a proposal: carried out now as the researcher's decision, and gone from the inbox. */
-  accept: (id: string) => Promise<boolean>;
+  /** Accept a proposal: carried out now as the researcher's decision, and gone from the inbox.
+   *  Resolves to the applied row (with `created` when the proposal made something), `true`
+   *  when the script reported nothing, `false` when it was refused. */
+  accept: (id: string) => Promise<Applied | boolean>;
   thread: (id: string, status: 'resolved' | 'pending') => Promise<void>;
   deleteThread: (id: string) => Promise<void>;
   reply: (threadId: string, text: string) => Promise<void>;
@@ -151,10 +153,10 @@ export function useWorkbench(dir: string | null): Workbench {
   );
 
   const accept = useCallback(
-    async (id: string): Promise<boolean> => {
+    async (id: string): Promise<Applied | boolean> => {
       if (!dir) return false;
       // Accepting is a gesture, so it takes its turn in the same queue as the others.
-      const run = async (): Promise<boolean> => {
+      const run = async (): Promise<Applied | boolean> => {
         try {
           const { accepted, failed } = await acceptOp(dir, id);
           await reload();
@@ -165,7 +167,7 @@ export function useWorkbench(dir: string | null): Workbench {
           }
           const row = accepted[0];
           say(row?.result ? `Accepted ${id}: ${row.result}` : `Accepted ${id}`);
-          return true;
+          return row ?? true;
         } catch (e) {
           say(`Could not accept ${id}: ${(e as Error).message}`);
           return false;

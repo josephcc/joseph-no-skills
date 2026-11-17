@@ -18,10 +18,12 @@ import { KIND_GLYPH, familyIndex } from '../codes';
 import { draft } from '../ops';
 import { themeWithPatch } from '../overlay';
 import { ThemeInspector } from '../inspector/theme';
+import { ProposedThemeInspector, proposalArgs } from '../inspector/proposed-theme';
 import { Md } from '../md';
+import { Help } from '../help';
 import type { Nav } from '../app';
 import type { Workbench } from '../store';
-import type { Code, Extract, Op, Theme } from '../types';
+import type { Code, Extract, Op, Theme, ThemePreview } from '../types';
 
 const MISC = 'MISC';
 type Shown = Theme & { pending?: boolean };
@@ -53,6 +55,16 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
         a.id.localeCompare(c.id),
     );
   const selected = nav.th ? themes.find((t) => t.id === nav.th) ?? null : null;
+  // A theme the agent proposed is not in `themes.yaml` yet, so it has no column of its own;
+  // it is drawn as a dashed one from the operation, with the numbers the script computed for
+  // it, and its inspector is the case for it. Its codes stay in the unplaced column until it
+  // is accepted: the board shows what the next pass would do, never what it has done.
+  const ghosts = wb.patch.newThemes.filter((o) => o.by === 'agent');
+  const ghost = !selected && nav.th ? ghosts.find((o) => o.id === nav.th) ?? null : null;
+  const acceptGhost = (o: Op) =>
+    void wb.accept(o.id).then((r) => {
+      if (r && typeof r === 'object' && r.created) nav.go({ th: r.created });
+    });
   // Dropping is immediate, so the way back has to be one click away: a dropped theme keeps its
   // record, and restoring it is setting its status back.
   const dropped = b.themes.map((t) => themeWithPatch(t, wb.patch.themes[t.id])).filter((t) => t.status === 'dropped');
@@ -108,12 +120,15 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
   };
 
   return (
-    <div className="wb-layout wb-layout-2">
+    // The inspector column exists only while something is open in it: with nothing selected the
+    // board takes the whole width, and the guidance that used to fill the column is behind the ?.
+    <div className={`wb-layout ${selected || ghost ? 'wb-layout-2' : 'wb-layout-1'}`}>
       <main className="wb-main">
         <div className="wb-toolbar">
           <span className="wb-tool-title">
             <b>{themes.length}</b> theme(s) · {unplaced.length} code(s) unplaced · codebook v{b.codebook_version}
             {b.frozen ? ' (frozen)' : ''}
+            {ghosts.length > 0 ? ` · ${ghosts.length} proposed by the agent` : ''}
             {errands > 0 ? ` · ${errands} errand(s) for the agent` : ''}
           </span>
           {drag && (
@@ -167,6 +182,16 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
           >
             mermaid
           </button>
+          <Help title="The Themes board">
+            <p>Drag a code into a theme; click a theme's header to write its brief, its essence, its story, and its tensions.</p>
+            <p className="wb-muted">
+              A theme is a claim ("Co-planning afforded steerability"), never a topic ("Trust"), and never an interview question restated.
+            </p>
+            <p className="wb-muted">
+              Everything you do here happens at once — a theme you create is a column, a card you drop has moved. Write the brief while
+              the reading is fresh, then ask the agent for the codes you might be missing; its proposals come back as dashed cards.
+            </p>
+          </Help>
         </div>
         {!b.frozen && (
           <p className="wb-muted">
@@ -204,6 +229,21 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
               onDrop={(add) => onDrop(t.id, add)}
               onDragStart={(cid) => setDrag({ code: cid, from: t.id })}
               onDragEnd={() => setDrag(null)}
+              onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
+            />
+          ))}
+          {ghosts.map((o) => (
+            <GhostColumn
+              key={o.id}
+              op={o}
+              preview={b.theme_previews?.[o.id]}
+              codes={b.codes}
+              N={b.N}
+              hues={hues}
+              selected={nav.th === o.id}
+              onSelect={() => nav.go({ th: o.id })}
+              onAccept={() => acceptGhost(o)}
+              onReject={() => void wb.undo(o.id)}
               onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
             />
           ))}
@@ -265,29 +305,30 @@ export function ThemesView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: 
         )}
       </main>
 
-      <aside className="wb-inspector-pane">
-        {selected ? (
-          <ThemeInspector
-            theme={selected}
-            extracts={extractsOf(selected)}
-            wb={wb}
-            rqs={b.research_questions}
-            onJumpToExtract={(e) => nav.go({ view: 'transcript', t: e.transcript, e: e.id })}
-            onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
-          />
-        ) : (
-          <div className="wb-inspector wb-empty">
-            <p>Drag a code into a theme; click a theme's header to write its brief, its essence, its story, and its tensions.</p>
-            <p className="wb-muted">
-              A theme is a claim ("Co-planning afforded steerability"), never a topic ("Trust"), and never an interview question restated.
-            </p>
-            <p className="wb-muted">
-              Everything you do here happens at once — a theme you create is a column, a card you drop has moved. Write the brief while
-              the reading is fresh, then ask the agent for the codes you might be missing; its proposals come back as dashed cards.
-            </p>
-          </div>
-        )}
-      </aside>
+      {(selected || ghost) && (
+        <aside className="wb-inspector-pane">
+          {selected ? (
+            <ThemeInspector
+              theme={selected}
+              extracts={extractsOf(selected)}
+              wb={wb}
+              rqs={b.research_questions}
+              onJumpToExtract={(e) => nav.go({ view: 'transcript', t: e.transcript, e: e.id })}
+              onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
+            />
+          ) : ghost ? (
+            <ProposedThemeInspector
+              op={ghost}
+              preview={b.theme_previews?.[ghost.id]}
+              wb={wb}
+              onJumpToExtract={(e) => nav.go({ view: 'transcript', t: e.transcript, e: e.id })}
+              onOpenCode={(cid) => nav.go({ view: 'codebook', c: cid })}
+              onAccepted={(created) => nav.go({ th: created })}
+              onRejected={() => nav.go({ th: null })}
+            />
+          ) : null}
+        </aside>
+      )}
     </div>
   );
 }
@@ -358,12 +399,14 @@ function Framing({ wb }: { wb: Workbench }) {
 // Hoisted out of ThemesView on purpose: a component defined inside another is a new
 // component *type* on every render, so React unmounts and remounts the whole board when
 // any state changes — which throws away the node you are dragging, mid-drag.
-function Card({ code, codes, N, hue, indent = false, proposedBy, alsoIn = [], onDragStart, onDragEnd, onOpen }: {
+function Card({ code, codes, N, hue, indent = false, draggable = true, proposedBy, alsoIn = [], onDragStart, onDragEnd, onOpen }: {
   code: Code;
   codes: Code[];
   N: number;
   hue: number;
   indent?: boolean;
+  /** Off in a proposed theme's column: nothing there is placed yet, so there is nothing to move. */
+  draggable?: boolean;
   /** The agent's `assign-theme` behind this card, when it is a proposal rather than a decision. */
   proposedBy?: Op;
   /** The other themes this code also sits in. */
@@ -377,7 +420,7 @@ function Card({ code, codes, N, hue, indent = false, proposedBy, alsoIn = [], on
   return (
     <div
       className={`wb-card ${indent ? 'wb-card-child' : ''} ${proposedBy ? 'wb-card-proposed' : ''}`}
-      draggable
+      draggable={draggable}
       onDragStart={() => onDragStart(code.id)}
       onDragEnd={onDragEnd}
       style={{ ['--hue' as string]: hue }}
@@ -482,6 +525,75 @@ function Column({ theme, codes, N, hues, proposed, inThemes, selected, dragging,
       >
         + add a code here too
       </div>
+    </section>
+  );
+}
+
+/** A theme the agent proposed, drawn before it exists: the claim, what it would cover (the
+ *  script's count), and the codes it would gather as cards that cannot be dragged, because
+ *  nothing here is placed yet. Its header opens the case; accept creates it with its codes. */
+function GhostColumn({ op, preview, codes, N, hues, selected, onSelect, onAccept, onReject, onOpenCode }: {
+  op: Op;
+  preview: ThemePreview | undefined;
+  codes: Code[];
+  N: number;
+  hues: Record<string, number>;
+  selected: boolean;
+  onSelect: () => void;
+  onAccept: () => void;
+  onReject: () => void;
+  onOpenCode: (id: string) => void;
+}) {
+  const a = proposalArgs(op);
+  const ids = preview?.codes ?? a.codes;
+  const unknown = preview?.unknown ?? [];
+  const stuck = op.status === 'failed' || op.status === 'stalled' || unknown.length > 0;
+  return (
+    <section className={`wb-col wb-col-ghost ${selected ? 'wb-col-on' : ''}`}>
+      <header onClick={onSelect} title="proposed by the agent — click to read its case: the story, the extracts, the codes">
+        <span className="wb-col-head-row">
+          <span className="wb-staged">proposed</span>
+          <span className="wb-op-id">{op.id}</span>
+          {a.rq && <span className="wb-col-rq">{a.rq}</span>}
+        </span>
+        <b>{a.name || 'unnamed'}</b>
+        <span className="wb-col-meta">
+          {preview ? `would cover ${preview.n}/${preview.N} · ${preview.extracts} ex · ` : ''}
+          {ids.length} code{ids.length === 1 ? '' : 's'}
+          {unknown.length ? ` · ${unknown.length} unknown` : ''}
+        </span>
+        <span className="wb-actions wb-col-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="wb-btn wb-btn-primary wb-tiny" disabled={stuck} title="create this theme now, with its codes, as your decision" onClick={onAccept}>
+            accept
+          </button>
+          <button className="wb-btn wb-btn-ghost wb-tiny" title="drop the agent's proposal; nothing changes" onClick={onReject}>
+            reject
+          </button>
+        </span>
+      </header>
+      {ids.map((cid) => {
+        const c = codes.find((x) => x.id === cid);
+        return c ? (
+          <Card
+            key={cid}
+            code={c}
+            codes={codes}
+            N={N}
+            hue={hues[cid] ?? 0}
+            indent={!!c.parent}
+            draggable={false}
+            onDragStart={() => undefined}
+            onDragEnd={() => undefined}
+            onOpen={() => onOpenCode(cid)}
+          />
+        ) : (
+          <div key={cid} className="wb-card wb-card-proposed" style={{ ['--hue' as string]: 0 }}>
+            <b>{cid}</b>
+            <span className="wb-card-tag">no such code</span>
+          </div>
+        );
+      })}
+      {!ids.length && <p className="wb-muted">no codes named — open it to read the case</p>}
     </section>
   );
 }

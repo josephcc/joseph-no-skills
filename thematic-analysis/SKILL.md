@@ -396,6 +396,26 @@ and logged (`changes` lists them). The brief is theirs: the rule for what belong
 definition is), the near-miss that does not, and what they mean to write in the paper. It is
 written early and allowed to be wrong, and it is what your proposals are judged against.
 
+**When you propose a theme yourself** — a candidate from the full coding pass, or one the
+researcher asked you to draft — stage it as a `new-theme` **with its case in the operation**:
+beside `name`, `rq` and `essence`, the codes it would gather (`codes`), the story in a paragraph
+(`story`), two extracts that show it (`examples`) and the one that complicates it (`tensions`).
+The board draws it as a dashed column holding those codes, with what it would cover computed by
+the script, and the pending drawer and the column's inspector show the story and the extracts in
+full: that is what the researcher judges it on, in place. A note pointing at the round document
+is not a substitute — a proposal they cannot read where they accept it is one they cannot accept.
+`stage` refuses an unknown code or extract id. Accepting creates the theme with those codes placed
+(a code another theme gathers stays there too, as an addition) and the tension recorded; the
+examples stay in the applied log, since the quotes are theirs to pick.
+
+```bash
+uv run ~/.claude/skills/thematic-analysis/scripts/ta.py -d <analysis-dir> stage \
+    --op '{"op": "new-theme", "note": "candidate theme from the full coding pass",
+           "args": {"name": "Co-planning afforded steerability", "rq": "RQ2",
+                    "essence": "...", "story": "...",
+                    "codes": ["plan.edit", "control.rerun"], "examples": ["E-0041", "E-0113"], "tensions": ["E-0099"]}}'
+```
+
 **Service the errands.** `apply` ends by listing open theme errands (`theme request` lists them
 too; the inbox does as well). For each theme that asked for **codes**:
 
@@ -618,6 +638,7 @@ ta.py paper --digest | --check                   # the refresher between full re
 
 # themes and quotes
 ta.py theme new "A claim, not a topic" --rq RQ1 [--brief "..."]
+ta.py stage --op '{"op": "new-theme", "args": {"name": "...", "rq": "RQ1", "essence": "...", "story": "...", "codes": [...], "examples": [E, E], "tensions": [E]}}'   # your candidate theme, with its case; a dashed column until accepted
 ta.py theme assign CODE --to TH1 | --misc | --unplaced
 ta.py theme set TH1 essence|brief|story|name|rq|in_paper|status "..."
 ta.py theme fit TH1 [--json]                     # every live code against the theme: the recall check before proposing

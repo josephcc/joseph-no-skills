@@ -2482,11 +2482,48 @@ def spread_json(an: Analysis) -> dict:
             "unquoted": unquoted, "warnings": warnings}
 
 
+def theme_previews_json(an: Analysis, inbox: list[dict]) -> dict[str, dict]:
+    """What each staged `new-theme` would be, counted the way a theme row is: the codes it
+    names (unknown ones listed, not counted), their family, the participants it would cover,
+    its extracts. The numbers for a theme that does not exist yet come from here, so the
+    workbench can draw the proposal on the board without counting anything itself."""
+    pids = [p["id"] for p in an.participants()]
+    N = len(pids)
+    out: dict[str, dict] = {}
+    for o in inbox:
+        if o.get("op") != "new-theme" or not o.get("id"):
+            continue
+        wanted = _as_list((o.get("args") or {}).get("codes"))
+        # a code merged since the proposal was staged counts as its target, and is reported so
+        known: list[str] = []
+        renamed: list[dict] = []
+        for c in wanted:
+            if an.code(c) is None:
+                continue
+            live = an.resolve_code(c)
+            if live != c:
+                renamed.append({"from": c, "to": live})
+            if live not in known:
+                known.append(live)
+        fam: set[str] = set()
+        for c in known:
+            fam |= code_family(an, c)
+        pmap = participants_for_codes(an, fam)
+        ps = [p for p in pids if p in pmap]
+        out[str(o["id"])] = {
+            "codes": known, "unknown": [c for c in wanted if an.code(c) is None], "renamed": renamed, "family": sorted(fam),
+            "participants": ps, "n": len(ps), "N": N,
+            "extracts": sum(len(v) for k, v in pmap.items() if k in pids),
+        }
+    return out
+
+
 def bundle_json(an: Analysis) -> dict:
     """Everything a workbench tab needs on load, in one process."""
     cov = coverage_json(an)
     memos = (an.root / "memos.md")
     applied = sorted((an.root / "reviews").glob("*-applied.jsonl")) if (an.root / "reviews").is_dir() else []
+    inbox = annotate_claims(read_inbox(an))
     return {
         **cov,
         "root": str(an.root.resolve()),
@@ -2495,7 +2532,8 @@ def bundle_json(an: Analysis) -> dict:
         "stale": stale_json(an),
         "extracts_all": [extract_public(an, e) for e in an.extracts],
         "changelog": an.codebook.get("changelog") or [],
-        "inbox": annotate_claims(read_inbox(an)),
+        "inbox": inbox,
+        "theme_previews": theme_previews_json(an, inbox),
         "spread": spread_json(an),
         "memos": memos.read_text(encoding="utf-8") if memos.exists() else "",
         "transcript_files": {t["id"]: transcript_files(an, t) for t in an.study.get("transcripts", [])},
@@ -2865,7 +2903,11 @@ OP_SPECS: dict[str, dict] = {
     # coverage view
     "reread-request": {"view": "coverage", "target": "none", "required": ["transcript"], "optional": ["code", "note"]},
     # themes view
-    "new-theme":      {"view": "themes", "target": "none", "required": ["name"], "optional": ["parent", "rq", "essence", "brief", "id"]},
+    # a proposal carries its case — the codes it would gather, the story, two extracts that show
+    # it (`examples`) and the one that complicates it (`tensions`) — so it can be judged in the
+    # drawer and on the board before the theme exists
+    "new-theme":      {"view": "themes", "target": "none", "required": ["name"],
+                       "optional": ["parent", "rq", "essence", "brief", "story", "id", "codes", "examples", "tensions"]},
     "assign-theme":   {"view": "themes", "target": "code", "required": [], "optional": ["theme", "why", "add", "from"]},
     "set-theme-field": {"view": "themes", "target": "theme", "required": ["field", "value"], "optional": ["old", "force"]},
     "merge-theme":    {"view": "themes", "target": "theme", "required": ["into"], "optional": []},
@@ -2912,6 +2954,14 @@ def validate_op(an: Analysis, op: dict) -> list[str]:
     unknown = [k for k in args if k not in spec["required"] and k not in spec["optional"]]
     if unknown:
         problems.append(f"{op.get('id')} ({name}): unknown arg(s) {', '.join(sorted(unknown))}")
+    if name == "new-theme":
+        for cid in _as_list(args.get("codes")):
+            if an.code(cid) is None:
+                problems.append(f"{op.get('id')} ({name}): no code {cid}")
+        for key in ("examples", "tensions"):
+            for eid in _as_list(args.get(key)):
+                if an.extract(eid) is None:
+                    problems.append(f"{op.get('id')} ({name}): no extract {eid}")
     tgt, kind = op.get("target"), spec["target"]
     if kind == "none":
         pass
@@ -3347,14 +3397,34 @@ def op_new_theme(an, op, ctx):
         pt = _need_theme(an, parent)
         if pt.get("parent"):
             raise OpError(f"{parent} is itself a sub-theme; themes may have at most two levels")
+    # A proposal names the codes it would gather, and accepting the theme places them. A code
+    # already gathered by another theme stays there too (an addition, as `assign-theme` with
+    # `add`), so accepting a theme never silently un-places a code from another one.
+    codes: list[str] = []
+    for cid in _as_list(a.get("codes")):
+        _need_code(an, cid)
+        live = an.resolve_code(cid)   # a code merged since the proposal was staged lands on its target
+        if live not in codes:
+            codes.append(live)
+    tensions: list[str] = []
+    for eid in _as_list(a.get("tensions")):
+        if an.extract(eid) is None:
+            raise OpError(f"no extract {eid}")
+        if eid not in tensions:
+            tensions.append(eid)
+    # `examples` are the two extracts the case was argued on; they are shown while the proposal
+    # waits and kept in the applied log, never written to the theme (quotes are the researcher's).
+    for eid in _as_list(a.get("examples")):
+        if an.extract(eid) is None:
+            raise OpError(f"no extract {eid}")
     an.themes["themes"].append({
         "id": tid, "name": str(a["name"]), "parent": parent, "rq": a.get("rq"),
-        "essence": a.get("essence") or "", "brief": a.get("brief") or "", "story": "", "codes": [],
-        "status": "candidate", "merged_into": None, "in_paper": "undecided", "tensions": [], "selected_extracts": [],
+        "essence": a.get("essence") or "", "brief": a.get("brief") or "", "story": a.get("story") or "", "codes": codes,
+        "status": "candidate", "merged_into": None, "in_paper": "undecided", "tensions": tensions, "selected_extracts": [],
     })
     ctx["themes"] = True
     op["created"] = tid
-    return f"{tid}: new theme \"{a['name']}\""
+    return f"{tid}: new theme \"{a['name']}\"" + (f" gathering {len(codes)} code(s)" if codes else "")
 
 
 def next_theme_id(an: Analysis) -> str:

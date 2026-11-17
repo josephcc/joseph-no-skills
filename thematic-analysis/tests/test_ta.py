@@ -1633,6 +1633,54 @@ def test_a_thread_on_an_accepted_proposal_follows_what_it_created(study: ta.Anal
     assert [o["id"] for o in left] == [thread["id"]] and left[0]["target"] == "TH1" and left[0]["about"] == proposal["id"]
 
 
+def test_a_theme_proposal_carries_its_case_and_the_bundle_previews_it(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control.rerun")
+    run(study, "extract", "T-02", "7", "--codes", "control,trust")
+    ids = [e["id"] for e in ta.Analysis(study.root).extracts]
+    op = {"op": "new-theme", "by": "agent", "note": "candidate from the full pass",
+          "args": {"name": "Rerunning is how control is kept", "rq": "RQ1", "essence": "Both rerun a step rather than restate the goal.",
+                   "story": "P1 edits the plan; P2 reruns.", "codes": ["control"], "examples": ids[:1], "tensions": ids[1:2]}}
+    assert ta.main(["-d", str(study.root), "stage", "--op", json.dumps(op)]) == 0
+    b = ta.bundle_json(ta.Analysis(study.root))
+    pid = b["inbox"][0]["id"]
+    # the numbers for a theme that does not exist yet come from the script, counted as a theme row is
+    pv = b["theme_previews"][pid]
+    assert pv["codes"] == ["control"] and pv["family"] == ["control", "control.rerun"] and pv["unknown"] == [] and pv["renamed"] == []
+    assert (pv["n"], pv["N"], pv["participants"], pv["extracts"]) == (2, 2, ["P1", "P2"], 2)
+    # an unknown code or extract is refused at the stage, where the agent can fix it
+    bad = {**op, "args": {**op["args"], "codes": ["control", "nope"]}}
+    with pytest.raises(SystemExit, match="no code nope"):
+        ta.main(["-d", str(study.root), "stage", "--op", json.dumps(bad)])
+    bad = {**op, "args": {**op["args"], "examples": ["E-9999"]}}
+    with pytest.raises(SystemExit, match="no extract E-9999"):
+        ta.main(["-d", str(study.root), "stage", "--op", json.dumps(bad)])
+    # accepting it places the codes and keeps the story and the tension; the examples stay in the record only
+    assert ta.main(["-d", str(study.root), "accept", pid]) == 0
+    th = ta.Analysis(study.root).theme("TH1")
+    assert th["codes"] == ["control"] and th["story"] == "P1 edits the plan; P2 reruns." and th["tensions"] == ids[1:2]
+    assert th["selected_extracts"] == [] and th["essence"].startswith("Both rerun")
+    assert ta.bundle_json(ta.Analysis(study.root))["theme_previews"] == {}
+
+
+def test_accepting_a_proposed_theme_adds_a_code_another_theme_already_gathers(study: ta.Analysis):
+    run(study, "theme", "new", "An earlier claim")
+    run(study, "theme", "assign", "trust", "--to", "TH1")
+    proposal = ta.append_inbox(ta.Analysis(study.root), {"op": "new-theme", "args": {"name": "A second claim", "codes": ["trust", "control"]}, "by": "agent"})
+    assert ta.main(["-d", str(study.root), "accept", proposal["id"]]) == 0
+    an = ta.Analysis(study.root)
+    assert an.theme("TH1")["codes"] == ["trust"] and an.theme("TH2")["codes"] == ["trust", "control"]
+
+
+def test_a_code_merged_after_the_proposal_was_staged_counts_as_its_target(study: ta.Analysis):
+    run(study, "extract", "T-01", "9", "--codes", "control.rerun")
+    proposal = ta.append_inbox(ta.Analysis(study.root), {"op": "new-theme", "args": {"name": "A claim", "codes": ["control.rerun", "control"]}, "by": "agent"})
+    assert ta.main(["-d", str(study.root), "exec", "--op", json.dumps({"op": "merge-code", "target": "control.rerun", "args": {"into": "control"}})]) == 0
+    pv = ta.bundle_json(ta.Analysis(study.root))["theme_previews"][proposal["id"]]
+    assert pv["codes"] == ["control"] and pv["renamed"] == [{"from": "control.rerun", "to": "control"}] and pv["n"] == 1
+    assert ta.main(["-d", str(study.root), "accept", proposal["id"]]) == 0
+    assert ta.Analysis(study.root).theme("TH1")["codes"] == ["control"]
+
+
 def test_accept_json_mode_prints_only_json(study: ta.Analysis, capsys):
     run(study, "theme", "new", "A claim")
     proposal = ta.append_inbox(ta.Analysis(study.root), {"op": "set-theme-field", "target": "TH1", "args": {"field": "brief", "value": "## Rule\nproposed"}, "by": "agent"})

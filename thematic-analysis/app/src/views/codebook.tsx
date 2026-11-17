@@ -16,6 +16,8 @@ import type { Nav } from '../app';
 import type { Workbench } from '../store';
 import type { Code, Extract } from '../types';
 
+const ORDER_KEY = 'ta-workbench:codebook-order';
+
 export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav: Nav }) {
   const b = wb.bundle!;
   const [filter, setFilter] = useState<string | null>(null);
@@ -29,6 +31,12 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
   // The tree answers "what is the structure"; the cross-tab answers "is the structure right".
   // Overlap hides the rail because you are scanning a matrix, not navigating a tree.
   const [mode, setMode] = useState<'structure' | 'overlap'>('structure');
+  // The list's order: families by id (the codebook as written), or by how many participants each
+  // code reached, most first, so the codes that carry the study rise to the top. Remembered.
+  const [order, setOrder] = useState<'id' | 'n'>(() => {
+    try { return localStorage.getItem(ORDER_KEY) === 'n' ? 'n' : 'id'; } catch { return 'id'; }
+  });
+  useEffect(() => { try { localStorage.setItem(ORDER_KEY, order); } catch { /* private window */ } }, [order]);
   const hues = useMemo(() => familyIndex(b.codes), [b.codes]);
   const patched = useMemo(() => b.codes.map((c) => codeWithPatch(c, wb.patch.codes[c.id])), [b.codes, wb.patch.codes]);
   const live = patched.filter((c) => c.status === 'candidate' || c.status === 'accepted');
@@ -38,12 +46,15 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
   const other = compare ? patched.find((c) => c.id === compare) ?? null : null;
 
   const tree = useMemo(() => {
-    const tops = live.filter((c) => !c.parent).sort((a, c) => a.id.localeCompare(c.id));
+    // A child always sits under its parent; the order applies within each level. Ties by
+    // participants fall to the extract count, then the id, so the list never shuffles.
+    const by = (a: Code, c: Code) => (order === 'n' ? c.n - a.n || c.extracts - a.extracts || a.id.localeCompare(c.id) : a.id.localeCompare(c.id));
+    const tops = live.filter((c) => !c.parent).sort(by);
     return tops.map((parent) => ({
       parent,
-      children: live.filter((c) => c.parent === parent.id).sort((a, c) => a.id.localeCompare(c.id)),
+      children: live.filter((c) => c.parent === parent.id).sort(by),
     }));
-  }, [live]);
+  }, [live, order]);
 
   const rows = useMemo(() => {
     const out: { code: Code & { pending: boolean }; depth: number }[] = [];
@@ -125,6 +136,19 @@ export function CodebookView({ dir, wb, nav }: { dir: string; wb: Workbench; nav
               <b>{h.ids.length}</b> {h.label}
             </button>
           ))}
+        </div>
+        <div className="wb-sort" role="group" aria-label="order of the list">
+          <span className="wb-muted">order</span>
+          <button className={`wb-hbtn ${order === 'id' ? 'wb-hbtn-on' : ''}`} onClick={() => setOrder('id')} title="families in id order, as the codebook is written">
+            by id
+          </button>
+          <button
+            className={`wb-hbtn ${order === 'n' ? 'wb-hbtn-on' : ''}`}
+            onClick={() => setOrder('n')}
+            title="the codes most participants said or did first; a child stays under its parent"
+          >
+            by participants ↓
+          </button>
         </div>
         <div
           className={`wb-droproot ${drag ? 'wb-droproot-live' : ''}`}

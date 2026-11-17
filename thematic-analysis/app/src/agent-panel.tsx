@@ -4,9 +4,9 @@
 // `document.modelContext` that read and steer the app through refs, and `<AgentChat>` in a fixed
 // panel. A terminal thread that `ta.py open` handed off shows up in the daemon's handoff list; the
 // banner opens it with one click, and the panel's thread list keeps it under "From your terminal".
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { connect, listHandoffs, type ConnectorStatus, type HandoffInfo, type PageConnection } from 'webmcp-connector';
-import { AgentChat, type AgentHandle } from 'webmcp-connector/react';
+import { AgentChat, type AgentChatHeaderContext, type AgentHandle } from 'webmcp-connector/react';
 import { formatContext, instructionsFor, loopbackDaemonUrl, navigationPatch, plainName, summaryFor, type PendingRow, type WorkbenchState } from './agent';
 
 export interface AgentActions {
@@ -104,9 +104,33 @@ const SETUP = {
   ],
 };
 
-export function AgentPanel({ bridge, dir, openRequest, onClose, onHandle, onHandoffs }: {
+export const CHAT_WIDTH_KEY = 'ta-workbench:chat-width';
+const CHAT_WIDTH_DEFAULT = 440;
+const CHAT_WIDTH_MIN = 320;
+
+/** A width the panel can have: never narrower than the composer needs, never the whole window. */
+export const clampChatWidth = (w: number): number => {
+  const max = Math.max(CHAT_WIDTH_MIN, (typeof window === 'undefined' ? 1200 : window.innerWidth) - 240);
+  return Math.round(Math.min(Math.max(CHAT_WIDTH_MIN, w), max));
+};
+
+/** The width the researcher last dragged the panel to, or the default. */
+export function storedChatWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(CHAT_WIDTH_KEY));
+    return Number.isFinite(n) && n > 0 ? clampChatWidth(n) : CHAT_WIDTH_DEFAULT;
+  } catch {
+    return CHAT_WIDTH_DEFAULT;
+  }
+}
+
+export function AgentPanel({ bridge, dir, open, width, onResize, openRequest, onClose, onHandle, onHandoffs }: {
   bridge: AgentBridge;
   dir: string;
+  /** Hidden when false, but still mounted: the thread stays connected, and reopening is instant. */
+  open: boolean;
+  width: number;
+  onResize: (w: number) => void;
   /** A thread to open when the value changes (the banner's one click). */
   openRequest?: { id: string; at: number };
   onClose: () => void;
@@ -114,13 +138,34 @@ export function AgentPanel({ bridge, dir, openRequest, onClose, onHandle, onHand
   onHandoffs: (list: HandoffInfo[]) => void;
 }) {
   const agentOptions = useMemo(() => ({ systemPromptMode: 'append' as const }), []);
+  const renderHeader = useCallback((ctx: AgentChatHeaderContext) => <PanelHeader ctx={ctx} onClose={onClose} />, [onClose]);
+  // The grip on the panel's left edge: the pointer is captured, so the drag survives leaving the
+  // 6 px strip, and the width follows the pointer until it is released.
+  const onGrip = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const startX = e.clientX;
+      const startW = width;
+      const move = (ev: PointerEvent) => onResize(clampChatWidth(startW + (startX - ev.clientX)));
+      const up = () => {
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+        try { el.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+      try { el.setPointerCapture(e.pointerId); } catch { /* a pointer the browser is not tracking: the strip itself still gets the moves */ }
+    },
+    [width, onResize],
+  );
   return (
-    <aside className="wb-chat" aria-label="Local Claude">
-      <div className="wb-chat-bar">
-        <span className="wb-muted">Your local Claude Code, in this workbench. A thread handed off from the terminal continues here under the same id; <code>claude --resume &lt;id&gt;</code> takes it back.</span>
-        <button className="wb-btn wb-btn-ghost" onClick={onClose} title="Close the panel (the thread is kept)">Close</button>
-      </div>
+    <aside className={`wb-chat${open ? '' : ' wb-chat-hidden'}`} aria-label="Local Claude" aria-hidden={!open}>
+      <div className="wb-chat-grip" onPointerDown={onGrip} title="Drag to resize" />
       <AgentChat
+        renderHeader={renderHeader}
         page={bridge.page}
         agentOptions={agentOptions}
         title="Local Claude"
@@ -134,6 +179,41 @@ export function AgentPanel({ bridge, dir, openRequest, onClose, onHandle, onHand
         className="wb-chat-panel"
       />
     </aside>
+  );
+}
+
+/** The panel's header, dense: one row of what matters, a slim second row for the thread's settings. Replaces the connector's. */
+function PanelHeader({ ctx, onClose }: { ctx: AgentChatHeaderContext; onClose: () => void }) {
+  const { state, label, connected, busy, released, error, conn, handle, snapshot, threads, threadsOn, showThreads, switching, autoAllow, handoffs, actions } = ctx;
+  const count = threads.length + handoffs.length;
+  return (
+    <header className="wb-chat-head">
+      <div className="wb-chat-head-row">
+        <b title="Your local Claude Code, in this workbench. A thread handed off from the terminal continues here under the same id; claude --resume <id> takes it back.">Local Claude</b>
+        <span className="wmc-badge" data-state={state}>{label}</span>
+        <span className="wb-chat-head-spacer" />
+        {handle && snapshot.state === 'prompting' && <button onClick={actions.cancel} title="Stop the current turn">Stop</button>}
+        {threadsOn && <button onClick={actions.toggleThreads} aria-expanded={showThreads} title="Threads of this page, and terminal threads handed to it" data-role="threads-toggle">Threads{count ? ` (${count})` : ''} ▾</button>}
+        {conn && <button onClick={actions.newThread} disabled={!!switching} title="Start a new thread" data-role="new-thread">New</button>}
+        {!conn && <button className="wmc-primary" disabled={!connected || busy} onClick={actions.connect}>{busy ? 'Connecting…' : released ? 'Reconnect' : 'Connect'}</button>}
+        <button className="wb-chat-close" onClick={onClose} title="Hide the panel; the thread stays connected and the Agent button brings it back" aria-label="Close">×</button>
+      </div>
+      {handle && (
+        <div className="wb-chat-head-row wb-chat-head-sub">
+          {snapshot.modes && snapshot.modes.available.length > 0 && (
+            <select value={snapshot.modes.current ?? ''} onChange={(e) => actions.setMode(e.target.value)} title="Permission mode" data-role="mode">
+              {snapshot.modes.available.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
+          <label className="wmc-toggle" title="Approve the page's read-only tools without asking">
+            <input type="checkbox" checked={autoAllow} onChange={(e) => actions.setAutoAllow(e.target.checked)} /> auto-allow read-only
+          </label>
+          <span className="wb-chat-head-spacer" />
+          <button className="wb-chat-ghost" onClick={actions.disconnect} title="Disconnect from local Claude (the thread is kept)">Disconnect</button>
+        </div>
+      )}
+      {error && <div className="wmc-error">{error}</div>}
+    </header>
   );
 }
 

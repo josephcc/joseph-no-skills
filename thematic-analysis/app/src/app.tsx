@@ -10,7 +10,7 @@ import { analysisDir, param } from './api';
 import type { Op } from './types';
 import { useWorkbench } from './store';
 import { PendingDrawer } from './pending';
-import { AgentPanel, HandoffBanner, useAgentPage } from './agent-panel';
+import { AgentPanel, CHAT_WIDTH_KEY, HandoffBanner, storedChatWidth, useAgentPage } from './agent-panel';
 import { buildState, handoffForAnalysis, pendingRows, REVIEW_PROMPT } from './agent';
 import { TranscriptView } from './views/transcript';
 import { CodebookView } from './views/codebook';
@@ -68,8 +68,17 @@ export function App() {
   // The embedded agent: one daemon connection per tab, tools that read the latest state through
   // refs, a panel, and the banner for a terminal thread handed off to this folder.
   const [chatOpen, setChatOpen] = useState(false);
+  // The panel mounts on the first open and then stays mounted: closing it only hides it, so the
+  // thread stays connected and open/close is instant. Its width is the researcher's, dragged and kept.
+  const [chatMounted, setChatMounted] = useState(false);
+  const [chatWidth, setChatWidth] = useState(() => storedChatWidth());
+  useEffect(() => { if (chatOpen) setChatMounted(true); }, [chatOpen]);
+  useEffect(() => { try { localStorage.setItem(CHAT_WIDTH_KEY, String(chatWidth)); } catch { /* private window */ } }, [chatWidth]);
   const [openRequest, setOpenRequest] = useState<{ id: string; at: number }>();
   const handleRef = useRef<AgentHandle | undefined>(undefined);
+  // The panel's live thread, as state: the banner for a handed-off thread hides while that thread is
+  // the one in the panel, open or hidden, and comes back when it is released or another is opened.
+  const [liveSession, setLiveSession] = useState<string>();
   const queuedPromptRef = useRef<string | null>(null);
   const latest = useCallback(() => buildState({ dir: dir ?? '', bundle: wb.bundle, nav: { view, t, e, c, th, cmp }, pending: wb.pending, drawer }), [dir, wb.bundle, view, t, e, c, th, cmp, wb.pending, drawer]);
   const agentActions = useMemo(() => ({
@@ -81,6 +90,7 @@ export function App() {
   const handoff = useMemo(() => (bridge && dir ? handoffForAnalysis(bridge.handoffs, dir) : undefined), [bridge, dir]);
   const onHandle = useCallback((h: AgentHandle | undefined) => {
     handleRef.current = h;
+    setLiveSession(h?.sessionId);
     const queued = queuedPromptRef.current;
     if (h && queued) { queuedPromptRef.current = null; void h.prompt(queued).catch(() => {}); }
   }, []);
@@ -88,12 +98,13 @@ export function App() {
   const askReview = useCallback(() => {
     const h = handleRef.current;
     const state = h?.model.snapshot().state;
-    if (h && chatOpen && state === 'ready') { void h.prompt(REVIEW_PROMPT).catch(() => {}); setDrawer(false); return; }
+    if (h && state === 'ready') { void h.prompt(REVIEW_PROMPT).catch(() => {}); setChatOpen(true); setDrawer(false); return; }
     // No open thread yet (or it is busy, released or closed): the prompt goes out when the next handle arrives.
     queuedPromptRef.current = REVIEW_PROMPT;
     setChatOpen(true); setDrawer(false);
-  }, [chatOpen]);
-  const closeChat = useCallback(() => { handleRef.current = undefined; setChatOpen(false); }, []);
+  }, []);
+  // Closing hides the panel and nothing else: the thread, its connection and its handle all stay.
+  const closeChat = useCallback(() => setChatOpen(false), []);
   const continueHandoff = useCallback(() => {
     if (!handoff) return;
     setChatOpen(true);
@@ -174,6 +185,9 @@ export function App() {
       nav.go({ view: 'codebook', c: target, cmp: other });
     } else if (view === 'codebook') {
       nav.go({ view, c: target ?? (typeof args.code === 'string' ? args.code : null), cmp: null });
+    } else if (o.op === 'new-theme') {
+      // No theme to land on yet: the board draws the proposal under its op id and opens its case.
+      nav.go({ view: 'themes', th: o.id });
     } else if (view === 'themes' || view === 'quotes') {
       nav.go({ view, th: target });
     } else if (view === 'coverage') {
@@ -184,10 +198,11 @@ export function App() {
     setDrawer(false);
   };
 
-  const activeHandoff = !!handoff && handleRef.current?.sessionId === handoff.sessionId && chatOpen;
+  // Closing the panel hides it and keeps the thread, so a handoff the panel holds is not waiting.
+  const activeHandoff = !!handoff && liveSession === handoff.sessionId;
 
   return (
-    <div className={`wb-app${chatOpen ? ' wb-with-chat' : ''}`}>
+    <div className={`wb-app${chatOpen ? ' wb-with-chat' : ''}`} style={{ ['--chat-w' as string]: `${chatWidth}px` }}>
       <header className="wb-header">
         <div className="wb-header-main">
           <h1>{b.study}</h1>
@@ -265,6 +280,7 @@ export function App() {
         <PendingDrawer
           ops={wb.pending}
           onUndo={wb.undo}
+          previews={wb.bundle?.theme_previews ?? {}}
           onAccept={(id) => void wb.accept(id)}
           onAcceptAll={async (ids) => {
             for (const id of ids) if (!(await wb.accept(id))) break;
@@ -277,8 +293,18 @@ export function App() {
         />
       )}
 
-      {chatOpen && bridge && dir && (
-        <AgentPanel bridge={bridge} dir={dir} openRequest={openRequest} onClose={closeChat} onHandle={onHandle} onHandoffs={bridge.setHandoffs} />
+      {chatMounted && bridge && dir && (
+        <AgentPanel
+          bridge={bridge}
+          dir={dir}
+          open={chatOpen}
+          width={chatWidth}
+          onResize={setChatWidth}
+          openRequest={openRequest}
+          onClose={closeChat}
+          onHandle={onHandle}
+          onHandoffs={bridge.setHandoffs}
+        />
       )}
     </div>
   );

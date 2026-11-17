@@ -63,8 +63,10 @@ finished when you say it is, not when the tool decides you have clicked enough. 
 analysis file itself; it asks the daemon to run `ta.py`, which does at once what `apply` would
 have done, and records it in `reviews/*-applied.jsonl` as yours. Change your mind by doing the
 opposite: drag the card back, flip the field again. What does *not* happen by itself is the
-agent's proposals. They are drawn where they would land — a dashed card on the board, a chosen
-quote marked *proposed by the agent* — and wherever one is drawn, and in the Pending drawer, it has
+agent's proposals. They are drawn where they would land — a dashed card on the board, a dashed
+column for a theme that does not exist yet (its codes, its story, the extracts it was argued on,
+what it would cover), a chosen quote marked *proposed by the agent* — and wherever one is drawn,
+and in the Pending drawer, it has
 **accept** (carried out now, recorded as your decision) and **reject** (dropped, nothing changes);
 the drawer has *accept all*. One you leave standing is applied when you hand the pass back.
 

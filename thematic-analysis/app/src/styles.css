@@ -471,11 +471,11 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
 .wb-drawer header { display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-bottom: 0.4rem; }
 .wb-drawer header b { flex: 1; }
 .wb-drawer-list { list-style: none; margin: 0; padding: 0; }
-.wb-drawer-list li { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: baseline; font-size: 0.78rem; border-bottom: 1px solid var(--asta-cream); padding: 0.25rem 0; }
-.wb-op-text { flex: 1; min-width: 0; }
+.wb-drawer-list li { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.78rem; border-bottom: 1px solid var(--asta-cream); padding: 0.3rem 0; }
+.wb-op-text { overflow-wrap: anywhere; }
 .wb-op-by { font-size: 0.62rem; text-transform: uppercase; font-weight: 700; color: var(--asta-teal); }
 .wb-by-agent { color: var(--asta-amber); }
-.wb-op-error { flex: 1 1 100%; color: var(--asta-error); font-size: 0.72rem; }
+.wb-op-error { color: var(--asta-error); font-size: 0.72rem; }
 .wb-op-failed { background: #fff3f3; }
 .wb-apply-hint code { display: block; margin-top: 0.2rem; font-size: 0.7rem; background: var(--asta-cream); border: 1px solid var(--border); border-radius: 5px; padding: 0.2rem 0.3rem; overflow-x: auto; white-space: nowrap; }
 
@@ -598,10 +598,12 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
 .wb-heat-asked { background: hsl(38 70% 94%); }
 .wb-heat-ask-mark { color: #8a5b00; font-weight: 700; }
 /* A drawer line is a way in, not just a record: the whole description is the target. */
-.wb-op-row { align-items: baseline; }
-.wb-op-open { display: contents; background: none; border: none; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+.wb-op-open { display: block; width: 100%; background: none; border: none; padding: 0; font: inherit; text-align: left; cursor: pointer; color: var(--text); line-height: 1.35; }
+.wb-op-open .wb-op-id { margin-right: 0.3rem; }
+.wb-op-meta { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; }
+.wb-op-actions { display: flex; gap: 0.3rem; margin-left: auto; flex: none; }
 .wb-op-open:hover .wb-op-text { text-decoration: underline; }
-.wb-op-note { font-size: 0.7rem; color: var(--muted); font-style: italic; }
+.wb-op-note { flex: 1 1 0; min-width: 0; font-size: 0.7rem; line-height: 1.3; color: var(--muted); font-style: italic; }
 .wb-drawer h4 { margin: 0.7rem 0 0.3rem; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
 /* A finished transcript should read as finished: the counter that said "8 new" says so instead. */
 .wb-reviewed-flag { color: var(--asta-green); font-weight: 600; }
@@ -654,14 +656,58 @@ kbd { background: var(--asta-cream); border: 1px solid var(--border); border-bot
 
 /* ---- the embedded agent (plans/2026-11-14-embedded-claude.plan.md) ---- */
 .wb-agent { margin-left: 0.2rem; }
-.wb-chat { position: fixed; top: 5.6rem; right: 0.8rem; bottom: 0.8rem; width: 440px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 44; overflow: hidden; }
-.wb-chat-bar { display: flex; gap: 0.5rem; align-items: center; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); background: var(--asta-cream); font-size: 0.75rem; }
-.wb-chat-bar .wb-muted { flex: 1; line-height: 1.3; }
-.wb-chat-bar code { font-size: 0.7rem; }
-.wb-chat .wb-chat-panel { flex: 1; min-height: 0; border: 0; border-radius: 0; }
-.wb-with-chat .wb-drawer { right: calc(440px + 1.4rem); }
-.wb-with-chat .wb-toast { left: calc(50% - 220px); }
-.wb-handoff { display: flex; gap: 0.8rem; align-items: center; margin: 0.5rem 1rem 0; padding: 0.45rem 0.8rem; border: 1px solid var(--asta-amber); border-left-width: 4px; border-radius: 8px; background: #fff8ea; font-size: 0.82rem; }
+.wb-chat { position: fixed; top: 5.6rem; right: 0.8rem; bottom: 0.8rem; width: var(--chat-w, 440px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 44; overflow: hidden; }
+/* Closed is hidden, not unmounted: the thread stays connected, and the panel keeps its scroll and its draft. */
+.wb-chat-hidden { visibility: hidden; pointer-events: none; transform: translateX(calc(100% + 1rem)); }
+.wb-chat-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; z-index: 2; border-left: 3px solid transparent; }
+.wb-chat-grip:hover, .wb-chat-grip:active { border-left-color: var(--asta-teal-40); }
+.wb-chat-head { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.55rem; border-bottom: 1px solid var(--border); background: #fafafa; }
+.wb-chat-head-row { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.wb-chat-head-row > b { font-size: 0.84rem; white-space: nowrap; }
+.wb-chat-head-spacer { flex: 1; }
+.wb-chat .wb-chat-head button { padding: 0.08rem 0.45rem; font-size: 0.73rem; }
+.wb-chat .wb-chat-head select { font-size: 0.73rem; padding: 0.05rem 0.25rem; }
+.wb-chat .wb-chat-head .wmc-badge { font-size: 0.68rem; padding: 0 0.4rem; }
+.wb-chat-head-sub { font-size: 0.72rem; color: var(--muted); }
+.wb-chat .wb-chat-head .wmc-toggle { font-size: 0.72rem; }
+.wb-chat .wb-chat-close { font-size: 1.05rem; line-height: 1; padding: 0 0.35rem; border: 0; background: none; color: var(--muted); }
+.wb-chat .wb-chat-close:hover { color: var(--text); }
+.wb-chat .wb-chat-ghost { border: 0; background: none; color: var(--muted); }
+.wb-chat .wb-chat-ghost:hover { color: var(--asta-error); }
+.wb-chat .wmc-input { padding: 0.4rem 0.55rem; align-items: flex-end; }
+.wb-chat .wmc-input textarea { resize: vertical; min-height: 3.7rem; max-height: 50vh; }
+.wb-chat .wmc-foot { padding: 0.15rem 0.55rem; }
+.wb-chat .wb-chat-panel { flex: 1; min-height: 0; max-height: none; height: 100%; border: 0; border-radius: 0; }   /* the connector caps its chat at 70vh for pages that embed it inline; this panel is the full height */
+.wb-with-chat .wb-drawer { right: calc(var(--chat-w, 440px) + 1.4rem); }
+.wb-with-chat .wb-toast { left: calc(50% - var(--chat-w, 440px) / 2); }
+.wb-handoff { display: flex; gap: 0.8rem; align-items: center; margin: 0.5rem 1rem; padding: 0.45rem 0.8rem; border: 1px solid var(--asta-amber); border-left-width: 4px; border-radius: 8px; background: #fff8ea; font-size: 0.82rem; }
 .wb-handoff > span { flex: 1; }
 .wb-handoff-live { color: var(--asta-amber); }
 .wb-ask-review { display: flex; gap: 0.6rem; align-items: center; margin: 0.2rem 0 0.6rem; }
+
+/* A theme the agent proposed, before it exists: a dashed column on the board, a block in the
+   drawer instead of a truncated line, and an inspector that carries the whole case. */
+.wb-col-ghost .wb-card { cursor: pointer; }
+.wb-col-head-row { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.wb-col-rq { font-size: 0.6rem; font-weight: 700; color: #8a5b00; border: 1px solid var(--asta-amber); border-radius: 999px; padding: 0 0.3rem; margin-left: 0.3rem; }
+.wb-col-actions { margin-top: 0.2rem; }
+.wb-op-theme .wb-op-open-block { display: flex; flex-direction: column; align-items: flex-start; gap: 0.12rem; width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; color: var(--text); }
+.wb-op-theme-name { font-weight: 600; font-size: 0.8rem; line-height: 1.3; }
+.wb-op-open-block:hover .wb-op-theme-name { text-decoration: underline; }
+.wb-op-theme-essence { font-size: 0.74rem; line-height: 1.35; }
+.wb-op-theme-meta { font-size: 0.68rem; color: var(--muted); }
+.wb-proposal-name { margin: 0.5rem 0 0.1rem; font-size: 1rem; line-height: 1.3; }
+.wb-proposal-rq { margin: 0 0 0.3rem; font-size: 0.76rem; }
+.wb-proposal-cover { margin: 0 0 0.3rem; font-size: 0.74rem; }
+.wb-inspector-staged .wb-def summary { flex-wrap: wrap; row-gap: 0.05rem; }
+.wb-def-name { font-size: 0.8rem; }
+.wb-def-n { font-size: 0.7rem; }
+.wb-quote-head { margin: 0 0 0.2rem; font-size: 0.72rem; }
+.wb-insp-quote-tension { border-left-color: var(--asta-gray-40); background: #f6f6f6; }
+.wb-sort { display: flex; align-items: center; gap: 0.3rem; margin: 0.35rem 0; font-size: 0.68rem; }
+
+/* The "?" in a toolbar: the view's guidance behind a click, instead of a column of it. */
+.wb-help { font: inherit; font-size: 0.72rem; font-weight: 700; width: 1.3rem; height: 1.3rem; line-height: 1; padding: 0; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--asta-teal); cursor: pointer; }
+.wb-help:hover { background: var(--asta-cream); border-color: var(--asta-teal-40); }
+.wb-help-inner p { font-size: 0.86rem; line-height: 1.5; }
+.wb-help-foot { margin: 0.6rem 0 0; text-align: right; }

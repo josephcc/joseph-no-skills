@@ -77,8 +77,13 @@ export function describe(o: Pick<Op, 'op' | 'target' | 'args' | 'note'>): string
     case 'split-code': return `split ${a.new_id} out of ${t} (${arr(a.extracts).length} extracts)`;
     case 'new-code': return `new code ${a.id}`;
     case 'reread-request': return `re-read ${a.transcript}${a.code ? ` for ${a.code}` : ''}`;
-    case 'new-theme': return `new theme “${short(a.name, 40)}”`;
-    case 'assign-theme': return `${t}${a.from ? ` (from ${a.from})` : ''} → ${a.theme ?? 'unplaced'}${a.add ? ' (added; stays where it is too)' : ''}${a.why ? ` — ${short(a.why, 50)}` : ''}`;
+    case 'new-theme': {
+      const k = arr(a.codes).length;
+      return `new theme “${short(a.name, 40)}”${k ? ` gathering ${k} code${k === 1 ? '' : 's'}` : ''}`;
+    }
+    // `also`: the code is added to the theme and stays where it is; a drawer of forty such rows
+    // cannot afford a clause each.
+    case 'assign-theme': return `${t}${a.from ? ` (from ${a.from})` : ''} → ${a.add ? 'also ' : ''}${a.theme ?? 'unplaced'}${a.why ? ` — ${short(a.why, 50)}` : ''}`;
     case 'theme-request': return `${t}: ask the agent for ${a.kind === 'both' || !a.kind ? 'codes and claims' : a.kind}`;
     case 'set-framing': return 'the paper’s framing reworded';
     case 'set-theme-field': return `${t}.${a.field} updated`;
